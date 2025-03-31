@@ -36,13 +36,13 @@ def encode_image_base64(file_path: str) -> str:
     with open(file_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-def transcribe_audio(audio_base64: str, audio_format: str) -> str:
+def transcribe(audio_base64: str, audio_format: str) -> str:
     supported_formats = ['mp3', 'mp4', 'mpeg', 'mpga', 'm4a', 'wav', 'webm'] 
     if audio_format not in supported_formats:
         print(f"Warning: Potentially unsupported audio format '{audio_format}'. Check API documentation.")
         raise Exception("audio format not supported")
     
-    """Transcribe audio using Pollinations API"""
+    """Transcribe audio using Pollinations API with a function call"""
     payload = {
         "model": "openai-audio",
         "temperature": 0,
@@ -50,12 +50,15 @@ def transcribe_audio(audio_base64: str, audio_format: str) -> str:
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Reply exactly with what I am saying here:"},
+                    {
+                        "type": "text", 
+                        "text": "Try to understand what I am saying(it's okay if you understand even partially), reply only with 'error404' if you cannot understand at all or you did not find anything, else reply with exactly what is being said here without any change:"
+                    },
                     {
                         "type": "input_audio",
                         "input_audio": {
-                           "data": audio_base64,
-                           "format": audio_format
+                            "data": audio_base64,
+                            "format": audio_format
                         }
                     }
                 ]
@@ -100,7 +103,7 @@ def analyze_image_with_history(chat_history: ChatHistory, base64_image: str, ima
     messages.append({"role": "user", "content": current_content})
 
     payload = {
-        "model": "openai-large",  # Assuming Pollinations supports vision models
+        "model": "openai-large", 
         "messages": messages,
         "max_tokens": 16000,
         "stream": True
@@ -122,10 +125,11 @@ def process_stream(audio_file: str, image_file: str):
     image_base64 = encode_image_base64(image_file)
 
     # Transcribe audio
-    transcript = transcribe_audio(audio_base64, "wav")
+    transcript = transcribe(audio_base64, "wav")
     if not transcript:
         print("Transcript generation failed.")
         return
+    print("Transcript: " + transcript)
 
     # Analyze with history
     response = analyze_image_with_history(chat, image_base64, "jpeg", transcript)

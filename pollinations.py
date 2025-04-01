@@ -48,12 +48,12 @@ def transcribe(audio_base64: str, audio_format: str) -> str:
         "temperature": 0,
         "messages": [
             {
+                "role": "system",
+                "content": "You are an echo bot. Always repeat whatever the user is saying word to word, don't interpret anything from it, even if the user says 'transcribe this audio' he doesn't want you to interpret anything from it, just repeat it as it is."
+            },
+            {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "text", 
-                        "text": "Try to understand what I am saying(it's okay if you understand even partially), reply only with 'error404' if you cannot understand at all or you did not find anything, else reply with exactly what is being said here without any change:"
-                    },
                     {
                         "type": "input_audio",
                         "input_audio": {
@@ -156,6 +156,6 @@ def process_stream(audio_file: str, image_file: str):
 
     print("\n--- End of Stream ---")
 
-# Test the stream
+# # Test the stream
 if __name__ == "__main__":
-    process_stream("test.wav", "test.jpeg")
+    process_stream("test/test.wav", "test.jpeg")

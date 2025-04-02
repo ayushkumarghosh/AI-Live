@@ -163,5 +163,5 @@ def process_stream(audio_file: str, image_file: str):
     print("\n--- End of Stream ---")
 
 # # Test the stream
-if __name__ == "__main__":
-    process_stream("test/test.wav", "test.jpeg")
+# if __name__ == "__main__":
+    # process_stream("test/test.wav", "test.jpeg")

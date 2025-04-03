@@ -4,68 +4,75 @@ import base64
 import io
 import time
 import wave
-from pollinations import transcribe
-import webrtcvad
+from silero_vad import VADIterator, load_silero_vad
+from datetime import datetime
 
-# WebRTC VAD requires frame sizes of 10, 20, or 30ms
-# For 16000Hz, this means 320, 640, or 960 samples
-RATE = 32000  # WebRTC VAD works best with 16kHz
-CHUNK = 960  # 30ms at 16kHz
+# Audio settings
+RATE = 16000
+CHUNK = 512  # 32ms at 16 kHz
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-SILENCE_LIMIT = 1
+SILENCE_LIMIT = 1  # Still used for additional silence check after 'end'
 
-# Create a VAD object
-vad = webrtcvad.Vad()
-vad.set_mode(2)  # 0: low, 1: medium, 2: high, 3: very high
+# Load the Silero VAD model and initialize VADIterator
+model = load_silero_vad()
+vad = VADIterator(model, sampling_rate=RATE)
 
 def record_speech(audio_queue=None):
     p = pyaudio.PyAudio()
     stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
     
-    print("Listening...")
     frames = []
     recording = False
     silence_start = None
+    sample_index = 0  # Track total samples processed
     
     while True:
-        try:
-            audio_chunk = stream.read(CHUNK)
-            # For VAD, we need the raw bytes
-            is_speech_detected = vad.is_speech(audio_chunk, RATE)
-            
-            if recording:
-                frames.append(audio_chunk)
-                
-            if is_speech_detected:
-                if not recording:
-                    recording = True
+        audio_chunk = stream.read(CHUNK)
+        audio_array = np.frombuffer(audio_chunk, dtype=np.int16).copy()
+        audio_array = audio_array.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
+        
+        # Process chunk with VADIterator
+        speech_event = vad(audio_array)
+        
+        # Update sample index
+        sample_index += CHUNK
+        
+        # Handle speech events
+        if speech_event is not None:
+            if 'start' in speech_event:
+                recording = True
                 silence_start = None
-            elif recording:
-                if silence_start is None:
-                    silence_start = time.time()
-                elif time.time() - silence_start > SILENCE_LIMIT:
-                    recording = False
-                    # Convert to WAV in memory and encode to base64
-                    audio_data = b''.join(frames)
-                    wav_io = io.BytesIO()
-                    wf = wave.open(wav_io, 'wb')
-                    wf.setnchannels(CHANNELS)
-                    wf.setsampwidth(p.get_sample_size(FORMAT))
-                    wf.setframerate(RATE)
-                    wf.writeframes(audio_data)
-                    wf.close()
-                    wav_io.seek(0)
-                    base64_audio = base64.b64encode(wav_io.read()).decode('utf-8')
-                    
-                    if audio_queue:
-                        audio_queue.put(base64_audio)  # Push to queue for transcription
-                    
-                    # Reset frames and continue recording
-                    frames = []
-        except Exception as e:
-            print(f"Error recording: {e}")
-                
+            elif 'end' in speech_event:
+                silence_start = time.time()  # Start silence timer after speech ends
+        
+        # Append audio if recording
+        if recording:
+            frames.append(audio_chunk)
+        
+        # Check for silence timeout after speech ends
+        if not recording and silence_start is None and frames:
+            silence_start = time.time()
+        elif silence_start is not None and time.time() - silence_start > SILENCE_LIMIT and frames:
+            recording = False
+            audio_data = b''.join(frames)
+            wav_io = io.BytesIO()
+            wf = wave.open(wav_io, 'wb')
+            wf.setnchannels(CHANNELS)
+            wf.setsampwidth(p.get_sample_size(FORMAT))
+            wf.setframerate(RATE)
+            wf.writeframes(audio_data)
+            wf.close()
+            wav_io.seek(0)
+            base64_audio = base64.b64encode(wav_io.read()).decode('utf-8')
+            if audio_queue:
+                audio_queue.put(base64_audio)
+            frames = []
+            silence_start = None
+    
     stream.stop_stream()
     stream.close()
     p.terminate()
+
+# if __name__ == "__main__":
+#     record_speech()

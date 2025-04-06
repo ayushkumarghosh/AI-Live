@@ -2,14 +2,13 @@ import asyncio
 import queue
 from datetime import datetime
 from speech_capture import record_speech
-from pollinations import transcribe, analyze_image_with_history, ChatHistory
+from chat import analyze_with_audio_and_image, ChatHistory, process_stream_response
 import base64
 import io
-import json
-import sseclient
 from PIL import ImageGrab
 import sys
 import threading
+import time
 
 # Initialize chat history
 chat_history = ChatHistory()
@@ -17,11 +16,13 @@ chat_history = ChatHistory()
 # Audio queue for communication between sync and async parts
 audio_queue = asyncio.Queue()
 
-# Event for cancellation
-cancel_event = asyncio.Event()
-
 # Global reference to the main event loop (will be set in main)
 main_loop = None
+
+# Rate limiting settings - 30 RPM = 1 request per 2 seconds to be safe
+RATE_LIMIT = 2.0  # seconds between requests
+last_request_time = 0
+api_semaphore = asyncio.Semaphore(1)  # Allow only 1 API call at a time
 
 def capture_screenshot(max_width=1280, quality=85):
     """Capture a screenshot, resize it, and return it as a base64 encoded string"""
@@ -77,9 +78,6 @@ async def process_audio_data():
     print("🎙️  AI LIVE SYSTEM STARTED 🎙️", flush=True)
     print("=" * 50 + "\n", flush=True)
     
-    # Start the transcription and analysis
-    current_task = None
-    
     while True:
         # Wait for audio data
         audio_data = await audio_queue.get()
@@ -87,39 +85,16 @@ async def process_audio_data():
         sys.stdout.flush()
         
         try:
-            # Transcribe audio
-            transcription = transcribe(audio_data, "wav")
+            # Capture screenshot
+            screenshot_base64 = capture_screenshot()
             
-            # Handle different transcription results
-            if "error500" in transcription or transcription == "":
-                pass
-            elif "error400" in transcription:
-                print("Sorry, I didn't get that. Could you please repeat?", flush=True)
-            elif transcription:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 User: \"{transcription}\"", flush=True)
-                sys.stdout.flush()
-                
-                # Capture screenshot
-                # print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing screenshot...")
-                screenshot_base64 = capture_screenshot()
-                
-                # Cancel any ongoing analysis
-                if current_task and not current_task.done():
-                    cancel_event.set()
-                    try:
-                        # Wait a short time for the task to cancel itself
-                        await asyncio.wait_for(current_task, timeout=0.5)
-                    except asyncio.TimeoutError:
-                        # Force cancel if it doesn't respond
-                        current_task.cancel()
-                    
-                    # Clear the event for next use
-                    cancel_event.clear()
-                
-                # Start a new analysis task
-                current_task = asyncio.create_task(
-                    analyze_with_streaming(chat_history, screenshot_base64, transcription)
-                )
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎙️ Audio received, processing...", flush=True)
+            sys.stdout.flush()
+            
+            # Process each speech input with rate limiting
+            asyncio.create_task(
+                analyze_with_streaming(chat_history, audio_data, screenshot_base64)
+            )
         
         except Exception as e:
             print(f"Error processing audio: {e}", flush=True)
@@ -127,65 +102,41 @@ async def process_audio_data():
         # Mark task as done
         audio_queue.task_done()
 
-async def analyze_with_streaming(chat_history, screenshot_base64, transcription):
-    """Analyze image and transcript with streaming response"""
+async def analyze_with_streaming(chat_history, audio_data, screenshot_base64):
+    """Analyze audio and image with streaming response"""
     try:
         sys.stdout.flush()
         
-        # Start the analysis request
-        response = analyze_image_with_history(chat_history, screenshot_base64, "jpeg", transcription)
-        
-        # Process the streaming response
-        client = sseclient.SSEClient(response)
-        full_response = ""
-        
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 AI response:", flush=True)
-        print("-" * 50, flush=True)
-        sys.stdout.flush()
-        
-        for event in client.events():
-            # Check if we should cancel
-            if cancel_event.is_set():
-                print(f"\n[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Analysis interrupted for new transcription", flush=True)
-                try:
-                    response.close()
-                except:
-                    pass
-                return
+        # Apply rate limiting with semaphore
+        async with api_semaphore:
+            # Check if we need to wait to respect the rate limit
+            global last_request_time
+            current_time = time.time()
+            time_since_last_request = current_time - last_request_time
             
-            if event.data:
-                try:
-                    # Handle potential '[DONE]' marker
-                    if event.data.strip() == '[DONE]':
-                        print("\n" + "-" * 50, flush=True)
-                        # print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Stream finished.", flush=True)
-                        sys.stdout.flush()
-                        break
-                    
-                    chunk = json.loads(event.data)
-                    content = None
-                    if len(chunk.get('choices', [{}])) > 0:
-                        content = chunk.get('choices', [{}])[0].get('delta', {}).get('content')
-                    
-                    if content:
-                        # Ensure content is printed immediately
-                        print(content, end='', flush=True)
-                        sys.stdout.flush()
-                        
-                        full_response += content
-                        
-                except json.JSONDecodeError:
-                    print(f"\nReceived non-JSON data: {event.data}", flush=True)
-                    sys.stdout.flush()
-                
-                # Yield control to allow other tasks to run
-                await asyncio.sleep(0)
-        
-        # Add to chat history if completed successfully
-        if not cancel_event.is_set():
-            response_obj = {"choices": [{"message": {"content": full_response}}]}
-            chat_history.add_entry(transcription, response_obj, screenshot_base64)
-            # print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Analysis complete", flush=True)
+            if time_since_last_request < RATE_LIMIT:
+                wait_time = RATE_LIMIT - time_since_last_request
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ Rate limiting: waiting {wait_time:.2f}s", flush=True)
+                await asyncio.sleep(wait_time)
+            
+            # Update the last request time
+            last_request_time = time.time()
+            
+            # Start the analysis request
+            response = analyze_with_audio_and_image(chat_history, audio_data, "wav", screenshot_base64, "jpeg")
+            
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 AI response:", flush=True)
+            print("-" * 50, flush=True)
+            sys.stdout.flush()
+            
+            # Process the streaming response using the function from chat.py
+            full_response = process_stream_response(response)
+            
+            print("\n" + "-" * 50, flush=True)
+            sys.stdout.flush()
+            
+            # Add to chat history
+            chat_history.add_entry(audio_data, full_response, screenshot_base64)
             sys.stdout.flush()
     
     except Exception as e:

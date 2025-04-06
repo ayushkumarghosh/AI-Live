@@ -2,8 +2,7 @@ import asyncio
 import queue
 from datetime import datetime
 from speech_capture import record_speech
-from pollinations import transcribe, analyze_image_with_history, ChatHistory, encode_image_base64
-import time
+from pollinations import transcribe, analyze_image_with_history, ChatHistory
 import base64
 import io
 import json

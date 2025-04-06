@@ -1,10 +1,12 @@
+import grequests
 import requests
 import base64
-import json
 from datetime import datetime
 from typing import List, Dict
-import sseclient
 import time
+import os
+
+os.environ["GEVENT_SUPPORT"] = "True"
 
 # API Configuration
 url = "https://text.pollinations.ai/openai"
@@ -84,12 +86,17 @@ def transcribe(audio_base64: str, audio_format: str) -> str:
     
     for retry in range(max_retries):
         try:
-            response = requests.post(url, headers=headers, json=payload)
+            # Create an asynchronous request using grequests
+            req = grequests.post(url, headers=headers, json=payload)
+            # Execute the request asynchronously
+            res_list = grequests.map([req])
+            # Get the response from the list
+            response = res_list[0]
             response.raise_for_status()
             result = response.json()
             transcription = result.get('choices', [{}])[0].get('message', {}).get('content')
             return transcription
-        except requests.exceptions.RequestException as e:
+        except (requests.exceptions.RequestException, Exception) as e:
             # Check if this is the last retry
             if retry < max_retries - 1:
                 print(f"Transcription API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
@@ -138,11 +145,14 @@ def analyze_image_with_history(chat_history: ChatHistory, base64_image: str, ima
     
     for retry in range(max_retries):
         try:
-            response = requests.post(url, headers=headers, json=payload)
+            # For streaming responses, we still need to use regular requests
+            # grequests doesn't handle streaming well
+            response = requests.post(url, headers=headers, json=payload, stream=True)
             response.raise_for_status()
             return response
         except requests.exceptions.RequestException as e:
             # Check if this is the last retry
+            print(response.content)
             if retry < max_retries - 1:
                 print(f"Analysis API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
                 time.sleep(retry_delay)

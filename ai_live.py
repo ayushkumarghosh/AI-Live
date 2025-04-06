@@ -2,8 +2,7 @@ import asyncio
 import queue
 from datetime import datetime
 from speech_capture import record_speech
-from pollinations import transcribe, analyze_image_with_history, ChatHistory, encode_image_base64
-import time
+from pollinations import transcribe, analyze_image_with_history, ChatHistory
 import base64
 import io
 import json
@@ -169,12 +168,9 @@ async def analyze_with_streaming(chat_history, screenshot_base64, transcription)
                         content = chunk.get('choices', [{}])[0].get('delta', {}).get('content')
                     
                     if content:
-                        # Print character by character for better streaming
-                        for char in content:
-                            print(char, end='', flush=True)
-                            sys.stdout.flush()
-                            # Allow a very brief moment for the OS to flush output
-                            await asyncio.sleep(0.0005)
+                        # Ensure content is printed immediately
+                        print(content, end='', flush=True)
+                        sys.stdout.flush()
                         
                         full_response += content
                         

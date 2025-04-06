@@ -54,7 +54,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
     chat = model.start_chat(history=[])
     
     # Add system prompt for English transliteration
-    system_prompt = "Your responses should always be in English."
+    system_prompt = "Your responses should always be in English. No need to transcribe anything, just transliterate your answer to English."
     chat.send_message({"text": f"System: {system_prompt}"})
     
     # Add history context
@@ -99,7 +99,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
     current_parts.append(audio_part)
     
     # Add image content
-    current_parts.append({"text": "User's screen:"})
+    current_parts.append({"text": "This is the screen of the user, analyze it only if it is relevant to the question:"})
     img_part = {
         "inline_data": {
             "mime_type": f"image/{image_format}",

@@ -169,12 +169,9 @@ async def analyze_with_streaming(chat_history, screenshot_base64, transcription)
                         content = chunk.get('choices', [{}])[0].get('delta', {}).get('content')
                     
                     if content:
-                        # Print character by character for better streaming
-                        for char in content:
-                            print(char, end='', flush=True)
-                            sys.stdout.flush()
-                            # Allow a very brief moment for the OS to flush output
-                            await asyncio.sleep(0.0005)
+                        # Ensure content is printed immediately
+                        print(content, end='', flush=True)
+                        sys.stdout.flush()
                         
                         full_response += content
                         

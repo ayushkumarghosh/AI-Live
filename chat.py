@@ -7,7 +7,6 @@ from typing import List, Dict
 import time
 import os
 import json
-from pydantic import BaseModel
 
 # Google Gemini API setup
 gemini_api_key = os.getenv("GEMINI_API")
@@ -44,11 +43,6 @@ def encode_image_base64(file_path: str) -> str:
     """Convert image file to base64"""
     with open(file_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
-
-# Define Pydantic model for the response structure
-class GeminiResponse(BaseModel):
-    user_query: str
-    response: str
 
 def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, audio_format: str, 
                                 image_base64: str, image_format: str, desktop_audio_base64: str = ""):
@@ -150,7 +144,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
     
     # Add instruction for the model
     current_parts.append({
-        "text": "Extract the user's query and provide a helpful response."
+        "text": "First extract the user's query and then generate a helpful response to the user's query."
     })
     
     # Implement retry logic
@@ -166,7 +160,14 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
                     "temperature": 0,
                     "max_output_tokens": 6000,
                     "response_mime_type": "application/json",
-                    "response_schema": GeminiResponse,
+                    "response_schema": {
+                        "type": "object",
+                        "properties": {
+                            "user_query": {"type": "string", "description": "The user's query(transliterated to english if needed)"},
+                            "response": {"type": "string", "description": "The AI's response(transliterated to english if needed) to the user's query"}
+                        },
+                        "required": ["user_query", "response"]
+                    },
                 }
             )
             
@@ -216,24 +217,24 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
 #     
 #     return transcript
 
-def process_stream_response(response):
-    """Process a streaming response from Gemini"""
-    full_response = ""
-    for chunk in response:
-        if chunk.text:
-            content = chunk.text
-            full_response += content
-            print(content, end="", flush=True)
-    print()  # Add a newline at the end
+# def process_stream_response(response):
+#     """Process a streaming response from Gemini"""
+#     full_response = ""
+#     for chunk in response:
+#         if chunk.text:
+#             content = chunk.text
+#             full_response += content
+#             print(content, end="", flush=True)
+#     print()  # Add a newline at the end
     
-    try:
-        # Parse the JSON response
-        response_json = json.loads(full_response)
-        return response_json
-    except json.JSONDecodeError:
-        # If JSON parsing fails, return the raw response
-        print("Warning: Response was not valid JSON. Returning raw response.")
-        return {"user_query": "Could not extract query", "response": full_response}
+#     try:
+#         # Parse the JSON response
+#         response_json = json.loads(full_response)
+#         return response_json
+#     except json.JSONDecodeError:
+#         # If JSON parsing fails, return the raw response
+#         print("Warning: Response was not valid JSON. Returning raw response.")
+#         return {"user_query": "Could not extract query", "response": full_response}
 
 # Example usage
 # if __name__ == "__main__":

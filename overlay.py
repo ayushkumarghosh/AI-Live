@@ -19,6 +19,50 @@ class OverlayThread(QtCore.QThread):
         # Create a separate event loop for this thread
         self.exec_()
 
+class ResizeHandle(QtWidgets.QWidget):
+    """Resize handle for overlay window"""
+    def __init__(self, parent, position):
+        super().__init__(parent)
+        self.position = position  # "top-left", "right", etc.
+        self.parent = parent
+        
+        # Use arrow cursor for all handles
+        self.setCursor(QtCore.Qt.ArrowCursor)
+        
+        # Make the handle transparent
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        
+        # Set size
+        self.setFixedSize(20, 20)
+        
+    def paintEvent(self, event):
+        """Paint the handle with a subtle indicator"""
+        if self.parent.show_resize_handles:
+            painter = QtGui.QPainter(self)
+            painter.setPen(QtGui.QPen(QtGui.QColor(180, 180, 180, 120), 1))
+            painter.setBrush(QtGui.QBrush(QtGui.QColor(120, 120, 120, 80)))
+            
+            # Draw a small rectangle or circle to indicate handle
+            if "corner" in self.position:
+                painter.drawRect(0, 0, 10, 10)
+            else:
+                painter.drawRect(0, 0, 8, 8)
+    
+    def mousePressEvent(self, event):
+        """Handle mouse press to start resizing"""
+        if event.button() == QtCore.Qt.LeftButton:
+            self.parent.start_resize(self.position, event.globalPos())
+    
+    def mouseMoveEvent(self, event):
+        """Handle mouse move for resize operation"""
+        if self.parent.resizing:
+            self.parent.do_resize(event.globalPos())
+    
+    def mouseReleaseEvent(self, event):
+        """Handle mouse release to end resizing"""
+        if event.button() == QtCore.Qt.LeftButton:
+            self.parent.end_resize()
+
 class DraggableOverlay(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -34,7 +78,10 @@ class DraggableOverlay(QtWidgets.QWidget):
         
         # Variables for dragging
         self.dragging = False
+        self.resizing = False
         self.offset = QtCore.QPoint()
+        self.resize_position = None
+        self.show_resize_handles = True  # Set to True to see the handles initially
         
         # Create a layout for the content
         self.layout = QtWidgets.QVBoxLayout(self)
@@ -55,6 +102,9 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.status_label = QtWidgets.QLabel("Listening...")
         self.status_label.setStyleSheet("color: #4CAF50; font-size: 14px;")
         title_layout.addWidget(self.status_label)
+        
+        # Spacer to push buttons to the right
+        title_layout.addStretch(1)
         
         # Add title bar to main layout
         self.layout.addWidget(self.title_bar)
@@ -91,6 +141,8 @@ class DraggableOverlay(QtWidgets.QWidget):
                 height: 0px;
             }
         """)
+        # Prevent cursor from changing on hover
+        self.conversation_text.viewport().setCursor(QtCore.Qt.ArrowCursor)
         self.conversation_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
         self.conversation_text.setLineWrapMode(QtWidgets.QTextEdit.WidgetWidth)
         content_layout.addWidget(self.conversation_text)
@@ -108,6 +160,9 @@ class DraggableOverlay(QtWidgets.QWidget):
             }
         """)
         
+        # Create resize handles
+        self.create_resize_handles()
+        
         # Initialize conversation history and processing state
         self.conversation_history = []
         self.is_processing = False
@@ -118,6 +173,88 @@ class DraggableOverlay(QtWidgets.QWidget):
         self._queue_timer = QtCore.QTimer(self)
         self._queue_timer.timeout.connect(self._process_queue)
         self._queue_timer.start(100)  # Process queue every 100ms
+        
+        # Set minimum size
+        self.setMinimumSize(300, 200)
+    
+    def create_resize_handles(self):
+        """Create resize handles at the corners and edges"""
+        self.handles = []
+        
+        # Create corner handles
+        positions = [
+            "top-left", "top-right", "bottom-left", "bottom-right",
+            "top", "right", "bottom", "left"
+        ]
+        
+        for pos in positions:
+            handle = ResizeHandle(self, pos)
+            self.handles.append(handle)
+        
+        # Position the handles during resize events
+        self.position_resize_handles()
+    
+    def position_resize_handles(self):
+        """Position the resize handles based on the current window geometry"""
+        if not hasattr(self, 'handles'):
+            return
+            
+        for handle in self.handles:
+            if handle.position == "top-left":
+                handle.move(0, 0)
+            elif handle.position == "top-right":
+                handle.move(self.width() - handle.width(), 0)
+            elif handle.position == "bottom-left":
+                handle.move(0, self.height() - handle.height())
+            elif handle.position == "bottom-right":
+                handle.move(self.width() - handle.width(), self.height() - handle.height())
+            elif handle.position == "top":
+                handle.move(self.width() // 2 - handle.width() // 2, 0)
+            elif handle.position == "right":
+                handle.move(self.width() - handle.width(), self.height() // 2 - handle.height() // 2)
+            elif handle.position == "bottom":
+                handle.move(self.width() // 2 - handle.width() // 2, self.height() - handle.height())
+            elif handle.position == "left":
+                handle.move(0, self.height() // 2 - handle.height() // 2)
+    
+    def resizeEvent(self, event):
+        """Handle resize event to reposition resize handles"""
+        super().resizeEvent(event)
+        self.position_resize_handles()
+    
+    def start_resize(self, position, global_pos):
+        """Start resize operation"""
+        self.resizing = True
+        self.resize_position = position
+        self.start_resize_pos = global_pos
+        self.start_resize_geometry = self.geometry()
+    
+    def do_resize(self, global_pos):
+        """Perform resize based on mouse movement and resize position"""
+        if not self.resizing:
+            return
+            
+        delta = global_pos - self.start_resize_pos
+        new_geo = QtCore.QRect(self.start_resize_geometry)
+        
+        # Apply resize based on position
+        if "left" in self.resize_position:
+            new_geo.setLeft(self.start_resize_geometry.left() + delta.x())
+        if "right" in self.resize_position:
+            new_geo.setRight(self.start_resize_geometry.right() + delta.x())
+        if "top" in self.resize_position:
+            new_geo.setTop(self.start_resize_geometry.top() + delta.y())
+        if "bottom" in self.resize_position:
+            new_geo.setBottom(self.start_resize_geometry.bottom() + delta.y())
+        
+        # Apply new geometry if it meets minimum size
+        if new_geo.width() >= self.minimumWidth() and new_geo.height() >= self.minimumHeight():
+            self.setGeometry(new_geo)
+    
+    def end_resize(self):
+        """End resize operation"""
+        self.resizing = False
+        self.resize_position = None
 
     def _enqueue(self, func, *args, **kwargs):
         """Enqueue a function to be executed in the UI thread"""

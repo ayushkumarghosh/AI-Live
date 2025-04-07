@@ -47,10 +47,10 @@ def encode_image_base64(file_path: str) -> str:
 def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, audio_format: str, 
                                 image_base64: str, image_format: str, desktop_audio_base64: str = ""):
     """Analyze audio and image with chat history context using Google Gemini"""
-    context = chat_history.get_context(lookback=10)
+    context = chat_history.get_context()
     
     # Initialize Gemini model
-    model = genai.GenerativeModel('gemini-2.0-flash-lite')
+    model = genai.GenerativeModel('gemini-2.0-flash')
     
     # Create a chat session
     chat = model.start_chat(history=[])
@@ -68,7 +68,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
         parts.append({"text": f"Previous response: {entry['response']}"})
         
         # Add explanatory text for the screen image
-        parts.append({"text": "This is the screen of the user, analyze it only if it is relevant to the question:"})
+        parts.append({"text": "This was the screen of the user, analyze it only if it is relevant to the user's current query:"})
         
         # Add image content - as a separate part
         img_part = {
@@ -80,7 +80,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
         parts.append(img_part)
         
         # Add explanatory text for microphone audio
-        parts.append({"text": "This is the user's voice input:"})
+        parts.append({"text": "This was the user's query:"})
         
         # Add audio content - as a separate part
         audio_part = {
@@ -94,7 +94,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
         # Add desktop audio if available
         if entry.get('desktop_audio_base64'):
             # Add explanatory text
-            parts.append({"text": "This is the desktop audio output from the user's system:"})
+            parts.append({"text": "This was the desktop audio output from the user's system, analyze it only if it is relevant to the query:"})
             
             desktop_audio_part = {
                 "inline_data": {
@@ -111,7 +111,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
     current_parts = []
     
     # Add explanatory text for microphone audio
-    current_parts.append({"text": "This is the user's voice input:"})
+    current_parts.append({"text": "This is the user's current query, always prioritize it:"})
     
     # Add audio content as a separate part
     audio_part = {
@@ -124,7 +124,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
     
     # Add desktop audio if available
     if desktop_audio_base64:
-        current_parts.append({"text": "This is the desktop audio output from the user's system, always analyze it:"})
+        current_parts.append({"text": "This is the desktop audio output from the user's system, analyze it only if it is relevant to the query:"})
         
         desktop_audio_part = {
             "inline_data": {
@@ -135,7 +135,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
         current_parts.append(desktop_audio_part)
     
     # Add explanatory text for the screen
-    current_parts.append({"text": "This is the screen of the user, analyze it only if it is relevant to the question:"})
+    current_parts.append({"text": "This is the screen of the user, analyze it only if it is relevant to the query:"})
     
     # Add image content as a separate part
     img_part = {
@@ -145,6 +145,8 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
         }
     }
     current_parts.append(img_part)
+    
+    current_parts.append({"text": "Now your output should be like this: User's query:<user's query>\n\n <your response>"})
     
     # Implement retry logic
     max_retries = 3

@@ -1,7 +1,7 @@
 import queue
 from datetime import datetime
 from speech_capture import record_speech
-from chat import analyze_with_audio_and_image, ChatHistory, process_stream_response
+from chat import analyze_with_audio_and_image, ChatHistory
 import base64
 import io
 from PIL import ImageGrab
@@ -110,7 +110,6 @@ def analyze_with_streaming(chat_history, audio_data, screenshot_base64):
     
     try:
         sys.stdout.flush()
-        full_response = ""
         # Apply rate limiting with semaphore
         with api_semaphore:
             # Check if we need to wait to respect the rate limit
@@ -135,7 +134,7 @@ def analyze_with_streaming(chat_history, audio_data, screenshot_base64):
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured and included", flush=True)
             
             # Start the analysis request
-            response = analyze_with_audio_and_image(
+            response_json = analyze_with_audio_and_image(
                 chat_history, 
                 mic_audio, 
                 "wav", 
@@ -148,29 +147,29 @@ def analyze_with_streaming(chat_history, audio_data, screenshot_base64):
             print("-" * 50, flush=True)
             sys.stdout.flush()
             
-            # Collect the complete response
-            for chunk in response:
-                if chunk.text:
-                    full_response += chunk.text
+            # Extract the user query and response
+            user_query = response_json.get("user_query", "Could not extract query")
+            ai_response = response_json.get("response", "No response generated")
             
             # Print the complete response
-            print(full_response, flush=True)
+            print(f"User's query: {user_query}\n")
+            print(f"AI response: {ai_response}", flush=True)
             print("\n" + "-" * 50, flush=True)
             
             # Add to chat history
-            chat_history.add_entry(mic_audio, full_response, screenshot_base64, desktop_audio)
+            chat_history.add_entry(mic_audio, ai_response, screenshot_base64, desktop_audio)
             
             sys.stdout.flush()
-        # Update overlay with complete response
+        # Update overlay with structured response
         if overlay:
-            overlay.update_response(full_response)
+            overlay.update_response(response_json)
             overlay.update_status("Listening...", "#4CAF50")
     
     except Exception as e:
         print(f"Error in analysis: {e}", flush=True)
         if overlay:
             overlay.update_status("Error", "#FF0000")
-            overlay.update_response(f"Error: {str(e)}")
+            overlay.update_response({"user_query": "Error occurred", "response": f"Error: {str(e)}"})
         sys.stdout.flush()
 
 def main():

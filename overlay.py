@@ -1,6 +1,7 @@
 import sys
 from PyQt5 import QtWidgets, QtCore, QtGui
 import ctypes
+import json
 
 class OverlayThread(QtCore.QThread):
     """Thread for running overlay UI to prevent freezing the main application"""
@@ -63,13 +64,13 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.content_area.setStyleSheet("background-color: rgba(30, 30, 30, 180); border-radius: 5px;")
         content_layout = QtWidgets.QVBoxLayout(self.content_area)
         
-        # Response text area with scrollbar
-        self.response_text = QtWidgets.QTextEdit()
-        self.response_text.setReadOnly(True)
-        self.response_text.setStyleSheet("""
+        # Conversation text area with scrollbar
+        self.conversation_text = QtWidgets.QTextEdit()
+        self.conversation_text.setReadOnly(True)
+        self.conversation_text.setStyleSheet("""
             QTextEdit {
-                background-color: transparent;
-                color: white;
+                background-color: rgba(40, 40, 40, 150);
+                color: #E0E0E0;
                 border: none;
                 font-size: 14px;
                 padding: 10px;
@@ -90,9 +91,9 @@ class DraggableOverlay(QtWidgets.QWidget):
                 height: 0px;
             }
         """)
-        self.response_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
-        self.response_text.setLineWrapMode(QtWidgets.QTextEdit.WidgetWidth)
-        content_layout.addWidget(self.response_text)
+        self.conversation_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
+        self.conversation_text.setLineWrapMode(QtWidgets.QTextEdit.WidgetWidth)
+        content_layout.addWidget(self.conversation_text)
         
         # Add content area to main layout
         self.layout.addWidget(self.content_area)
@@ -107,8 +108,8 @@ class DraggableOverlay(QtWidgets.QWidget):
             }
         """)
         
-        # Initialize streaming buffer and processing state
-        self.streaming_buffer = ""
+        # Initialize conversation history and processing state
+        self.conversation_history = []
         self.is_processing = False
         
         # Setup a queue for thread-safe operations
@@ -142,29 +143,60 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.status_label.setText(status)
         self.status_label.setStyleSheet(f"color: {color}; font-size: 14px;")
 
-    def update_response(self, text):
-        """Update the response text area with complete response"""
+    def update_response(self, response_data):
+        """Update the conversation with new response"""
         # Add to queue for thread-safe execution
-        self._enqueue(self._update_response_impl, text)
+        self._enqueue(self._update_response_impl, response_data)
     
-    def _update_response_impl(self, text):
+    def _update_response_impl(self, response_data):
         """Actual implementation of response update in UI thread"""
-        # Add the new response with a separator
-        self.streaming_buffer += text + "─" * 50
+        # Extract data from the response
+        if isinstance(response_data, dict):
+            # Extract directly from the dictionary response
+            user_query = response_data.get("user_query", "Could not extract query")
+            ai_response = response_data.get("response", "No response generated")
+        else:
+            # Handle the case where response_data is a string (for backward compatibility)
+            try:
+                # Try to parse as JSON
+                json_data = json.loads(response_data)
+                user_query = json_data.get("user_query", "Could not extract query")
+                ai_response = json_data.get("response", "No response generated")
+            except (json.JSONDecodeError, TypeError):
+                # If it's not valid JSON, use original string handling
+                parts = response_data.split("\n\n", 1)
+                if len(parts) > 1 and parts[0].startswith("User's query:"):
+                    user_query = parts[0].replace("User's query:", "").strip()
+                    ai_response = parts[1]
+                else:
+                    user_query = "Could not extract query"
+                    ai_response = response_data
         
-        # Set the complete text
-        self.response_text.setPlainText(self.streaming_buffer)
+        # Add to conversation history
+        self.conversation_history.append({"role": "user", "content": user_query})
+        self.conversation_history.append({"role": "assistant", "content": ai_response})
+        
+        # Format the entire conversation
+        conversation_text = ""
+        for entry in self.conversation_history:
+            if entry["role"] == "user":
+                conversation_text += f"<span style='color: #4CAF50; font-weight: bold;'>You:</span> {entry['content']}<br>"
+            else:
+                conversation_text += f"<span style='color: #2196F3; font-weight: bold;'>AI:</span> {entry['content']}<br><br>"
+        
+        # Set the formatted conversation
+        self.conversation_text.setHtml(conversation_text)
         
         # Scroll to bottom
-        self.response_text.verticalScrollBar().setValue(
-            self.response_text.verticalScrollBar().maximum()
+        self.conversation_text.verticalScrollBar().setValue(
+            self.conversation_text.verticalScrollBar().maximum()
         )
         
         # Update processing state
         self.is_processing = False
 
     def show_processing(self):
-        """Show processing indicator in the response area"""
+        """Show processing indicator in the conversation area"""
         # Add to queue for thread-safe execution
         self._enqueue(self._show_processing_impl)
     
@@ -172,23 +204,34 @@ class DraggableOverlay(QtWidgets.QWidget):
         """Actual implementation of showing processing indicator in UI thread"""
         if not self.is_processing:
             self.is_processing = True
-            processing_text = self.streaming_buffer + "Processing..."
-            self.response_text.setPlainText(processing_text)
+            
+            # Format the conversation with a processing indicator
+            conversation_text = ""
+            for entry in self.conversation_history:
+                if entry["role"] == "user":
+                    conversation_text += f"<span style='color: #4CAF50; font-weight: bold;'>You:</span> {entry['content']}<br>"
+                else:
+                    conversation_text += f"<span style='color: #2196F3; font-weight: bold;'>AI:</span> {entry['content']}<br><br>"
+            
+            conversation_text += "<span style='color: #FFA500; font-style: italic;'>Processing...</span>"
+            
+            # Set the formatted conversation
+            self.conversation_text.setHtml(conversation_text)
             
             # Scroll to bottom
-            self.response_text.verticalScrollBar().setValue(
-                self.response_text.verticalScrollBar().maximum()
+            self.conversation_text.verticalScrollBar().setValue(
+                self.conversation_text.verticalScrollBar().maximum()
             )
 
     def clear_response(self):
-        """Clear the response text and buffer"""
+        """Clear the conversation history"""
         # Add to queue for thread-safe execution
         self._enqueue(self._clear_response_impl)
     
     def _clear_response_impl(self):
-        """Actual implementation of clearing response in UI thread"""
-        self.streaming_buffer = ""
-        self.response_text.clear()
+        """Actual implementation of clearing conversation in UI thread"""
+        self.conversation_history = []
+        self.conversation_text.clear()
 
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.LeftButton:

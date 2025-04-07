@@ -7,6 +7,7 @@ from typing import List, Dict
 import time
 import os
 import json
+from pydantic import BaseModel
 
 # Google Gemini API setup
 gemini_api_key = os.getenv("GEMINI_API")
@@ -44,6 +45,11 @@ def encode_image_base64(file_path: str) -> str:
     with open(file_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
+# Define Pydantic model for the response structure
+class GeminiResponse(BaseModel):
+    user_query: str
+    response: str
+
 def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, audio_format: str, 
                                 image_base64: str, image_format: str, desktop_audio_base64: str = ""):
     """Analyze audio and image with chat history context using Google Gemini"""
@@ -54,10 +60,6 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
     
     # Create a chat session
     chat = model.start_chat(history=[])
-    
-    # Add system prompt for English transliteration
-    system_prompt = "Your responses should always be in English. No need to transcribe anything, just transliterate your answer to English."
-    chat.send_message({"text": f"System: {system_prompt}"})
     
     # Add history context
     for entry in context:
@@ -124,7 +126,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
     
     # Add desktop audio if available
     if desktop_audio_base64:
-        current_parts.append({"text": "This is the desktop audio output from the user's system, analyze it only if it is relevant to the query:"})
+        current_parts.append({"text": "This is the current desktop audio output from the user's system, analyze it only if it is relevant to the query:"})
         
         desktop_audio_part = {
             "inline_data": {
@@ -135,7 +137,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
         current_parts.append(desktop_audio_part)
     
     # Add explanatory text for the screen
-    current_parts.append({"text": "This is the screen of the user, analyze it only if it is relevant to the query:"})
+    current_parts.append({"text": "This is the current screen of the user, analyze it only if it is relevant to the query:"})
     
     # Add image content as a separate part
     img_part = {
@@ -146,7 +148,10 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
     }
     current_parts.append(img_part)
     
-    current_parts.append({"text": "Now your output should be like this: User's query:<user's query>\n\n <your response>"})
+    # Add instruction for the model
+    current_parts.append({
+        "text": "Extract the user's query and provide a helpful response."
+    })
     
     # Implement retry logic
     max_retries = 3
@@ -154,9 +159,29 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
     
     for retry in range(max_retries):
         try:
-            # Using Gemini's streaming response
-            response = chat.send_message(current_parts, stream=True)
-            return response
+            # Using Gemini's generate_content with structured output schema
+            response = model.generate_content(
+                current_parts,
+                generation_config={
+                    "temperature": 0,
+                    "max_output_tokens": 6000,
+                    "response_mime_type": "application/json",
+                    "response_schema": GeminiResponse,
+                }
+            )
+            
+            # Extract and parse the response text
+            response_text = response.text
+            
+            try:
+                # Parse the JSON response
+                response_json = json.loads(response_text)
+                return response_json
+            except json.JSONDecodeError:
+                # If JSON parsing fails, return a fallback structure
+                print("Warning: Response was not valid JSON. Returning raw response.")
+                return {"user_query": "Could not extract query", "response": response_text}
+                
         except Exception as e:
             if retry < max_retries - 1:
                 print(f"Analysis API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
@@ -200,7 +225,15 @@ def process_stream_response(response):
             full_response += content
             print(content, end="", flush=True)
     print()  # Add a newline at the end
-    return full_response
+    
+    try:
+        # Parse the JSON response
+        response_json = json.loads(full_response)
+        return response_json
+    except json.JSONDecodeError:
+        # If JSON parsing fails, return the raw response
+        print("Warning: Response was not valid JSON. Returning raw response.")
+        return {"user_query": "Could not extract query", "response": full_response}
 
 # Example usage
 # if __name__ == "__main__":
@@ -215,11 +248,8 @@ def process_stream_response(response):
 #     audio_base64 = encode_audio_base64(audio_path)
 #     image_base64 = encode_image_base64(image_path)
 #     
-#     # Get streaming response
-#     stream_response = analyze_with_audio_and_image(history, audio_base64, "wav", image_base64, "jpeg")
-#     
-#     # Process the stream
-#     full_response = process_stream_response(stream_response)
+#     # Get response
+#     response_json = analyze_with_audio_and_image(history, audio_base64, "wav", image_base64, "jpeg")
 #     
 #     # Add the interaction to history
-#     history.add_entry(audio_base64, full_response, image_base64)
+#     history.add_entry(audio_base64, response_json.get("response", ""), image_base64)

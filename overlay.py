@@ -106,6 +106,29 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Spacer to push buttons to the right
         title_layout.addStretch(1)
         
+        # Close button
+        self.close_button = QtWidgets.QPushButton("✕")
+        self.close_button.setFixedSize(24, 24)
+        self.close_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(80, 80, 80, 200);
+                color: white;
+                border: none;
+                border-radius: 12px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(200, 60, 60, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(180, 40, 40, 200);
+            }
+        """)
+        self.close_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.close_button.clicked.connect(self.quit_application)
+        title_layout.addWidget(self.close_button)
+        
         # Add title bar to main layout
         self.layout.addWidget(self.title_bar)
         
@@ -396,6 +419,14 @@ class DraggableOverlay(QtWidgets.QWidget):
         result = ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
         if not result:
             print("Warning: Failed to set window display affinity. Screen sharing may capture the overlay.")
+    
+    def quit_application(self):
+        """Stop the entire application when close button is clicked"""
+        print("Closing AI Live application...")
+        # Close the overlay window
+        self.close()
+        # Quit the application
+        QtWidgets.QApplication.quit()
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)

@@ -122,8 +122,23 @@ async def analyze_with_streaming(chat_history, audio_data, screenshot_base64):
             # Update the last request time
             last_request_time = time.time()
             
+            # Extract microphone and desktop audio
+            mic_audio = audio_data.get("mic_audio", "")
+            desktop_audio = audio_data.get("desktop_audio", "")
+            
+            # Log if we have desktop audio
+            if desktop_audio:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured and included", flush=True)
+            
             # Start the analysis request
-            response = analyze_with_audio_and_image(chat_history, audio_data, "wav", screenshot_base64, "jpeg")
+            response = analyze_with_audio_and_image(
+                chat_history, 
+                mic_audio, 
+                "wav", 
+                screenshot_base64, 
+                "jpeg", 
+                desktop_audio
+            )
             
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 AI response:", flush=True)
             print("-" * 50, flush=True)
@@ -135,8 +150,8 @@ async def analyze_with_streaming(chat_history, audio_data, screenshot_base64):
             print("\n" + "-" * 50, flush=True)
             sys.stdout.flush()
             
-            # Add to chat history
-            chat_history.add_entry(audio_data, full_response, screenshot_base64)
+            # Add to chat history - we store the microphone audio in the history
+            chat_history.add_entry(mic_audio, full_response, screenshot_base64, desktop_audio)
             sys.stdout.flush()
     
     except Exception as e:

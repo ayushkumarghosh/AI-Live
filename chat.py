@@ -20,10 +20,11 @@ class ChatHistory:
     def __init__(self):
         self.history: List[Dict] = []
 
-    def add_entry(self, audio_base64: str, response: str, image_base64: str):
+    def add_entry(self, audio_base64: str, response: str, image_base64: str, desktop_audio_base64: str = ""):
         entry = {
             "timestamp": datetime.now().isoformat(),
             "audio_base64": audio_base64,
+            "desktop_audio_base64": desktop_audio_base64,
             "response": response,
             "image_base64": image_base64
         }
@@ -43,7 +44,8 @@ def encode_image_base64(file_path: str) -> str:
     with open(file_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, audio_format: str, image_base64: str, image_format: str):
+def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, audio_format: str, 
+                                image_base64: str, image_format: str, desktop_audio_base64: str = ""):
     """Analyze audio and image with chat history context using Google Gemini"""
     context = chat_history.get_context(lookback=10)
     
@@ -65,7 +67,10 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
         # Add text with previous response context
         parts.append({"text": f"Previous response: {entry['response']}"})
         
-        # Add image content
+        # Add explanatory text for the screen image
+        parts.append({"text": "This is the screen of the user, analyze it only if it is relevant to the question:"})
+        
+        # Add image content - as a separate part
         img_part = {
             "inline_data": {
                 "mime_type": f"image/jpeg",
@@ -74,7 +79,10 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
         }
         parts.append(img_part)
         
-        # Add audio content
+        # Add explanatory text for microphone audio
+        parts.append({"text": "This is the user's voice input:"})
+        
+        # Add audio content - as a separate part
         audio_part = {
             "inline_data": {
                 "mime_type": f"audio/{audio_format}",
@@ -83,13 +91,29 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
         }
         parts.append(audio_part)
         
+        # Add desktop audio if available
+        if entry.get('desktop_audio_base64'):
+            # Add explanatory text
+            parts.append({"text": "This is the desktop audio output from the user's system:"})
+            
+            desktop_audio_part = {
+                "inline_data": {
+                    "mime_type": f"audio/{audio_format}",
+                    "data": entry['desktop_audio_base64']
+                }
+            }
+            parts.append(desktop_audio_part)
+        
         # Add this as a user message to the chat
         chat.send_message(parts)
     
     # Add current content
     current_parts = []
     
-    # Add audio content - Gemini 2.0 Flash supports audio input directly
+    # Add explanatory text for microphone audio
+    current_parts.append({"text": "This is the user's voice input:"})
+    
+    # Add audio content as a separate part
     audio_part = {
         "inline_data": {
             "mime_type": f"audio/{audio_format}",
@@ -98,8 +122,22 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
     }
     current_parts.append(audio_part)
     
-    # Add image content
+    # Add desktop audio if available
+    if desktop_audio_base64:
+        current_parts.append({"text": "This is the desktop audio output from the user's system, always analyze it:"})
+        
+        desktop_audio_part = {
+            "inline_data": {
+                "mime_type": f"audio/{audio_format}",
+                "data": desktop_audio_base64
+            }
+        }
+        current_parts.append(desktop_audio_part)
+    
+    # Add explanatory text for the screen
     current_parts.append({"text": "This is the screen of the user, analyze it only if it is relevant to the question:"})
+    
+    # Add image content as a separate part
     img_part = {
         "inline_data": {
             "mime_type": f"image/{image_format}",

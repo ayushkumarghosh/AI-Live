@@ -190,6 +190,8 @@ class DraggableOverlay(QtWidgets.QWidget):
         """)
         self.text_input.setPlaceholderText("Type your question and press Enter...")
         self.text_input.returnPressed.connect(self.submit_text)
+        # Set the cursor to arrow cursor for text input field
+        self.text_input.setCursor(QtCore.Qt.ArrowCursor)
         input_layout.addWidget(self.text_input)
         
         # Submit button

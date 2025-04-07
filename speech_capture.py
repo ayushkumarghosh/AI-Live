@@ -106,56 +106,113 @@ def record_speech(audio_queue=None):
     silence_start = None
     sample_index = 0  # Track total samples processed
     
+    # For deduplication - keep a set of recent audio hashes
+    recent_audio_hashes = set()
+    last_speech_time = 0  # Track when we last sent speech
+    
+    # Improved audio hashing function
+    def get_audio_fingerprint(audio_data):
+        if len(audio_data) < 100:
+            return hash(audio_data)
+        
+        # Create a more robust fingerprint by sampling multiple parts of the audio
+        if len(audio_data) > 6000:
+            # Take samples from beginning, middle and end for better fingerprinting
+            fingerprint = hash(audio_data[:2000] + 
+                              audio_data[len(audio_data)//2-1000:len(audio_data)//2+1000] + 
+                              audio_data[-2000:])
+        else:
+            fingerprint = hash(audio_data)
+        
+        return fingerprint
+    
     while True:
-        audio_chunk = mic_stream.read(CHUNK)
-        audio_array = np.frombuffer(audio_chunk, dtype=np.int16).copy()
-        audio_array = audio_array.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
-        
-        # We still use the VAD model for microphone input for better quality
-        speech_event = vad(audio_array)
-        
-        # Update sample index
-        sample_index += CHUNK
-        
-        # Handle speech events
-        if speech_event is not None:
-            if 'start' in speech_event:
-                recording = True
+        try:
+            audio_chunk = mic_stream.read(CHUNK, exception_on_overflow=False)
+            audio_array = np.frombuffer(audio_chunk, dtype=np.int16).copy()
+            audio_array = audio_array.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
+            
+            # We still use the VAD model for microphone input for better quality
+            speech_event = vad(audio_array)
+            
+            # Update sample index
+            sample_index += CHUNK
+            
+            # Handle speech events
+            if speech_event is not None:
+                if 'start' in speech_event:
+                    recording = True
+                    silence_start = None
+                elif 'end' in speech_event:
+                    silence_start = time.time()  # Start silence timer after speech ends
+            
+            # Append audio if recording
+            if recording:
+                frames.append(audio_chunk)
+            
+            # Check for silence timeout after speech ends
+            if not recording and silence_start is None and frames:
+                silence_start = time.time()
+            elif silence_start is not None and time.time() - silence_start > SILENCE_LIMIT and frames:
+                recording = False
+                audio_data = b''.join(frames)
+                
+                # Force at least 1 second between speech segments to reduce rapid-fire issues
+                current_time = time.time()
+                if current_time - last_speech_time < 0.8 and frames:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Too soon after last speech, waiting...", flush=True)
+                    frames = []
+                    silence_start = None
+                    continue
+                
+                # Create a robust fingerprint of the audio data
+                current_audio_fingerprint = get_audio_fingerprint(audio_data)
+                
+                # Only process if this is not a duplicate of recent audios
+                if current_audio_fingerprint not in recent_audio_hashes:
+                    # Add to recent hashes
+                    recent_audio_hashes.add(current_audio_fingerprint)
+                    
+                    # Limit set size to prevent memory growth
+                    if len(recent_audio_hashes) > 20:
+                        # Convert to list, keep most recent 10
+                        recent_list = list(recent_audio_hashes)
+                        recent_audio_hashes = set(recent_list[-10:])
+                    
+                    # Track last speech time
+                    last_speech_time = current_time
+                    
+                    # Process the audio
+                    wav_io = io.BytesIO()
+                    wf = wave.open(wav_io, 'wb')
+                    wf.setnchannels(CHANNELS)
+                    wf.setsampwidth(p.get_sample_size(FORMAT))
+                    wf.setframerate(RATE)
+                    wf.writeframes(audio_data)
+                    wf.close()
+                    wav_io.seek(0)
+                    base64_audio = base64.b64encode(wav_io.read()).decode('utf-8')
+                    
+                    # Get the desktop audio speech segments
+                    desktop_base64_audio = get_desktop_speech_segments()
+                    
+                    if audio_queue:
+                        # Send both microphone and desktop audio
+                        audio_queue.put({
+                            "mic_audio": base64_audio,
+                            "desktop_audio": desktop_base64_audio,
+                            "timestamp": time.time(),
+                            "fingerprint": current_audio_fingerprint
+                        })
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Audio processed and sent to queue (len: {len(audio_data)})", flush=True)
+                else:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Duplicate audio detected and skipped", flush=True)
+                
+                frames = []
                 silence_start = None
-            elif 'end' in speech_event:
-                silence_start = time.time()  # Start silence timer after speech ends
-        
-        # Append audio if recording
-        if recording:
-            frames.append(audio_chunk)
-        
-        # Check for silence timeout after speech ends
-        if not recording and silence_start is None and frames:
-            silence_start = time.time()
-        elif silence_start is not None and time.time() - silence_start > SILENCE_LIMIT and frames:
-            recording = False
-            audio_data = b''.join(frames)
-            wav_io = io.BytesIO()
-            wf = wave.open(wav_io, 'wb')
-            wf.setnchannels(CHANNELS)
-            wf.setsampwidth(p.get_sample_size(FORMAT))
-            wf.setframerate(RATE)
-            wf.writeframes(audio_data)
-            wf.close()
-            wav_io.seek(0)
-            base64_audio = base64.b64encode(wav_io.read()).decode('utf-8')
-            
-            # Get the desktop audio speech segments
-            desktop_base64_audio = get_desktop_speech_segments()
-            
-            if audio_queue:
-                # Send both microphone and desktop audio
-                audio_queue.put({
-                    "mic_audio": base64_audio,
-                    "desktop_audio": desktop_base64_audio
-                })
-            frames = []
-            silence_start = None
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error reading audio: {e}", flush=True)
+            time.sleep(0.1)  # Sleep on error to prevent CPU spike
     
     # Clean up
     desktop_capture_running = False

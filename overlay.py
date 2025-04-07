@@ -64,6 +64,9 @@ class ResizeHandle(QtWidgets.QWidget):
             self.parent.end_resize()
 
 class DraggableOverlay(QtWidgets.QWidget):
+    # Add a signal for text submission
+    text_submitted = QtCore.pyqtSignal(str)
+    
     def __init__(self):
         super().__init__()
         # Create a frameless, always-on-top overlay window
@@ -169,6 +172,50 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.conversation_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
         self.conversation_text.setLineWrapMode(QtWidgets.QTextEdit.WidgetWidth)
         content_layout.addWidget(self.conversation_text)
+        
+        # Add text input area and submit button
+        input_layout = QtWidgets.QHBoxLayout()
+        
+        # Text input field
+        self.text_input = QtWidgets.QLineEdit()
+        self.text_input.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(60, 60, 60, 150);
+                color: white;
+                border: 1px solid rgba(100, 100, 100, 150);
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 14px;
+            }
+        """)
+        self.text_input.setPlaceholderText("Type your question and press Enter...")
+        self.text_input.returnPressed.connect(self.submit_text)
+        input_layout.addWidget(self.text_input)
+        
+        # Submit button
+        self.submit_button = QtWidgets.QPushButton("Submit")
+        self.submit_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(70, 130, 180, 200);
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 8px 15px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(100, 160, 210, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(60, 120, 170, 200);
+            }
+        """)
+        self.submit_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.submit_button.clicked.connect(self.submit_text)
+        input_layout.addWidget(self.submit_button)
+        
+        # Add input layout to content layout
+        content_layout.addLayout(input_layout)
         
         # Add content area to main layout
         self.layout.addWidget(self.content_area)
@@ -336,13 +383,15 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.conversation_history.append({"role": "user", "content": user_query})
         self.conversation_history.append({"role": "assistant", "content": ai_response})
         
-        # Format the entire conversation
+        # Format the entire conversation with proper code handling
         conversation_text = ""
         for entry in self.conversation_history:
             if entry["role"] == "user":
-                conversation_text += f"<span style='color: #4CAF50; font-weight: bold;'>You:</span> {entry['content']}<br>"
+                conversation_text += f"<span style='color: #4CAF50; font-weight: bold;'>You:</span> {entry['content']}<br><br>"
             else:
-                conversation_text += f"<span style='color: #2196F3; font-weight: bold;'>AI:</span> {entry['content']}<br><br>"
+                # Process AI response to format code blocks properly
+                formatted_content = self._format_code_blocks(entry['content'])
+                conversation_text += f"<span style='color: #2196F3; font-weight: bold;'>AI:</span> {formatted_content}<br><br>"
         
         # Set the formatted conversation
         self.conversation_text.setHtml(conversation_text)
@@ -354,6 +403,73 @@ class DraggableOverlay(QtWidgets.QWidget):
         
         # Update processing state
         self.is_processing = False
+    
+    def _format_code_blocks(self, text):
+        """Format code blocks with proper styling"""
+        import re
+        
+        # Define CSS for code blocks once
+        css = """
+        <style>
+            pre.code-block {
+                background-color: #2b2b2b;
+                color: #e6e6e6;
+                font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+                padding: 12px;
+                border-radius: 5px;
+                margin: 10px 0;
+                white-space: pre-wrap;
+                overflow-x: auto;
+                font-size: 13px;
+                line-height: 1.4;
+            }
+            .language-header {
+                color: #808080;
+                font-size: 12px;
+                font-family: sans-serif;
+                margin-bottom: 5px;
+                font-weight: bold;
+            }
+        </style>
+        """
+        
+        # Check if the text actually contains code blocks
+        if "```" not in text:
+            # No code blocks, just return the text with newlines as <br> tags
+            return text.replace('\n', '<br>')
+        
+        # Pattern to match code blocks with optional language specification
+        pattern = r'```(\w+)?\n([\s\S]*?)```'
+        
+        # Start with CSS
+        formatted_text = css
+        
+        # Process text and replace code blocks
+        last_end = 0
+        for match in re.finditer(pattern, text):
+            # Add the text before this code block
+            formatted_text += text[last_end:match.start()].replace('\n', '<br>')
+            
+            # Extract language and code
+            lang = match.group(1) or ''
+            code = match.group(2)
+            
+            # HTML escape the code content
+            code_html = code.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            
+            # Format with proper HTML tags
+            if lang:
+                formatted_text += f'<div class="language-header">{lang}</div>'
+            
+            formatted_text += f'<pre class="code-block">{code_html}</pre>'
+            
+            # Update the last position
+            last_end = match.end()
+        
+        # Add remaining text
+        formatted_text += text[last_end:].replace('\n', '<br>')
+        
+        return formatted_text
 
     def show_processing(self):
         """Show processing indicator in the conversation area"""
@@ -369,9 +485,11 @@ class DraggableOverlay(QtWidgets.QWidget):
             conversation_text = ""
             for entry in self.conversation_history:
                 if entry["role"] == "user":
-                    conversation_text += f"<span style='color: #4CAF50; font-weight: bold;'>You:</span> {entry['content']}<br>"
+                    conversation_text += f"<span style='color: #4CAF50; font-weight: bold;'>You:</span> {entry['content']}<br><br>"
                 else:
-                    conversation_text += f"<span style='color: #2196F3; font-weight: bold;'>AI:</span> {entry['content']}<br><br>"
+                    # Process AI response to format code blocks properly
+                    formatted_content = self._format_code_blocks(entry['content'])
+                    conversation_text += f"<span style='color: #2196F3; font-weight: bold;'>AI:</span> {formatted_content}<br><br>"
             
             conversation_text += "<span style='color: #FFA500; font-style: italic;'>Processing...</span>"
             
@@ -427,6 +545,29 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.close()
         # Quit the application
         QtWidgets.QApplication.quit()
+
+    def submit_text(self):
+        """Handle text submission from the input field"""
+        text = self.text_input.text().strip()
+        if text:
+            # Show processing status
+            self.update_status("Processing...", "#FFA500")
+            self._enqueue(self._show_processing_impl)
+            
+            # Emit the text submitted signal
+            self.text_submitted.emit(text)
+            
+            # Clear the input field
+            self.text_input.clear()
+
+    def set_processing(self, processing_state):
+        """Set the processing state flag"""
+        # Add to queue for thread-safe execution
+        self._enqueue(self._set_processing_impl, processing_state)
+    
+    def _set_processing_impl(self, processing_state):
+        """Actual implementation of setting processing state in UI thread"""
+        self.is_processing = processing_state
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)

@@ -149,6 +149,7 @@ class InputOverlay(QtWidgets.QWidget):
 # DraggableOverlay: the main overlay window.
 class DraggableOverlay(QtWidgets.QWidget):
     text_submitted = QtCore.pyqtSignal(str)
+    update_conversation_signal = QtCore.pyqtSignal(str)  # New signal for thread-safe updates
 
     def __init__(self):
         super().__init__()
@@ -287,6 +288,9 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Keep track of input overlay instance.
         self.input_overlay = None
 
+        # Connect the signal to the slot
+        self.update_conversation_signal.connect(self._update_conversation_text)
+
     # Methods for processing state and status updating.
     def set_processing(self, processing_state: bool):
         self.is_processing = processing_state
@@ -294,6 +298,10 @@ class DraggableOverlay(QtWidgets.QWidget):
     def update_status(self, status: str, color="#4CAF50"):
         self.status_label.setText(status)
         self.status_label.setStyleSheet(f"color: {color}; font-size: 14px;")
+
+    def _update_conversation_text(self, conversation_text):
+        """Thread-safe method to update the conversation text"""
+        self.conversation_text.setHtml(conversation_text)
 
     def update_response(self, response_json: dict):
         # Expecting response_json to include "user_query" and "response".
@@ -311,7 +319,8 @@ class DraggableOverlay(QtWidgets.QWidget):
                 f"<span style='color: {role_color}; font-weight: bold;'>{role_label}:</span> "
                 f"{entry['content']}<br><br>"
             )
-        self.conversation_text.setHtml(conversation_text)
+        # Use signal to update the UI thread-safely
+        self.update_conversation_signal.emit(conversation_text)
 
     # ---------------- Resize Handles ----------------
     def create_resize_handles(self):

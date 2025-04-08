@@ -83,6 +83,9 @@ def process_audio_data():
     # Flag to track if we're currently processing
     is_processing = False
     
+    # Track previous mic state to detect changes
+    prev_mic_enabled = True
+    
     # Create a fingerprint of the audio data for better deduplication
     def get_audio_fingerprint(audio_data):
         if not audio_data or "mic_audio" not in audio_data:
@@ -103,8 +106,25 @@ def process_audio_data():
     
     while True:
         try:
+            # Check if microphone is enabled and update status if needed
+            mic_enabled = True
+            if overlay:
+                mic_enabled = overlay.mic_button.isChecked()
+                if mic_enabled != prev_mic_enabled:
+                    if mic_enabled:
+                        overlay.update_status("Listening...", "#4CAF50")
+                    else:
+                        overlay.update_status("Microphone Off", "#FFA500")  # Orange color for disabled state
+                    prev_mic_enabled = mic_enabled
+
             # Wait for audio data
             audio_data = audio_queue.get()
+            
+            # Skip processing if microphone is disabled
+            if not mic_enabled:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤫 Microphone disabled, skipping audio processing", flush=True)
+                audio_queue.task_done()
+                continue
             
             sys.stdout.flush()
             

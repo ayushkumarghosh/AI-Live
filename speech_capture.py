@@ -110,6 +110,9 @@ def record_speech(audio_queue=None):
     recent_audio_hashes = set()
     last_speech_time = 0  # Track when we last sent speech
     
+    # Reference to overlay for checking mic state (will be set in the loop)
+    overlay = None
+    
     # Improved audio hashing function
     def get_audio_fingerprint(audio_data):
         if len(audio_data) < 100:
@@ -126,9 +129,48 @@ def record_speech(audio_queue=None):
         
         return fingerprint
     
+    # Function to check if mic is enabled
+    def is_mic_enabled():
+        nonlocal overlay
+        # Try to get overlay reference if we don't have it yet
+        if overlay is None:
+            try:
+                import sys
+                # Look through all modules to find the one with overlay
+                for module_name in list(sys.modules.keys()):
+                    module = sys.modules[module_name]
+                    if hasattr(module, 'overlay') and module.overlay is not None:
+                        overlay = module.overlay
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ✓ Found overlay reference in {module_name}", flush=True)
+                        break
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error finding overlay: {e}", flush=True)
+        
+        # Check mic state
+        if overlay is not None and hasattr(overlay, 'mic_button'):
+            return overlay.mic_button.isChecked()
+        return True  # Default to enabled if we can't find the reference
+    
     while True:
         try:
+            # Get current mic state
+            mic_enabled = is_mic_enabled()
+            
+            # Always read the audio to prevent buffer overflow
             audio_chunk = mic_stream.read(CHUNK, exception_on_overflow=False)
+            
+            # Skip all processing if mic is disabled
+            if not mic_enabled:
+                # Reset state if microphone is disabled
+                if recording or frames:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤫 Microphone disabled, clearing buffer", flush=True)
+                    recording = False
+                    frames = []
+                    silence_start = None
+                # Continue to next iteration without processing
+                continue
+            
+            # Only process audio if mic is enabled
             audio_array = np.frombuffer(audio_chunk, dtype=np.int16).copy()
             audio_array = audio_array.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
             
@@ -154,6 +196,15 @@ def record_speech(audio_queue=None):
             if not recording and silence_start is None and frames:
                 silence_start = time.time()
             elif silence_start is not None and time.time() - silence_start > SILENCE_LIMIT and frames:
+                # Perform one final mic check before processing completed audio
+                if not is_mic_enabled():
+                    # Mic was disabled during silence period, discard audio
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤫 Microphone disabled during processing, discarding audio", flush=True)
+                    recording = False
+                    frames = []
+                    silence_start = None
+                    continue
+                    
                 recording = False
                 audio_data = b''.join(frames)
                 

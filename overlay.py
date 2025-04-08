@@ -221,6 +221,33 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.desktop_audio_button.setCursor(QtCore.Qt.ArrowCursor)
         self.desktop_audio_button.toggled.connect(self.toggle_desktop_audio)
         title_layout.addWidget(self.desktop_audio_button)
+        
+        # Add microphone toggle button
+        self.mic_button = QtWidgets.QPushButton("🎤 Microphone")
+        self.mic_button.setCheckable(True)
+        self.mic_button.setChecked(True)  # Enabled by default
+        self.mic_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(70, 180, 130, 200);
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 5px 10px;
+                font-size: 12px;
+            }
+            QPushButton:checked {
+                background-color: rgba(50, 150, 100, 200);
+            }
+            QPushButton:hover {
+                background-color: rgba(100, 210, 160, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(60, 170, 120, 200);
+            }
+        """)
+        self.mic_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.mic_button.toggled.connect(self.toggle_microphone)
+        title_layout.addWidget(self.mic_button)
 
         self.close_button = QtWidgets.QPushButton("✕")
         self.close_button.setFixedSize(24, 24)
@@ -331,6 +358,52 @@ class DraggableOverlay(QtWidgets.QWidget):
         else:
             self.desktop_audio_button.setText("🔇 Desktop Audio")
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Desktop audio disabled", flush=True)
+
+    def toggle_microphone(self, checked):
+        """Handle microphone toggle button state changes"""
+        if checked:
+            self.mic_button.setText("🎤 Microphone")
+            self.mic_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(70, 180, 130, 200);
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    padding: 5px 10px;
+                    font-size: 12px;
+                }
+                QPushButton:checked {
+                    background-color: rgba(50, 150, 100, 200);
+                }
+                QPushButton:hover {
+                    background-color: rgba(100, 210, 160, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(60, 170, 120, 200);
+                }
+            """)
+            self.update_status("Listening...", "#4CAF50")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 Microphone enabled", flush=True)
+        else:
+            self.mic_button.setText("🔴 Mic Off")
+            self.mic_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(200, 60, 60, 200);
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    padding: 5px 10px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(230, 80, 80, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(180, 40, 40, 200);
+                }
+            """)
+            self.update_status("Microphone Off", "#FF5050")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤫 Microphone disabled", flush=True)
 
     def update_status(self, status: str, color="#4CAF50"):
         self.status_label.setText(status)

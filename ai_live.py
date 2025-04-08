@@ -10,6 +10,7 @@ import threading
 import time
 from PyQt5 import QtWidgets, QtCore
 from overlay import DraggableOverlay
+import wave
 
 # Initialize chat history
 chat_history = ChatHistory()
@@ -76,16 +77,13 @@ def process_audio_data():
     
     # Keep track of processed audio hashes to prevent duplicates
     processed_hashes = set()
-    
-    # Track the latest input - we only keep the most recent one
-    latest_pending_input = None
-    
+
     # Flag to track if we're currently processing
     is_processing = False
-    
+
     # Track previous mic state to detect changes
     prev_mic_enabled = True
-    
+
     # Create a fingerprint of the audio data for better deduplication
     def get_audio_fingerprint(audio_data):
         if not audio_data or "mic_audio" not in audio_data:
@@ -103,7 +101,101 @@ def process_audio_data():
             fingerprint = hash(mic_audio)
         
         return fingerprint
-    
+
+    # Function to merge multiple audio data objects into one
+    def merge_audio_data(audio_data_list):
+        """Merge multiple audio data objects into a single one"""
+        if not audio_data_list:
+            return None
+        
+        if len(audio_data_list) == 1:
+            return audio_data_list[0]
+        
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Merging {len(audio_data_list)} audio inputs together", flush=True)
+        
+        # Extract all microphone audio segments
+        all_mic_segments = []
+        # Use the desktop audio from the latest sample
+        desktop_audio = audio_data_list[-1].get("desktop_audio", "")
+        
+        for data in audio_data_list:
+            mic_audio = data.get("mic_audio", "")
+            if mic_audio and len(mic_audio) > 100:
+                try:
+                    # Validate base64 data
+                    audio_bytes = base64.b64decode(mic_audio)
+                    all_mic_segments.append(audio_bytes)
+                except Exception as e:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Error decoding audio: {e}", flush=True)
+        
+        if not all_mic_segments:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] No valid audio segments to merge", flush=True)
+            return audio_data_list[-1]  # Return the last one as fallback
+        
+        # Merge all mic segments into one WAV file
+        try:
+            # Create a new WAV file in memory
+            combined_wav = io.BytesIO()
+            
+            # Read the first WAV file to get format information
+            with wave.open(io.BytesIO(all_mic_segments[0]), 'rb') as first_wav:
+                channels = first_wav.getnchannels()
+                sample_width = first_wav.getsampwidth()
+                framerate = first_wav.getframerate()
+            
+            # Create the output WAV file with the same format
+            with wave.open(combined_wav, 'wb') as wf:
+                wf.setnchannels(channels)
+                wf.setsampwidth(sample_width)
+                wf.setframerate(framerate)
+                
+                # Write all segments to the WAV file
+                for segment_data in all_mic_segments:
+                    # Extract audio frames from the WAV file
+                    with wave.open(io.BytesIO(segment_data), 'rb') as segment_wav:
+                        wf.writeframes(segment_wav.readframes(segment_wav.getnframes()))
+            
+            # Get the merged WAV as base64
+            combined_wav.seek(0)
+            merged_mic_audio = base64.b64encode(combined_wav.read()).decode('utf-8')
+            
+            # Create the merged audio data object
+            merged_data = {
+                "mic_audio": merged_mic_audio,
+                "desktop_audio": desktop_audio,
+                "timestamp": time.time()
+            }
+            
+            return merged_data
+        
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error merging audio segments: {e}", flush=True)
+            return audio_data_list[-1]  # Return the last one as fallback
+
+    # Function to drain the queue and get all current audio data
+    def drain_audio_queue():
+        """Get all currently available audio data from the queue"""
+        audio_list = []
+        
+        # Get the first item (we already got it in the main loop)
+        first_audio = audio_queue.get()
+        audio_list.append(first_audio)
+        audio_queue.task_done()
+        
+        # Drain remaining items from the queue
+        try:
+            while True:
+                # Use get_nowait to avoid blocking
+                audio_data = audio_queue.get_nowait()
+                audio_list.append(audio_data)
+                audio_queue.task_done()
+        except queue.Empty:
+            # Queue is empty, we've gotten all items
+            pass
+            
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Drained {len(audio_list)} items from audio queue", flush=True)
+        return audio_list
+
     while True:
         try:
             # Check if microphone is enabled and update status if needed
@@ -118,6 +210,7 @@ def process_audio_data():
                     prev_mic_enabled = mic_enabled
 
             # Wait for audio data
+            # We'll wait here until at least one audio item is available
             audio_data = audio_queue.get()
             
             # Skip processing if microphone is disabled
@@ -129,81 +222,83 @@ def process_audio_data():
             sys.stdout.flush()
             
             try:
-                # Get audio fingerprint for deduplication
-                audio_fingerprint = get_audio_fingerprint(audio_data)
-                
-                # Skip if we've already processed this audio or if it's invalid
-                if audio_fingerprint is None:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Invalid audio data received, skipping", flush=True)
-                    audio_queue.task_done()
-                    continue
-                    
-                if audio_fingerprint in processed_hashes:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Duplicate audio fingerprint detected, skipping", flush=True)
-                    audio_queue.task_done()
-                    continue
-                
-                # Check if we're currently processing another input
+                # Check if we're currently processing
                 if is_processing:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏳ Already processing another request, storing as latest input", flush=True)
-                    
-                    # Store only the most recent pending input
-                    latest_pending_input = {
-                        "timestamp": datetime.now(),
-                        "fingerprint": audio_fingerprint,
-                        "audio_data": audio_data
-                    }
-                    
-                    audio_queue.task_done()
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing, putting back in queue and skipping", flush=True)
+                    # Put the item back in the queue and continue
+                    audio_queue.put(audio_data)
                     continue
                 
-                # Mark as processing to prevent concurrent processing
+                # Set processing flag
                 is_processing = True
+                
+                # Drain all current items from the queue including the one we just got
+                # Put the first audio back in the queue first
+                audio_queue.put(audio_data)
+                all_audio_data = drain_audio_queue()
+                
+                # Filter out duplicates and already processed audio
+                filtered_audio = []
+                for data in all_audio_data:
+                    # Get audio fingerprint
+                    fingerprint = get_audio_fingerprint(data)
+                    
+                    # Skip invalid audio
+                    if fingerprint is None:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Invalid audio data skipped", flush=True)
+                        continue
+                        
+                    # Skip already processed audio
+                    if fingerprint in processed_hashes:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Duplicate audio fingerprint skipped", flush=True)
+                        continue
+                    
+                    # Add to filtered list and mark as processed
+                    filtered_audio.append(data)
+                    processed_hashes.add(fingerprint)
+                
+                # Limit the size of the processed_hashes set to prevent memory growth
+                if len(processed_hashes) > 100:
+                    processed_hashes = set(list(processed_hashes)[-50:])
+                
+                # Skip if no valid audio to process
+                if not filtered_audio:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ No valid audio to process after filtering", flush=True)
+                    is_processing = False
+                    continue
                 
                 # Capture screenshot
                 screenshot_base64 = capture_screenshot()
                 
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎙️ Audio received, processing...", flush=True)
-                sys.stdout.flush()
+                # Check if we have multiple audio segments to merge
+                if len(filtered_audio) > 1:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎙️ Processing {len(filtered_audio)} audio segments together", flush=True)
+                    # Reverse the order of audio segments to ensure chronological order (earliest first)
+                    filtered_audio.reverse()
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Audio segments reversed for chronological order", flush=True)
+                    # Merge audio segments
+                    merged_audio = merge_audio_data(filtered_audio)
+                    processing_audio = merged_audio
+                else:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎙️ Processing single audio segment", flush=True)
+                    processing_audio = filtered_audio[0]
+                
+                # Update UI
                 if overlay:
                     overlay.update_status("Processing...", "#FFA500")
                     overlay.set_processing(True)
                 
-                # Add to processed hashes before processing to prevent duplicates
-                processed_hashes.add(audio_fingerprint)
-                
-                # Limit the size of the processed_hashes set to prevent memory growth
-                if len(processed_hashes) > 100:
-                    # Keep only the 50 most recent hashes
-                    processed_hashes = set(list(processed_hashes)[-50:])
-                
                 # Process audio input
-                analyze_with_streaming(chat_history, audio_data, screenshot_base64)
+                sys.stdout.flush()
+                analyze_with_streaming(chat_history, processing_audio, screenshot_base64)
                 
-                # Set processing done flag
+                # Reset processing state
                 if overlay:
+                    overlay.update_status("Listening...", "#4CAF50")
                     overlay.set_processing(False)
-                
-                # Only after successful completion, check for pending input
-                pending_input = latest_pending_input
-                latest_pending_input = None
                 
                 # Mark as no longer processing
                 is_processing = False
-                
-                # Process pending input if there is one
-                if pending_input:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Processing latest pending input", flush=True)
-                    
-                    # Only process if we haven't already processed this hash
-                    if pending_input["fingerprint"] not in processed_hashes:
-                        # Add to processed hashes
-                        processed_hashes.add(pending_input["fingerprint"])
-                        
-                        # Put back in the queue for fresh processing
-                        audio_queue.put(pending_input["audio_data"])
-                    else:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Pending input was already processed, skipping", flush=True)
             
             except Exception as e:
                 print(f"Error processing audio: {e}", flush=True)
@@ -212,8 +307,6 @@ def process_audio_data():
                     overlay.set_processing(False)
                 is_processing = False
             
-            # Mark task as done
-            audio_queue.task_done()
         except Exception as e:
             print(f"Error in process_task: {e}", flush=True)
             is_processing = False

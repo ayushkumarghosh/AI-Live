@@ -320,7 +320,7 @@ def analyze_with_text_input(chat_history: ChatHistory, text_input: str,
     
     # Add instruction for the model
     current_parts.append({
-        "text": "Generate a helpful response to the user's text query."
+        "text": "Generate a helpful response to the user's text query. If the user asks you to do something, do it immediately. If the user asks a question, answer it to the best of your ability."
     })
     
     # Implement retry logic

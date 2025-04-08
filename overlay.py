@@ -301,7 +301,18 @@ class DraggableOverlay(QtWidgets.QWidget):
 
     def _update_conversation_text(self, conversation_text):
         """Thread-safe method to update the conversation text"""
+        # Update the text
         self.conversation_text.setHtml(conversation_text)
+        
+        # Scroll to the start of the last AI response
+        # Find the last occurrence of "AI:" in the text
+        last_ai_index = conversation_text.rfind("AI:")
+        if last_ai_index != -1:
+            # Create a cursor and move it to the position after "AI:"
+            cursor = self.conversation_text.textCursor()
+            cursor.setPosition(last_ai_index)
+            self.conversation_text.setTextCursor(cursor)
+            self.conversation_text.ensureCursorVisible()
 
     def update_response(self, response_json: dict):
         # Expecting response_json to include "user_query" and "response".
@@ -315,9 +326,56 @@ class DraggableOverlay(QtWidgets.QWidget):
         for entry in self.conversation_history:
             role_label = "You" if entry["role"] == "user" else "AI"
             role_color = "#4CAF50" if entry["role"] == "user" else "#2196F3"
+            
+            # Format the content with proper HTML styling
+            content = entry["content"]
+            
+            # Check if content contains code blocks
+            if "```" in content:
+                # Split content into parts based on code blocks
+                parts = []
+                is_code = False
+                for part in content.split("```"):
+                    if is_code:
+                        # This part is code
+                        # Extract language identifier if present
+                        code_lines = part.split("\n", 1)
+                        if len(code_lines) > 1:
+                            language = code_lines[0].strip()
+                            code = code_lines[1]
+                        else:
+                            language = ""
+                            code = part
+                        
+                        # Create formatted code block with correct styling
+                        formatted_code = (
+                            f'<pre style="background-color: rgba(50, 50, 50, 0.7); '
+                            f'color: #E0E0E0; padding: 10px; border-radius: 5px; '
+                            f'margin: 10px 0; font-family: monospace; '
+                            f'white-space: pre; overflow-x: auto;">'
+                            f'{code}'
+                            f'</pre>'
+                        )
+                        parts.append(formatted_code)
+                    else:
+                        # This part is regular text
+                        parts.append(part.replace("\n", "<br>"))
+                    is_code = not is_code
+                
+                # Join all parts
+                content = "".join(parts)
+            else:
+                # Replace newlines with <br> tags for regular text
+                content = content.replace("\n", "<br>")
+            
+            # Add proper spacing and styling
+            content = f"<div style='margin-bottom: 10px; line-height: 1.5;'>{content}</div>"
+            
             conversation_text += (
-                f"<span style='color: {role_color}; font-weight: bold;'>{role_label}:</span> "
-                f"{entry['content']}<br><br>"
+                f"<div style='margin-bottom: 15px;'>"
+                f"<span style='color: {role_color}; font-weight: bold; font-size: 14px;'>{role_label}:</span> "
+                f"{content}"
+                f"</div>"
             )
         # Use signal to update the UI thread-safely
         self.update_conversation_signal.emit(conversation_text)

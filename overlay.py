@@ -414,15 +414,10 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Update the text
         self.conversation_text.setHtml(conversation_text)
         
-        # Scroll to the start of the last AI response
-        # Find the last occurrence of "AI:" in the text
-        last_ai_index = conversation_text.rfind("AI:")
-        if last_ai_index != -1:
-            # Create a cursor and move it to the position after "AI:"
-            cursor = self.conversation_text.textCursor()
-            cursor.setPosition(last_ai_index)
-            self.conversation_text.setTextCursor(cursor)
-            self.conversation_text.ensureCursorVisible()
+        # Always scroll to the bottom
+        self.conversation_text.moveCursor(QtGui.QTextCursor.End)
+        self.conversation_text.ensureCursorVisible()
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Scrolling to bottom of conversation", flush=True)
 
     def update_response(self, response_json: dict):
         # Expecting response_json to include "user_query" and "response".

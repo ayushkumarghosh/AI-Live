@@ -422,18 +422,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.input_overlay.show()
 
     def handle_text_submitted(self, text):
-        # # Update conversation history.
-        # self.conversation_history.append({"role": "user", "content": text})
-        # self.conversation_history.append({"role": "assistant", "content": "Response goes here..."})
-        conversation_text = ""
-        for entry in self.conversation_history:
-            role_label = "You" if entry["role"] == "user" else "AI"
-            role_color = "#4CAF50" if entry["role"] == "user" else "#2196F3"
-            conversation_text += (
-                f"<span style='color: {role_color}; font-weight: bold;'>{role_label}:</span> "
-                f"{entry['content']}<br><br>"
-            )
-        self.conversation_text.setHtml(conversation_text)
         # Emit signal if needed.
         self.text_submitted.emit(text)
 

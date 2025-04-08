@@ -1,5 +1,6 @@
 import sys, ctypes, json
 from PyQt5 import QtWidgets, QtCore, QtGui
+from datetime import datetime
 
 # Windows extended style constant for no activation.
 WS_EX_NOACTIVATE = 0x08000000
@@ -194,6 +195,33 @@ class DraggableOverlay(QtWidgets.QWidget):
         title_layout.addWidget(self.status_label)
         title_layout.addStretch(1)
 
+        # Add desktop audio toggle button
+        self.desktop_audio_button = QtWidgets.QPushButton("🔊 Desktop Audio")
+        self.desktop_audio_button.setCheckable(True)
+        self.desktop_audio_button.setChecked(True)  # Enabled by default
+        self.desktop_audio_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(70, 130, 180, 200);
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 5px 10px;
+                font-size: 12px;
+            }
+            QPushButton:checked {
+                background-color: rgba(50, 100, 150, 200);
+            }
+            QPushButton:hover {
+                background-color: rgba(100, 160, 210, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(60, 120, 170, 200);
+            }
+        """)
+        self.desktop_audio_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.desktop_audio_button.toggled.connect(self.toggle_desktop_audio)
+        title_layout.addWidget(self.desktop_audio_button)
+
         self.close_button = QtWidgets.QPushButton("✕")
         self.close_button.setFixedSize(24, 24)
         self.close_button.setStyleSheet("""
@@ -294,6 +322,15 @@ class DraggableOverlay(QtWidgets.QWidget):
     # Methods for processing state and status updating.
     def set_processing(self, processing_state: bool):
         self.is_processing = processing_state
+
+    def toggle_desktop_audio(self, checked):
+        """Handle desktop audio toggle button state changes"""
+        if checked:
+            self.desktop_audio_button.setText("🔊 Desktop Audio")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio enabled", flush=True)
+        else:
+            self.desktop_audio_button.setText("🔇 Desktop Audio")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Desktop audio disabled", flush=True)
 
     def update_status(self, status: str, color="#4CAF50"):
         self.status_label.setText(status)

@@ -226,11 +226,16 @@ def analyze_with_streaming(chat_history, audio_data, screenshot_base64):
             
             # Extract microphone and desktop audio
             mic_audio = audio_data.get("mic_audio", "")
-            desktop_audio = audio_data.get("desktop_audio", "")
             
-            # Log if we have desktop audio
+            # Check if desktop audio should be included
+            include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
+            desktop_audio = audio_data.get("desktop_audio", "") if include_desktop_audio else ""
+            
+            # Log desktop audio status
             if desktop_audio:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured and included", flush=True)
+            elif not include_desktop_audio:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Desktop audio available but not included (disabled)", flush=True)
             
             # Debug audio data
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Debug - session {session_id} - mic_audio type: {type(mic_audio).__name__}, length: {len(str(mic_audio))}", flush=True)
@@ -334,9 +339,16 @@ def process_text_input(text_input):
             
             # Get desktop audio from speech_capture
             from speech_capture import get_desktop_speech_segments
-            desktop_audio = get_desktop_speech_segments()
+            
+            # Check if desktop audio should be included
+            include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
+            desktop_audio = get_desktop_speech_segments() if include_desktop_audio else ""
+            
+            # Log desktop audio status
             if desktop_audio:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured and included", flush=True)
+            elif not include_desktop_audio:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Desktop audio available but not included (disabled)", flush=True)
             
             # Process the text input
             response_json = analyze_with_text_input(

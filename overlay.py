@@ -453,6 +453,26 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.conversation_history.append({"role": "assistant", "content": ai_response})
         # Rebuild conversation text.
         conversation_text = ""
+        
+        def escape_html(text):
+            """Helper function to escape HTML special characters and handle escape sequences"""
+            # First, escape HTML special characters
+            text = (text.replace("&", "&amp;")
+                      .replace("<", "&lt;")
+                      .replace(">", "&gt;")
+                      .replace('"', "&quot;")
+                      .replace("'", "&#39;"))
+            
+            # Handle common escape sequences
+            text = (text.replace("\\n", "<br>")
+                      .replace("\\t", "&nbsp;&nbsp;&nbsp;&nbsp;")
+                      .replace("\\r", "")
+                      .replace("\\\\", "&#92;")
+                      .replace("\\'", "&#39;")
+                      .replace('\\"', "&quot;"))
+            
+            return text
+        
         for entry in self.conversation_history:
             role_label = "You" if entry["role"] == "user" else "AI"
             role_color = "#4CAF50" if entry["role"] == "user" else "#2196F3"
@@ -477,6 +497,9 @@ class DraggableOverlay(QtWidgets.QWidget):
                             language = ""
                             code = part
                         
+                        # Escape HTML in code but preserve whitespace
+                        code = escape_html(code)
+                        
                         # Create formatted code block with correct styling
                         formatted_code = (
                             f'<pre style="background-color: rgba(50, 50, 50, 0.7); '
@@ -489,14 +512,16 @@ class DraggableOverlay(QtWidgets.QWidget):
                         parts.append(formatted_code)
                     else:
                         # This part is regular text
-                        parts.append(part.replace("\n", "<br>"))
+                        # Escape HTML and handle escape sequences
+                        escaped_text = escape_html(part)
+                        parts.append(escaped_text)
                     is_code = not is_code
                 
                 # Join all parts
                 content = "".join(parts)
             else:
-                # Replace newlines with <br> tags for regular text
-                content = content.replace("\n", "<br>")
+                # For non-code content, escape HTML and handle escape sequences
+                content = escape_html(content)
             
             # Add proper spacing and styling
             content = f"<div style='margin-bottom: 10px; line-height: 1.5;'>{content}</div>"

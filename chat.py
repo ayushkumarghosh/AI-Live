@@ -17,6 +17,24 @@ from speech_capture import get_desktop_speech_segments, desktop_speech_segments,
 gemini_api_key = os.getenv("GEMINI_API")
 genai.configure(api_key=gemini_api_key)
 
+model = genai.GenerativeModel('gemini-2.0-flash')
+
+generation_config={
+    "temperature": 0.1,
+    "top_p": 0.1,
+    "top_k": 50,
+    "max_output_tokens": 6000,
+    "response_mime_type": "application/json",
+    "response_schema": {
+        "type": "object",
+        "properties": {
+            "user_query": {"type": "string", "description": "The user's current query (the text input)"},
+            "response": {"type": "string", "description": "Your to the user's query. If the user asks you to do something, do it immediately. If the user asks a question, answer it to the best of your ability. Use the desktop audio and screen image to help you answer the user's query but only if it is relevant to the user's query."}
+        },
+        "required": ["user_query", "response"]
+    },
+}
+
 def timestamp():
     """Return current timestamp for logging"""
     return f"[{datetime.now().strftime('%H:%M:%S')}]"
@@ -53,9 +71,6 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
                                 image_base64: str, image_format: str, desktop_audio_base64: str = ""):
     """Analyze audio and image with chat history context using Google Gemini"""
     context = chat_history.get_context()
-    
-    # Initialize Gemini model
-    model = genai.GenerativeModel('gemini-2.0-flash')
     
     # Create a chat session
     chat = model.start_chat(history=[])
@@ -178,12 +193,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
         }
     }
     current_parts.append(img_part)
-    
-    # Add instruction for the model
-    current_parts.append({
-        "text": "First extract the user's query and then generate a helpful response to the user's query."
-    })
-    
+        
     # Implement retry logic
     max_retries = 3
     retry_delay = 1  # seconds
@@ -193,19 +203,7 @@ def analyze_with_audio_and_image(chat_history: ChatHistory, audio_base64: str, a
             # Using Gemini's generate_content with structured output schema
             response = model.generate_content(
                 current_parts,
-                generation_config={
-                    "temperature": 0,
-                    "max_output_tokens": 6000,
-                    "response_mime_type": "application/json",
-                    "response_schema": {
-                        "type": "object",
-                        "properties": {
-                            "user_query": {"type": "string", "description": "The user's query(transliterated to english if needed)"},
-                            "response": {"type": "string", "description": "The AI's response(transliterated to english if needed) to the user's query"}
-                        },
-                        "required": ["user_query", "response"]
-                    },
-                }
+                generation_config=generation_config
             )
             
             # Extract and parse the response text
@@ -232,9 +230,6 @@ def analyze_with_text_input(chat_history: ChatHistory, text_input: str,
                           image_base64: str, image_format: str, desktop_audio_base64: str = ""):
     """Analyze text input and image with chat history context using Google Gemini"""
     context = chat_history.get_context()
-    
-    # Initialize Gemini model
-    model = genai.GenerativeModel('gemini-2.0-flash')
     
     # Create a chat session
     chat = model.start_chat(history=[])
@@ -318,11 +313,6 @@ def analyze_with_text_input(chat_history: ChatHistory, text_input: str,
     }
     current_parts.append(img_part)
     
-    # Add instruction for the model
-    current_parts.append({
-        "text": "Generate a helpful response to the user's text query. If the user asks you to do something, do it immediately. If the user asks a question, answer it to the best of your ability."
-    })
-    
     # Implement retry logic
     max_retries = 3
     retry_delay = 1  # seconds
@@ -332,19 +322,7 @@ def analyze_with_text_input(chat_history: ChatHistory, text_input: str,
             # Using Gemini's generate_content with structured output schema
             response = model.generate_content(
                 current_parts,
-                generation_config={
-                    "temperature": 0,
-                    "max_output_tokens": 6000,
-                    "response_mime_type": "application/json",
-                    "response_schema": {
-                        "type": "object",
-                        "properties": {
-                            "user_query": {"type": "string", "description": "The user's query (the text input)"},
-                            "response": {"type": "string", "description": "The AI's response to the user's query"}
-                        },
-                        "required": ["user_query", "response"]
-                    },
-                }
+                generation_config=generation_config
             )
             
             # Extract and parse the response text

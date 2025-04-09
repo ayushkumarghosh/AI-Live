@@ -310,6 +310,8 @@ class DraggableOverlay(QtWidgets.QWidget):
 
         # Input area: only the "Enter Text" button.
         input_layout = QtWidgets.QHBoxLayout()
+        
+        # Add Enter Text button
         self.enter_text_button = QtWidgets.QPushButton("Enter Text")
         self.enter_text_button.setStyleSheet("""
             QPushButton {
@@ -330,6 +332,29 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.enter_text_button.setCursor(QtCore.Qt.ArrowCursor)
         self.enter_text_button.clicked.connect(self.open_input_overlay)
         input_layout.addWidget(self.enter_text_button)
+        
+        # Add screenshot button
+        self.screenshot_button = QtWidgets.QPushButton("📸 Screenshot")
+        self.screenshot_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(180, 130, 70, 200);
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(210, 160, 100, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(170, 120, 60, 200);
+            }
+        """)
+        self.screenshot_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.screenshot_button.clicked.connect(self.take_screenshot)
+        input_layout.addWidget(self.screenshot_button)
+        
         content_layout.addLayout(input_layout)
 
         self.layout.addWidget(self.content_area)
@@ -596,6 +621,45 @@ class DraggableOverlay(QtWidgets.QWidget):
     def handle_text_submitted(self, text):
         # Emit signal if needed.
         self.text_submitted.emit(text)
+
+    def take_screenshot(self):
+        """Take a screenshot and add it to the queue"""
+        try:
+            # Import here to avoid circular imports
+            from ai_live import capture_screenshot, screenshot_queue
+            screenshot_base64 = capture_screenshot()
+            screenshot_queue.put(screenshot_base64)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Screenshot added to queue", flush=True)
+            # Show a brief visual feedback
+            self.screenshot_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(70, 180, 70, 200);
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    padding: 5px 10px;
+                    font-size: 12px;
+                }
+            """)
+            # Reset the button style after 500ms
+            QtCore.QTimer.singleShot(500, lambda: self.screenshot_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(180, 130, 70, 200);
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    padding: 5px 10px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(210, 160, 100, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(170, 120, 60, 200);
+                }
+            """))
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error taking screenshot: {e}", flush=True)
 
 # ----------------------------------------------------------------
 # Main entry point.

@@ -18,6 +18,9 @@ chat_history = ChatHistory()
 # Audio queue for communication between threads
 audio_queue = queue.Queue()
 
+# Screenshot queue for storing screenshots
+screenshot_queue = queue.Queue()
+
 # Global reference to the overlay
 overlay = None
 
@@ -344,6 +347,14 @@ def analyze_with_streaming(chat_history, audio_data, screenshot_base64):
             include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
             desktop_audio = audio_data.get("desktop_audio", "") if include_desktop_audio else ""
             
+            # Check if there are any queued screenshots
+            try:
+                while not screenshot_queue.empty():
+                    screenshot_base64 = screenshot_queue.get_nowait()
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
+            except queue.Empty:
+                pass  # No queued screenshots, use the current one
+            
             # Log desktop audio status
             if desktop_audio:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured and included", flush=True)
@@ -445,8 +456,13 @@ def process_text_input(text_input):
             # Update the last request time
             last_request_time = time.time()
             
-            # Capture screenshot
-            screenshot_base64 = capture_screenshot()
+            # Check if there are any queued screenshots
+            try:
+                screenshot_base64 = screenshot_queue.get_nowait()
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
+            except queue.Empty:
+                # No queued screenshots, capture a new one
+                screenshot_base64 = capture_screenshot()
             
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Text input received: {text_input}", flush=True)
             

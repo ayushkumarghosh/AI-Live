@@ -17,19 +17,19 @@ from speech_capture import get_desktop_speech_segments, desktop_speech_segments,
 gemini_api_key = os.getenv("GEMINI_API")
 genai.configure(api_key=gemini_api_key)
 
-model = genai.GenerativeModel('gemini-2.5-pro-exp-03-25')
+model = genai.GenerativeModel('gemini-2.0-flash')
 
 generation_config={
     "temperature": 0.1,
     "top_p": 0.1,
     "top_k": 50,
-    "max_output_tokens": 6000,
+    "max_output_tokens": 8192,
     "response_mime_type": "application/json",
     "response_schema": {
         "type": "object",
         "properties": {
             "user_query": {"type": "string", "description": "The user's current query (the text input)"},
-            "response": {"type": "string", "description": "Your to the user's query. If the user asks you to do something, do it immediately. If the user asks a question, answer it to the best of your ability. Use the desktop audio and screen image to help you answer the user's query but only if it is relevant to the user's query."}
+            "response": {"type": "string", "description": "Your response to the user's query. If the user asks you to do something, do it immediately. If the user asks a question, answer it to the best of your ability. Use the desktop audio and screen image to help you answer the user's query but only if it is relevant to the user's query."}
         },
         "required": ["user_query", "response"]
     },

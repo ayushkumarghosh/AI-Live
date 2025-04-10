@@ -15,9 +15,6 @@ import wave
 # Audio queue for communication between threads
 audio_queue = queue.Queue()
 
-# Screenshot queue for storing screenshots
-screenshot_queue = queue.Queue()
-
 # Global reference to the overlay
 overlay = None
 
@@ -346,6 +343,8 @@ def analyze_with_streaming(audio_data, screenshot_base64):
             
             # Collect all queued screenshots
             screenshots = []
+            from overlay import screenshot_queue
+            
             while not screenshot_queue.empty():
                 try:
                     screenshot = screenshot_queue.get_nowait()
@@ -426,6 +425,8 @@ def process_text_input(text_input):
             
             # Update the last request time
             last_request_time = time.time()
+            
+            from overlay import screenshot_queue
             
             # Collect all queued screenshots
             screenshots = []

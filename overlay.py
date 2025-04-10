@@ -1,9 +1,12 @@
 import sys, ctypes, json
 from PyQt5 import QtWidgets, QtCore, QtGui
 from datetime import datetime
+import queue
 
 # Windows extended style constant for no activation.
 WS_EX_NOACTIVATE = 0x08000000
+
+screenshot_queue = queue.Queue()
 
 # ----------------------------------------------------------------
 # Utility function: sets the window to be excluded from screen capture.
@@ -652,7 +655,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         """Take a screenshot and add it to the queue"""
         try:
             # Import here to avoid circular imports
-            from ai_live import capture_screenshot, screenshot_queue
+            from ai_live import capture_screenshot
             screenshot_base64 = capture_screenshot()
             screenshot_queue.put(screenshot_base64)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Screenshot added to queue", flush=True)

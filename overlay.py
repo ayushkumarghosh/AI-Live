@@ -397,7 +397,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.input_overlay = None
         
         # Custom analyze prompt
-        self.analyze_prompt = "Analyze the desktop audio (if any) along with the screenshots and provide a helpful response. If the screenshot or desktop audio contains a coding problem, provide a complete working solution with full implementation - first the naive approach with code, then an optimized solution with code. Ensure any code is ready to submit with no missing parts. For non-coding content, provide a detailed analysis relevant to what's shown in the screenshot. Always be thorough and complete in your response."
+        self.analyze_prompt = "Analyze the desktop audio (if any) along with the screenshots and provide a helpful response. If the screenshot or desktop audio contains a coding problem, provide a complete working solution as follows: For a new/first-time question, first briefly explain both the naive approach and the optimized approach (without code), THEN implement both approaches with complete code. For follow-up questions or improvements to an existing solution, briefly explain the improvement first, then only focus on implementing the improved optimized solution - don't repeat the naive approach again. Ensure any code is ready to submit with no missing parts. For non-coding content, provide a detailed analysis relevant to what's shown in the screenshot. Always be thorough and complete in your response."
 
         # Connect the signal to the slot
         self.update_conversation_signal.connect(self._update_conversation_text)
@@ -503,7 +503,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                       .replace('\\"', "&quot;"))
             
             return text
-            
+        
         def process_inline_markdown(text):
             """Process inline markdown elements like bold, italic, links, etc."""
             # First process markdown patterns, then escape HTML

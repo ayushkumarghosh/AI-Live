@@ -1,7 +1,7 @@
 import queue
 from datetime import datetime
 from speech_capture import record_speech
-from chat import analyze_with_audio_and_image, analyze_with_text_input, ChatHistory
+from chat import analyze_with_audio_and_image, analyze_with_text_input
 import base64
 import io
 from PIL import ImageGrab
@@ -11,9 +11,6 @@ import time
 from PyQt5 import QtWidgets, QtCore
 from overlay import DraggableOverlay
 import wave
-
-# Initialize chat history
-chat_history = ChatHistory()
 
 # Audio queue for communication between threads
 audio_queue = queue.Queue()
@@ -293,7 +290,7 @@ def process_audio_data():
                 
                 # Process audio input
                 sys.stdout.flush()
-                analyze_with_streaming(chat_history, processing_audio, screenshot_base64)
+                analyze_with_streaming(processing_audio, screenshot_base64)
                 
                 # Reset processing state
                 if overlay:
@@ -315,7 +312,7 @@ def process_audio_data():
             is_processing = False
             time.sleep(0.1)  # Prevent tight loop on error
 
-def analyze_with_streaming(chat_history, audio_data, screenshot_base64):
+def analyze_with_streaming(audio_data, screenshot_base64):
     """Analyze audio and image and return complete response"""
     global overlay
     
@@ -355,37 +352,8 @@ def analyze_with_streaming(chat_history, audio_data, screenshot_base64):
             except queue.Empty:
                 pass  # No queued screenshots, use the current one
             
-            # Log desktop audio status
-            if desktop_audio:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured and included", flush=True)
-            elif not include_desktop_audio:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Desktop audio available but not included (disabled)", flush=True)
-            
-            # Debug audio data
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Debug - session {session_id} - mic_audio type: {type(mic_audio).__name__}, length: {len(str(mic_audio))}", flush=True)
-            if len(str(mic_audio)) < 100:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Warning: Microphone audio data may be too short or empty", flush=True)
-            
-            # Make sure audio data is valid base64 for API
-            try:
-                # Validate that the audio data is properly base64 encoded
-                base64.b64decode(mic_audio)
-            except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Warning: Invalid base64 audio data: {e}", flush=True)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Attempting to fix or skip audio data", flush=True)
-                # Provide a fallback text for cases where the audio data is invalid
-                result = {"user_query": "Audio data error", "response": "I couldn't process your audio. Please try again or use text input."}
-                
-                # Update overlay with the error response
-                if overlay:
-                    overlay.update_response(result)
-                    overlay.update_status("Listening...", "#4CAF50")
-                
-                return result
-            
             # Start the analysis request
             response_json = analyze_with_audio_and_image(
-                chat_history, 
                 mic_audio, 
                 "wav", 
                 screenshot_base64, 
@@ -405,9 +373,6 @@ def analyze_with_streaming(chat_history, audio_data, screenshot_base64):
             print(f"User's query: {user_query}\n")
             print(f"AI response: {ai_response}", flush=True)
             print("\n" + "-" * 50, flush=True)
-            
-            # Add to chat history
-            chat_history.add_entry(mic_audio, ai_response, screenshot_base64, desktop_audio)
             
             sys.stdout.flush()
             
@@ -481,7 +446,6 @@ def process_text_input(text_input):
             
             # Process the text input
             response_json = analyze_with_text_input(
-                chat_history,
                 text_input,
                 screenshot_base64,
                 "jpeg",
@@ -500,9 +464,6 @@ def process_text_input(text_input):
             print(f"User's query: {user_query}\n")
             print(f"AI response: {ai_response}", flush=True)
             print("\n" + "-" * 50, flush=True)
-            
-            # Add to chat history - using empty string for audio since this was text input
-            chat_history.add_entry("", ai_response, screenshot_base64, desktop_audio)
             
             # Update overlay with structured response
             if overlay:

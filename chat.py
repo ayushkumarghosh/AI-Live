@@ -19,7 +19,7 @@ model = genai.GenerativeModel('gemini-2.0-flash')
 generation_config={
     "temperature": 0.1,
     "top_p": 0.1,
-    "top_k": 50,
+    "top_k": 100,
     "max_output_tokens": 8192,
     "response_mime_type": "application/json",
     "response_schema": {

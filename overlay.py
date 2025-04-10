@@ -359,6 +359,29 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.screenshot_button.clicked.connect(self.take_screenshot)
         input_layout.addWidget(self.screenshot_button)
         
+        # Add Analyze button
+        self.analyze_button = QtWidgets.QPushButton("🔍 Analyze")
+        self.analyze_button.setFixedHeight(30)  # Set a fixed height
+        self.analyze_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(70, 130, 180, 200);
+                color: white; 
+                border: none;
+                border-radius: 5px;
+                padding: 0 8px;  /* Adjust padding */
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(90, 150, 200, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(50, 110, 160, 200);
+            }
+        """)
+        self.analyze_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.analyze_button.clicked.connect(self.execute_analyze)
+        input_layout.addWidget(self.analyze_button)
+        
         content_layout.addLayout(input_layout)
 
         self.layout.addWidget(self.content_area)
@@ -371,6 +394,9 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.conversation_history = []
         # Keep track of input overlay instance.
         self.input_overlay = None
+        
+        # Custom analyze prompt
+        self.analyze_prompt = "Analyze the desktop audio (if any) along with the screenshots and provide a helpful response. If the screenshot or desktop audio contains a coding problem, provide a complete working solution with full implementation - first the naive approach with code, then an optimized solution with code. Ensure any code is ready to submit with no missing parts. For non-coding content, provide a detailed analysis relevant to what's shown in the screenshot. Always be thorough and complete in your response."
 
         # Connect the signal to the slot
         self.update_conversation_signal.connect(self._update_conversation_text)
@@ -689,6 +715,47 @@ class DraggableOverlay(QtWidgets.QWidget):
             """))
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error taking screenshot: {e}", flush=True)
+
+    def execute_analyze(self):
+        """Execute analysis with a custom prompt"""
+        try:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Executing analysis with custom prompt", flush=True)
+            
+            # Emit the text_submitted signal with the custom prompt
+            self.text_submitted.emit(self.analyze_prompt)
+            
+            # Visual feedback
+            self.analyze_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(50, 110, 160, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 14px;
+                }
+            """)
+            
+            # Reset the button style after 500ms
+            QtCore.QTimer.singleShot(500, lambda: self.analyze_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(70, 130, 180, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(90, 150, 200, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(50, 110, 160, 200);
+                }
+            """))
+            
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing analysis: {e}", flush=True)
 
 # ----------------------------------------------------------------
 # Main entry point.

@@ -10,9 +10,6 @@ import json
 import io
 import wave
 
-# Import from speech_capture
-from speech_capture import get_desktop_speech_segments, desktop_speech_segments, CHANNELS, RATE
-
 # Google Gemini API setup
 gemini_api_key = os.getenv("GEMINI_API")
 genai.configure(api_key=gemini_api_key)
@@ -43,7 +40,7 @@ def timestamp():
 chat = model.start_chat(history=[])
 
 def analyze_with_audio_and_image(audio_base64: str, audio_format: str, 
-                                image_base64: str, image_format: str, desktop_audio_base64: str = ""):
+                                images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
     """Analyze audio and image using Google Gemini's chat history"""
     global chat
     
@@ -90,17 +87,18 @@ def analyze_with_audio_and_image(audio_base64: str, audio_format: str,
         except Exception as e:
             print(f"Warning: Invalid current desktop audio data: {e}")
     
-    # Add explanatory text for the screen
-    current_parts.append({"text": "This is the screen of the user, analyze it only if it is relevant to the query:"})
+    # Add explanatory text for the screens
+    current_parts.append({"text": "These are the screens of the user, analyze them only if they are relevant to the query:"})
     
-    # Add image content as a separate part
-    img_part = {
-        "inline_data": {
-            "mime_type": f"image/{image_format}",
-            "data": image_base64
+    # Add each image as a separate part
+    for image_base64 in images_base64:
+        img_part = {
+            "inline_data": {
+                "mime_type": f"image/{image_format}",
+                "data": image_base64
+            }
         }
-    }
-    current_parts.append(img_part)
+        current_parts.append(img_part)
         
     # Implement retry logic
     max_retries = 3
@@ -135,7 +133,7 @@ def analyze_with_audio_and_image(audio_base64: str, audio_format: str,
                 raise Exception(f"Error analyzing audio and image after {max_retries} attempts: {e}")
 
 def analyze_with_text_input(text_input: str, 
-                          image_base64: str, image_format: str, desktop_audio_base64: str = ""):
+                          images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
     """Analyze text input and image using Google Gemini's chat history"""
     global chat
     
@@ -157,17 +155,18 @@ def analyze_with_text_input(text_input: str,
         }
         current_parts.append(desktop_audio_part)
     
-    # Add explanatory text for the screen
-    current_parts.append({"text": "This is the screen of the user, analyze it only if it is relevant to the query:"})
+    # Add explanatory text for the screens
+    current_parts.append({"text": "These are the screens of the user, analyze them only if they are relevant to the query:"})
     
-    # Add image content as a separate part
-    img_part = {
-        "inline_data": {
-            "mime_type": f"image/{image_format}",
-            "data": image_base64
+    # Add each image as a separate part
+    for image_base64 in images_base64:
+        img_part = {
+            "inline_data": {
+                "mime_type": f"image/{image_format}",
+                "data": image_base64
+            }
         }
-    }
-    current_parts.append(img_part)
+        current_parts.append(img_part)
     
     # Implement retry logic
     max_retries = 3

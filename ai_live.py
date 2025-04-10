@@ -344,19 +344,25 @@ def analyze_with_streaming(audio_data, screenshot_base64):
             include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
             desktop_audio = audio_data.get("desktop_audio", "") if include_desktop_audio else ""
             
-            # Check if there are any queued screenshots
-            try:
-                while not screenshot_queue.empty():
-                    screenshot_base64 = screenshot_queue.get_nowait()
+            # Collect all queued screenshots
+            screenshots = []
+            while not screenshot_queue.empty():
+                try:
+                    screenshot = screenshot_queue.get_nowait()
+                    screenshots.append(screenshot)
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
-            except queue.Empty:
-                pass  # No queued screenshots, use the current one
+                except queue.Empty:
+                    break
             
-            # Start the analysis request
+            # If no queued screenshots, use the current one
+            if not screenshots:
+                screenshots = [screenshot_base64]
+            
+            # Start the analysis request with all screenshots
             response_json = analyze_with_audio_and_image(
                 mic_audio, 
                 "wav", 
-                screenshot_base64, 
+                screenshots, 
                 "jpeg", 
                 desktop_audio
             )
@@ -421,13 +427,19 @@ def process_text_input(text_input):
             # Update the last request time
             last_request_time = time.time()
             
-            # Check if there are any queued screenshots
-            try:
-                screenshot_base64 = screenshot_queue.get_nowait()
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
-            except queue.Empty:
-                # No queued screenshots, capture a new one
-                screenshot_base64 = capture_screenshot()
+            # Collect all queued screenshots
+            screenshots = []
+            while not screenshot_queue.empty():
+                try:
+                    screenshot = screenshot_queue.get_nowait()
+                    screenshots.append(screenshot)
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
+                except queue.Empty:
+                    break
+            
+            # If no queued screenshots, capture a new one
+            if not screenshots:
+                screenshots = [capture_screenshot()]
             
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Text input received: {text_input}", flush=True)
             
@@ -444,10 +456,10 @@ def process_text_input(text_input):
             elif not include_desktop_audio:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Desktop audio available but not included (disabled)", flush=True)
             
-            # Process the text input
+            # Process the text input with all screenshots
             response_json = analyze_with_text_input(
                 text_input,
-                screenshot_base64,
+                screenshots,
                 "jpeg",
                 desktop_audio
             )

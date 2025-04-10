@@ -335,13 +335,14 @@ class DraggableOverlay(QtWidgets.QWidget):
         
         # Add screenshot button
         self.screenshot_button = QtWidgets.QPushButton("📸 Screenshot")
+        self.screenshot_button.setFixedHeight(30)  # Set a fixed height
         self.screenshot_button.setStyleSheet("""
             QPushButton {
                 background-color: rgba(180, 130, 70, 200);
-                color: white;
+                color: white; 
                 border: none;
                 border-radius: 5px;
-                padding: 8px;
+                padding: 0 8px;  /* Adjust padding */
                 font-size: 14px;
             }
             QPushButton:hover {
@@ -660,10 +661,10 @@ class DraggableOverlay(QtWidgets.QWidget):
                 QPushButton {
                     background-color: rgba(70, 180, 70, 200);
                     color: white;
-                    border: none;
+                    border: none; 
                     border-radius: 5px;
-                    padding: 5px 10px;
-                    font-size: 12px;
+                    padding: 0 8px;  /* Keep padding consistent */
+                    font-size: 14px;
                 }
             """)
             # Reset the button style after 500ms
@@ -672,9 +673,9 @@ class DraggableOverlay(QtWidgets.QWidget):
                     background-color: rgba(180, 130, 70, 200);
                     color: white;
                     border: none;
-                    border-radius: 5px;
-                    padding: 5px 10px;
-                    font-size: 12px;
+                    border-radius: 5px; 
+                    padding: 0 8px;
+                    font-size: 14px;  
                 }
                 QPushButton:hover {
                     background-color: rgba(210, 160, 100, 200);

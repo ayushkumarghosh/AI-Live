@@ -11,6 +11,7 @@ import time
 from PyQt5 import QtWidgets, QtCore
 from overlay import DraggableOverlay
 import wave
+import concurrent.futures
 
 # Audio queue for communication between threads
 audio_queue = queue.Queue()
@@ -228,6 +229,8 @@ def process_audio_data():
                 
                 # Set processing flag
                 is_processing = True
+                if overlay:
+                    overlay.set_processing(True)
                 
                 # Drain all current items from the queue including the one we just got
                 # Put the first audio back in the queue first
@@ -262,6 +265,8 @@ def process_audio_data():
                 if not filtered_audio:
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ No valid audio to process after filtering", flush=True)
                     is_processing = False
+                    if overlay:
+                        overlay.set_processing(False)
                     continue
                 
                 # Capture screenshot
@@ -280,22 +285,31 @@ def process_audio_data():
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎙️ Processing single audio segment", flush=True)
                     processing_audio = filtered_audio[0]
                 
-                # Update UI
-                if overlay:
-                    overlay.update_status("Processing...", "#FFA500")
-                    overlay.set_processing(True)
-                
-                # Process audio input
-                sys.stdout.flush()
+                # Process audio input - this is now asynchronous and will update UI from its thread
+                # When the asynchronous call completes, it will set overlay.is_processing to False
+                # We don't need to set is_processing to False here anymore
                 analyze_with_streaming(processing_audio, screenshot_base64)
                 
-                # Reset processing state
-                if overlay:
-                    overlay.update_status("Listening...", "#4CAF50")
-                    overlay.set_processing(False)
+                # Note: we don't reset the processing state here anymore as it's done in the async thread
+                # Instead, we rely on a callback to set is_processing back to False when processing is complete
+                # We need to create a way to listen for when the API call is complete
+                def check_processing_status():
+                    """Check if the overlay is done processing and update our local flag"""
+                    nonlocal is_processing
+                    # Give time for the thread to start
+                    time.sleep(0.5)
+                    
+                    # Wait until the overlay is no longer processing
+                    while overlay and overlay.is_processing:
+                        time.sleep(0.5)
+                    
+                    # Once overlay is done, update our local state
+                    is_processing = False
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Processing complete, ready for next input", flush=True)
                 
-                # Mark as no longer processing
-                is_processing = False
+                # Start a thread to monitor when processing is complete
+                status_thread = threading.Thread(target=check_processing_status, daemon=True)
+                status_thread.start()
             
             except Exception as e:
                 print(f"Error processing audio: {e}", flush=True)
@@ -319,81 +333,137 @@ def analyze_with_streaming(audio_data, screenshot_base64):
     
     try:
         sys.stdout.flush()
-        # Apply rate limiting with semaphore
-        with api_semaphore:
-            # Check if we need to wait to respect the rate limit
-            global last_request_time
-            current_time = time.time()
-            time_since_last_request = current_time - last_request_time
+        
+        # Extract microphone and desktop audio
+        mic_audio = audio_data.get("mic_audio", "")
+        
+        # Check if desktop audio should be included
+        include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
+        desktop_audio = audio_data.get("desktop_audio", "") if include_desktop_audio else ""
+        
+        # Collect all queued screenshots
+        screenshots = []
+        from overlay import screenshot_queue
+        
+        while not screenshot_queue.empty():
+            try:
+                screenshot = screenshot_queue.get_nowait()
+                screenshots.append(screenshot)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
+            except queue.Empty:
+                break
+        
+        # If no queued screenshots, use the current one
+        if not screenshots:
+            screenshots = [screenshot_base64]
             
-            if time_since_last_request < RATE_LIMIT:
-                wait_time = RATE_LIMIT - time_since_last_request
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ Rate limiting: waiting {wait_time:.2f}s", flush=True)
-                time.sleep(wait_time)
+        # Update UI to show processing state
+        if overlay:
+            overlay.update_status("Processing...", "#FFA500")
             
-            # Update the last request time
-            last_request_time = time.time()
-            
-            # Extract microphone and desktop audio
-            mic_audio = audio_data.get("mic_audio", "")
-            
-            # Check if desktop audio should be included
-            include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
-            desktop_audio = audio_data.get("desktop_audio", "") if include_desktop_audio else ""
-            
-            # Collect all queued screenshots
-            screenshots = []
-            from overlay import screenshot_queue
-            
-            while not screenshot_queue.empty():
-                try:
-                    screenshot = screenshot_queue.get_nowait()
-                    screenshots.append(screenshot)
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
-                except queue.Empty:
-                    break
-            
-            # If no queued screenshots, use the current one
-            if not screenshots:
-                screenshots = [screenshot_base64]
-            
-            # Start the analysis request with all screenshots
-            response_json = analyze_with_audio_and_image(
-                mic_audio, 
-                "wav", 
-                screenshots, 
-                "jpeg", 
-                desktop_audio
-            )
-            
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 AI response for session {session_id}:", flush=True)
-            print("-" * 50, flush=True)
-            sys.stdout.flush()
-            
-            # Extract the user query and response
-            user_query = response_json.get("user_query", "Could not extract query")
-            ai_response = response_json.get("response", "No response generated")
-            
-            # Print the complete response
-            print(f"User's query: {user_query}\n")
-            print(f"AI response: {ai_response}", flush=True)
-            print("\n" + "-" * 50, flush=True)
-            
-            sys.stdout.flush()
-            
-            # Update overlay with structured response
-            if overlay:
-                overlay.update_response(response_json)
-                overlay.update_status("Listening...", "#4CAF50")
-            
-            return response_json
+        # Run the API call in a separate thread to avoid blocking the UI
+        def api_call_thread():
+            try:
+                # Apply rate limiting with semaphore
+                with api_semaphore:
+                    # Check if we need to wait to respect the rate limit
+                    global last_request_time
+                    current_time = time.time()
+                    time_since_last_request = current_time - last_request_time
+                    
+                    if time_since_last_request < RATE_LIMIT:
+                        wait_time = RATE_LIMIT - time_since_last_request
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ Rate limiting: waiting {wait_time:.2f}s", flush=True)
+                        time.sleep(wait_time)
+                    
+                    # Update the last request time
+                    last_request_time = time.time()
+                    
+                    # Start the analysis request with all screenshots
+                    response_json = analyze_with_audio_and_image(
+                        mic_audio, 
+                        "wav", 
+                        screenshots, 
+                        "jpeg", 
+                        desktop_audio
+                    )
+                    
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 AI response for session {session_id}:", flush=True)
+                    print("-" * 50, flush=True)
+                    sys.stdout.flush()
+                    
+                    # Extract the user query and response
+                    user_query = response_json.get("user_query", "Could not extract query")
+                    ai_response = response_json.get("response", "No response generated")
+                    
+                    # Print the complete response
+                    print(f"User's query: {user_query}\n")
+                    print(f"AI response: {ai_response}", flush=True)
+                    print("\n" + "-" * 50, flush=True)
+                    
+                    sys.stdout.flush()
+                    
+                    # Update overlay with structured response from the main thread
+                    if overlay:
+                        QtCore.QMetaObject.invokeMethod(
+                            overlay, 
+                            "update_response",
+                            QtCore.Qt.QueuedConnection,
+                            QtCore.Q_ARG(dict, response_json)
+                        )
+                        QtCore.QMetaObject.invokeMethod(
+                            overlay,
+                            "update_status",
+                            QtCore.Qt.QueuedConnection,
+                            QtCore.Q_ARG(str, "Listening..."),
+                            QtCore.Q_ARG(str, "#4CAF50")
+                        )
+                        QtCore.QMetaObject.invokeMethod(
+                            overlay,
+                            "set_processing",
+                            QtCore.Qt.QueuedConnection,
+                            QtCore.Q_ARG(bool, False)
+                        )
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in analysis session {session_id}: {e}", flush=True)
+                if overlay:
+                    error_response = {"user_query": "Error occurred", "response": f"Error: {str(e)}"}
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_status",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(str, "Error"),
+                        QtCore.Q_ARG(str, "#FF0000")
+                    )
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(dict, error_response)
+                    )
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "set_processing",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(bool, False)
+                    )
+                sys.stdout.flush()
+                
+        # Start the thread
+        thread = threading.Thread(target=api_call_thread)
+        thread.daemon = True
+        thread.start()
+        
+        # Return None since the actual response will be handled in the background thread
+        return None
     
     except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in analysis session {session_id}: {e}", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up analysis session {session_id}: {e}", flush=True)
         if overlay:
             overlay.update_status("Error", "#FF0000")
             error_response = {"user_query": "Error occurred", "response": f"Error: {str(e)}"}
             overlay.update_response(error_response)
+            overlay.set_processing(False)
         sys.stdout.flush()
         return error_response
 
@@ -410,90 +480,136 @@ def process_text_input(text_input):
         # Set processing state
         if overlay:
             overlay.set_processing(True)
+            overlay.update_status("Processing...", "#FFA500")
         
-        # Apply rate limiting with semaphore
-        with api_semaphore:
-            # Check if we need to wait to respect the rate limit
-            global last_request_time
-            current_time = time.time()
-            time_since_last_request = current_time - last_request_time
-            
-            if time_since_last_request < RATE_LIMIT:
-                wait_time = RATE_LIMIT - time_since_last_request
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ Rate limiting: waiting {wait_time:.2f}s", flush=True)
-                time.sleep(wait_time)
-            
-            # Update the last request time
-            last_request_time = time.time()
-            
-            from overlay import screenshot_queue
-            
-            # Collect all queued screenshots
-            screenshots = []
-            while not screenshot_queue.empty():
-                try:
-                    screenshot = screenshot_queue.get_nowait()
-                    screenshots.append(screenshot)
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
-                except queue.Empty:
-                    break
-            
-            # If no queued screenshots, capture a new one
-            if not screenshots:
-                screenshots = [capture_screenshot()]
-            
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Text input received: {text_input}", flush=True)
-            
-            # Get desktop audio from speech_capture
-            from speech_capture import get_desktop_speech_segments
-            
-            # Check if desktop audio should be included
-            include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
-            desktop_audio = get_desktop_speech_segments() if include_desktop_audio else ""
-            
-            # Log desktop audio status
-            if desktop_audio:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured and included", flush=True)
-            elif not include_desktop_audio:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Desktop audio available but not included (disabled)", flush=True)
-            
-            # Process the text input with all screenshots
-            response_json = analyze_with_text_input(
-                text_input,
-                screenshots,
-                "jpeg",
-                desktop_audio
-            )
-            
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 AI response:", flush=True)
-            print("-" * 50, flush=True)
-            sys.stdout.flush()
-            
-            # Extract the user query and response
-            user_query = response_json.get("user_query", text_input)
-            ai_response = response_json.get("response", "No response generated")
-            
-            # Print the complete response
-            print(f"User's query: {user_query}\n")
-            print(f"AI response: {ai_response}", flush=True)
-            print("\n" + "-" * 50, flush=True)
-            
-            # Update overlay with structured response
-            if overlay:
-                overlay.update_response(response_json)
-                overlay.update_status("Listening...", "#4CAF50")
-            
-            sys.stdout.flush()
-    
+        # Collect screenshots and audio on the main thread before sending to background
+        from overlay import screenshot_queue
+        
+        # Collect all queued screenshots
+        screenshots = []
+        while not screenshot_queue.empty():
+            try:
+                screenshot = screenshot_queue.get_nowait()
+                screenshots.append(screenshot)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
+            except queue.Empty:
+                break
+        
+        # If no queued screenshots, capture a new one
+        if not screenshots:
+            screenshots = [capture_screenshot()]
+        
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Text input received: {text_input}", flush=True)
+        
+        # Get desktop audio from speech_capture
+        from speech_capture import get_desktop_speech_segments
+        
+        # Check if desktop audio should be included
+        include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
+        desktop_audio = get_desktop_speech_segments() if include_desktop_audio else ""
+        
+        # Log desktop audio status
+        if desktop_audio:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured and included", flush=True)
+        elif not include_desktop_audio:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Desktop audio available but not included (disabled)", flush=True)
+        
+        # Run the API call in a separate thread to avoid blocking the UI
+        def api_call_thread():
+            try:
+                # Apply rate limiting with semaphore
+                with api_semaphore:
+                    # Check if we need to wait to respect the rate limit
+                    global last_request_time
+                    current_time = time.time()
+                    time_since_last_request = current_time - last_request_time
+                    
+                    if time_since_last_request < RATE_LIMIT:
+                        wait_time = RATE_LIMIT - time_since_last_request
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ Rate limiting: waiting {wait_time:.2f}s", flush=True)
+                        time.sleep(wait_time)
+                    
+                    # Update the last request time
+                    last_request_time = time.time()
+                    
+                    # Process the text input with all screenshots
+                    response_json = analyze_with_text_input(
+                        text_input,
+                        screenshots,
+                        "jpeg",
+                        desktop_audio
+                    )
+                    
+                    # Use QtCore.QMetaObject.invokeMethod to safely update UI from background thread
+                    if overlay:
+                        # Update UI from the main thread
+                        QtCore.QMetaObject.invokeMethod(
+                            overlay, 
+                            "update_response",
+                            QtCore.Qt.QueuedConnection,
+                            QtCore.Q_ARG(dict, response_json)
+                        )
+                        QtCore.QMetaObject.invokeMethod(
+                            overlay,
+                            "update_status",
+                            QtCore.Qt.QueuedConnection,
+                            QtCore.Q_ARG(str, "Listening..."),
+                            QtCore.Q_ARG(str, "#4CAF50")
+                        )
+                    
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 AI response:", flush=True)
+                    print("-" * 50, flush=True)
+                    sys.stdout.flush()
+                    
+                    # Extract the user query and response
+                    user_query = response_json.get("user_query", text_input)
+                    ai_response = response_json.get("response", "No response generated")
+                    
+                    # Print the complete response
+                    print(f"User's query: {user_query}\n")
+                    print(f"AI response: {ai_response}", flush=True)
+                    print("\n" + "-" * 50, flush=True)
+                    
+                    sys.stdout.flush()
+                    
+            except Exception as e:
+                print(f"Error in background thread: {e}", flush=True)
+                if overlay:
+                    # Update UI from the main thread
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_status",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(str, "Error"),
+                        QtCore.Q_ARG(str, "#FF0000")
+                    )
+                    error_response = {"user_query": text_input, "response": f"Error: {str(e)}"}
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(dict, error_response)
+                    )
+            finally:
+                # Always reset processing state when done
+                if overlay:
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "set_processing",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(bool, False)
+                    )
+        
+        # Start the thread
+        thread = threading.Thread(target=api_call_thread)
+        thread.daemon = True
+        thread.start()
+        
     except Exception as e:
-        print(f"Error processing text input: {e}", flush=True)
+        print(f"Error setting up text input processing: {e}", flush=True)
         if overlay:
             overlay.update_status("Error", "#FF0000")
             overlay.update_response({"user_query": text_input, "response": f"Error: {str(e)}"})
-    
-    finally:
-        # Always reset processing state when done
-        if overlay:
             overlay.set_processing(False)
 
 def main():

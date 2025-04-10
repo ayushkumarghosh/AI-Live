@@ -402,7 +402,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Connect the signal to the slot
         self.update_conversation_signal.connect(self._update_conversation_text)
 
-    # Methods for processing state and status updating.
+    @QtCore.pyqtSlot(bool)
     def set_processing(self, processing_state: bool):
         self.is_processing = processing_state
 
@@ -461,6 +461,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             self.update_status("Microphone Off", "#FF5050")
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤫 Microphone disabled", flush=True)
 
+    @QtCore.pyqtSlot(str, str)
     def update_status(self, status: str, color="#4CAF50"):
         self.status_label.setText(status)
         self.status_label.setStyleSheet(f"color: {color}; font-size: 14px;")
@@ -475,6 +476,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.conversation_text.ensureCursorVisible()
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scrolling to bottom of conversation", flush=True)
 
+    @QtCore.pyqtSlot(dict)
     def update_response(self, response_json: dict):
         # Expecting response_json to include "user_query" and "response".
         user_query = response_json.get("user_query", "")
@@ -866,8 +868,10 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.input_overlay.show()
 
     def handle_text_submitted(self, text):
-        # Emit signal if needed.
+        # Emit signal to process the text
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Text submitted: {text}", flush=True)
         self.text_submitted.emit(text)
+        # No need to set processing state here as it's set in the process_text_input function
 
     def take_screenshot(self):
         """Take a screenshot and add it to the queue"""

@@ -2,6 +2,7 @@ import sys, ctypes, json
 from PyQt5 import QtWidgets, QtCore, QtGui
 from datetime import datetime
 import queue
+import re
 
 # Windows extended style constant for no activation.
 WS_EX_NOACTIVATE = 0x08000000
@@ -502,56 +503,247 @@ class DraggableOverlay(QtWidgets.QWidget):
                       .replace('\\"', "&quot;"))
             
             return text
+            
+        def process_inline_markdown(text):
+            """Process inline markdown elements like bold, italic, links, etc."""
+            # First process markdown patterns, then escape HTML
+            import re
+            
+            # Store original text for inline code processing
+            original_text = text
+            
+            # Links: [text](url) - process links first
+            pattern = r'\[(.*?)\]\((.*?)\)'
+            text = re.sub(pattern, r'<a href="\2" style="color: #5B9BD5; text-decoration: none;">\1</a>', text)
+            
+            # Bold: **text** or __text__
+            pattern = r'(\*\*|__)(.*?)\1'
+            text = re.sub(pattern, r'<b>\2</b>', text)
+            
+            # Italic: *text* or _text_ (but not at the start of a list item)
+            pattern = r'(?<!\*\s)(\*|_)(.*?)\1'
+            text = re.sub(pattern, r'<i>\2</i>', text)
+            
+            # Now escape any remaining HTML special chars
+            processed_text = escape_html(text)
+            
+            # But unescape the HTML tags we just added
+            processed_text = processed_text.replace("&lt;a ", "<a ")
+            processed_text = processed_text.replace("&lt;/a&gt;", "</a>")
+            processed_text = processed_text.replace("&lt;b&gt;", "<b>")
+            processed_text = processed_text.replace("&lt;/b&gt;", "</b>")
+            processed_text = processed_text.replace("&lt;i&gt;", "<i>")
+            processed_text = processed_text.replace("&lt;/i&gt;", "</i>")
+            
+            # Process inline code last, after escaping HTML
+            # Find all inline code segments in the original text
+            inline_code_matches = re.finditer(r'`([^`]+)`', original_text)
+            
+            # Replace each match with properly formatted code
+            for match in inline_code_matches:
+                code_content = match.group(1)
+                escaped_code = escape_html(code_content)
+                formatted_code = f'<code style="background-color: rgba(50, 50, 50, 0.7); padding: 2px 4px; border-radius: 3px; font-family: monospace;">{escaped_code}</code>'
+                
+                # Create a pattern that will match the exact code string in the processed text
+                code_placeholder = escape_html(f'`{code_content}`')
+                processed_text = processed_text.replace(code_placeholder, formatted_code, 1)
+            
+            return processed_text
+        
+        def convert_markdown_to_html(text):
+            """Convert markdown text to HTML"""
+            import re
+            lines = text.split('\n')
+            html_lines = []
+            in_code_block = False
+            in_list = False
+            in_paragraph = False
+            in_table = False
+            code_language = ""
+            
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                
+                # Handle code blocks
+                if line.startswith("```"):
+                    if in_paragraph:
+                        html_lines.append('</p>')
+                        in_paragraph = False
+                        
+                    if not in_code_block:
+                        # Start of code block
+                        in_code_block = True
+                        code_language = line[3:].strip()
+                        html_lines.append(f'<pre style="background-color: rgba(50, 50, 50, 0.7); '
+                                        f'color: #E0E0E0; padding: 10px; border-radius: 5px; '
+                                        f'margin: 10px 0; font-family: monospace; '
+                                        f'white-space: pre; overflow-x: auto;">')
+                    else:
+                        # End of code block
+                        in_code_block = False
+                        html_lines.append('</pre>')
+                elif in_code_block:
+                    # Content inside code block
+                    html_lines.append(escape_html(line))
+                else:
+                    # Detect table rows - if line contains | character
+                    if '|' in line and (line.strip().startswith('|') or line.strip().endswith('|')):
+                        # Check if it's a table header separator
+                        if re.match(r'^\s*\|?\s*[-:]+[-|\s:]*\|?\s*$', line):
+                            # This is a table header separator, skip it
+                            i += 1
+                            continue
+                            
+                        if not in_table:
+                            # Start a new table
+                            html_lines.append('<table style="border-collapse: collapse; width: 100%; margin: 10px 0;">')
+                            in_table = True
+                            
+                            # Check if we need to add table headers
+                            if i > 0 and '|' in lines[i-1]:
+                                # Go back and add the previous line as a header row
+                                cells = [cell.strip() for cell in lines[i-1].strip('|').split('|')]
+                                html_lines.append('<thead><tr>')
+                                for cell in cells:
+                                    html_lines.append(f'<th style="border: 1px solid rgba(100, 100, 100, 0.5); padding: 8px; text-align: left; background-color: rgba(60, 60, 60, 0.5);">{process_inline_markdown(cell)}</th>')
+                                html_lines.append('</tr></thead><tbody>')
+                        
+                        # Process table row
+                        cells = [cell.strip() for cell in line.strip('|').split('|')]
+                        html_lines.append('<tr>')
+                        for cell in cells:
+                            html_lines.append(f'<td style="border: 1px solid rgba(100, 100, 100, 0.5); padding: 8px; text-align: left;">{process_inline_markdown(cell)}</td>')
+                        html_lines.append('</tr>')
+                        
+                        # Check if the table ends after this row
+                        if i+1 >= len(lines) or not ('|' in lines[i+1] and (lines[i+1].strip().startswith('|') or lines[i+1].strip().endswith('|'))):
+                            html_lines.append('</tbody></table>')
+                            in_table = False
+                    else:
+                        # Close the table if we're transitioning out
+                        if in_table:
+                            html_lines.append('</tbody></table>')
+                            in_table = False
+                            
+                        # Headers (up to h6)
+                        if line.startswith('# '):
+                            if in_paragraph:
+                                html_lines.append('</p>')
+                                in_paragraph = False
+                            html_lines.append(f'<h1 style="color: #E0E0E0; font-size: 1.8em; margin: 0.8em 0 0.4em 0;">{process_inline_markdown(line[2:])}</h1>')
+                        elif line.startswith('## '):
+                            if in_paragraph:
+                                html_lines.append('</p>')
+                                in_paragraph = False
+                            html_lines.append(f'<h2 style="color: #E0E0E0; font-size: 1.6em; margin: 0.7em 0 0.35em 0;">{process_inline_markdown(line[3:])}</h2>')
+                        elif line.startswith('### '):
+                            if in_paragraph:
+                                html_lines.append('</p>')
+                                in_paragraph = False
+                            html_lines.append(f'<h3 style="color: #E0E0E0; font-size: 1.4em; margin: 0.6em 0 0.3em 0;">{process_inline_markdown(line[4:])}</h3>')
+                        elif line.startswith('#### '):
+                            if in_paragraph:
+                                html_lines.append('</p>')
+                                in_paragraph = False
+                            html_lines.append(f'<h4 style="color: #E0E0E0; font-size: 1.3em; margin: 0.5em 0 0.25em 0;">{process_inline_markdown(line[5:])}</h4>')
+                        elif line.startswith('##### '):
+                            if in_paragraph:
+                                html_lines.append('</p>')
+                                in_paragraph = False
+                            html_lines.append(f'<h5 style="color: #E0E0E0; font-size: 1.2em; margin: 0.4em 0 0.2em 0;">{process_inline_markdown(line[6:])}</h5>')
+                        elif line.startswith('###### '):
+                            if in_paragraph:
+                                html_lines.append('</p>')
+                                in_paragraph = False
+                            html_lines.append(f'<h6 style="color: #E0E0E0; font-size: 1.1em; margin: 0.3em 0 0.15em 0;">{process_inline_markdown(line[7:])}</h6>')
+                        
+                        # Unordered lists
+                        elif line.strip().startswith('- ') or line.strip().startswith('* '):
+                            if in_paragraph:
+                                html_lines.append('</p>')
+                                in_paragraph = False
+                                
+                            if not in_list:
+                                html_lines.append('<ul style="margin-top: 0.5em; margin-bottom: 0.5em;">')
+                                in_list = True
+                            
+                            content = line.strip()[2:]  # Remove the list marker
+                            html_lines.append(f'<li>{process_inline_markdown(content)}</li>')
+                            
+                            # Check if the list continues
+                            if i+1 >= len(lines) or not (lines[i+1].strip().startswith('- ') or lines[i+1].strip().startswith('* ')):
+                                html_lines.append('</ul>')
+                                in_list = False
+                        
+                        # Ordered lists
+                        elif line.strip() and line.strip()[0].isdigit() and line.strip().find('. ') > 0:
+                            if in_paragraph:
+                                html_lines.append('</p>')
+                                in_paragraph = False
+                                
+                            if not in_list:
+                                html_lines.append('<ol style="margin-top: 0.5em; margin-bottom: 0.5em;">')
+                                in_list = True
+                            
+                            # Extract the content after the number and period
+                            content = line.strip()[line.strip().find('. ')+2:]
+                            html_lines.append(f'<li>{process_inline_markdown(content)}</li>')
+                            
+                            # Check if the list continues
+                            if i+1 >= len(lines) or not (lines[i+1].strip() and lines[i+1].strip()[0].isdigit() and lines[i+1].strip().find('. ') > 0):
+                                html_lines.append('</ol>')
+                                in_list = False
+                        
+                        # Horizontal rule
+                        elif line.strip() == '---':
+                            if in_paragraph:
+                                html_lines.append('</p>')
+                                in_paragraph = False
+                            html_lines.append('<hr style="border: 1px solid rgba(100, 100, 100, 0.5); margin: 1em 0;">')
+                        
+                        # Blockquote
+                        elif line.strip().startswith('> '):
+                            if in_paragraph:
+                                html_lines.append('</p>')
+                                in_paragraph = False
+                            content = line.strip()[2:]  # Remove the quote marker
+                            html_lines.append(f'<blockquote style="border-left: 3px solid rgba(100, 100, 100, 0.5); padding-left: 10px; margin: 0.5em 0; color: #CCCCCC;">{process_inline_markdown(content)}</blockquote>')
+                        
+                        # Process normal paragraph with inline markdown
+                        else:
+                            # Handle empty lines and paragraph breaks
+                            if not line.strip():
+                                if in_paragraph:
+                                    html_lines.append('</p>')
+                                    in_paragraph = False
+                            else:
+                                # Start a new paragraph if needed
+                                if not in_paragraph:
+                                    html_lines.append('<p style="margin: 0.5em 0; line-height: 1.5;">')
+                                    in_paragraph = True
+                                html_lines.append(f'{process_inline_markdown(line)}<br>')
+                
+                i += 1
+            
+            # Close any open paragraph
+            if in_paragraph:
+                html_lines.append('</p>')
+                
+            # Close any open table
+            if in_table:
+                html_lines.append('</tbody></table>')
+                
+            return '\n'.join(html_lines)
         
         for entry in self.conversation_history:
             role_label = "You" if entry["role"] == "user" else "AI"
             role_color = "#4CAF50" if entry["role"] == "user" else "#2196F3"
             
-            # Format the content with proper HTML styling
+            # Convert markdown to HTML for the content
             content = entry["content"]
-            
-            # Check if content contains code blocks
-            if "```" in content:
-                # Split content into parts based on code blocks
-                parts = []
-                is_code = False
-                for part in content.split("```"):
-                    if is_code:
-                        # This part is code
-                        # Extract language identifier if present
-                        code_lines = part.split("\n", 1)
-                        if len(code_lines) > 1:
-                            language = code_lines[0].strip()
-                            code = code_lines[1]
-                        else:
-                            language = ""
-                            code = part
-                        
-                        # Escape HTML in code but preserve whitespace
-                        code = escape_html(code)
-                        
-                        # Create formatted code block with correct styling
-                        formatted_code = (
-                            f'<pre style="background-color: rgba(50, 50, 50, 0.7); '
-                            f'color: #E0E0E0; padding: 10px; border-radius: 5px; '
-                            f'margin: 10px 0; font-family: monospace; '
-                            f'white-space: pre; overflow-x: auto;">'
-                            f'{code}'
-                            f'</pre>'
-                        )
-                        parts.append(formatted_code)
-                    else:
-                        # This part is regular text
-                        # Escape HTML and handle escape sequences
-                        escaped_text = escape_html(part)
-                        parts.append(escaped_text)
-                    is_code = not is_code
-                
-                # Join all parts
-                content = "".join(parts)
-            else:
-                # For non-code content, escape HTML and handle escape sequences
-                content = escape_html(content)
+            content = convert_markdown_to_html(content)
             
             # Add proper spacing and styling
             content = f"<div style='margin-bottom: 10px; line-height: 1.5;'>{content}</div>"

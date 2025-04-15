@@ -3,10 +3,13 @@ from PyQt5 import QtWidgets, QtCore, QtGui
 from datetime import datetime
 import queue
 import re
+import platform
+import os
 
 # Windows extended style constant for no activation.
 WS_EX_NOACTIVATE = 0x08000000
 
+# Queue for screenshots
 screenshot_queue = queue.Queue()
 
 # ----------------------------------------------------------------
@@ -154,6 +157,7 @@ class InputOverlay(QtWidgets.QWidget):
 # DraggableOverlay: the main overlay window.
 class DraggableOverlay(QtWidgets.QWidget):
     text_submitted = QtCore.pyqtSignal(str)
+    pro_text_submitted = QtCore.pyqtSignal(str)  # New signal for pro model text processing
     update_conversation_signal = QtCore.pyqtSignal(str)  # New signal for thread-safe updates
 
     def __init__(self):
@@ -198,7 +202,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.status_label.setStyleSheet("color: #4CAF50; font-size: 14px;")
         title_layout.addWidget(self.status_label)
         title_layout.addStretch(1)
-
+        
         # Add desktop audio toggle button
         self.desktop_audio_button = QtWidgets.QPushButton("🔊 Desktop Audio")
         self.desktop_audio_button.setCheckable(True)
@@ -206,7 +210,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.desktop_audio_button.setStyleSheet("""
             QPushButton {
                 background-color: rgba(70, 130, 180, 200);
-                color: white;
+                color: white; 
                 border: none;
                 border-radius: 5px;
                 padding: 5px 10px;
@@ -233,7 +237,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.mic_button.setStyleSheet("""
             QPushButton {
                 background-color: rgba(70, 180, 130, 200);
-                color: white;
+                color: white; 
                 border: none;
                 border-radius: 5px;
                 padding: 5px 10px;
@@ -252,13 +256,13 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.mic_button.setCursor(QtCore.Qt.ArrowCursor)
         self.mic_button.toggled.connect(self.toggle_microphone)
         title_layout.addWidget(self.mic_button)
-
+        
         self.close_button = QtWidgets.QPushButton("✕")
         self.close_button.setFixedSize(24, 24)
         self.close_button.setStyleSheet("""
             QPushButton {
                 background-color: rgba(80, 80, 80, 200);
-                color: white;
+                color: white; 
                 border: none;
                 border-radius: 12px;
                 font-weight: bold;
@@ -280,6 +284,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.content_area = QtWidgets.QWidget(self)
         self.content_area.setStyleSheet("background-color: rgba(30, 30, 30, 180); border-radius: 5px;")
         content_layout = QtWidgets.QVBoxLayout(self.content_area)
+        content_layout.setContentsMargins(10, 10, 10, 10)
 
         self.conversation_text = QtWidgets.QTextEdit()
         self.conversation_text.setReadOnly(True)
@@ -312,12 +317,12 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.conversation_text.setLineWrapMode(QtWidgets.QTextEdit.WidgetWidth)
         content_layout.addWidget(self.conversation_text)
 
-        # Input area: only the "Enter Text" button.
+        # Input area - create a layout for action buttons
         input_layout = QtWidgets.QHBoxLayout()
         
-        # Add Enter Text button
-        self.enter_text_button = QtWidgets.QPushButton("Enter Text")
-        self.enter_text_button.setStyleSheet("""
+        # Create a button for text input
+        self.input_button = QtWidgets.QPushButton("💬 Text Input")
+        self.input_button.setStyleSheet("""
             QPushButton {
                 background-color: rgba(60, 60, 60, 150);
                 color: white;
@@ -333,9 +338,9 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(60, 60, 60, 200);
             }
         """)
-        self.enter_text_button.setCursor(QtCore.Qt.ArrowCursor)
-        self.enter_text_button.clicked.connect(self.open_input_overlay)
-        input_layout.addWidget(self.enter_text_button)
+        self.input_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.input_button.clicked.connect(self.open_input_overlay)
+        input_layout.addWidget(self.input_button)
         
         # Add screenshot button
         self.screenshot_button = QtWidgets.QPushButton("📸 Screenshot")
@@ -383,6 +388,29 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.analyze_button.clicked.connect(self.execute_analyze)
         input_layout.addWidget(self.analyze_button)
         
+        # Add Super Analyze button
+        self.super_analyze_button = QtWidgets.QPushButton("🚀 Super Analyze")
+        self.super_analyze_button.setFixedHeight(30)  # Set a fixed height
+        self.super_analyze_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(75, 0, 130, 200);  /* Indigo color */
+                color: white; 
+                border: none;
+                border-radius: 5px;
+                padding: 0 8px;  /* Adjust padding */
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(95, 20, 150, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(55, 0, 110, 200);
+            }
+        """)
+        self.super_analyze_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.super_analyze_button.clicked.connect(self.execute_super_analyze)
+        input_layout.addWidget(self.super_analyze_button)
+
         content_layout.addLayout(input_layout)
 
         self.layout.addWidget(self.content_area)
@@ -396,9 +424,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Keep track of input overlay instance.
         self.input_overlay = None
         
-        # Custom analyze prompt
-        self.analyze_prompt = "Analyze the desktop audio (if any) along with the screenshots and provide a helpful response. If the screenshot or desktop audio contains a coding problem, provide a complete working solution as follows: For a new/first-time question, first briefly explain both the naive approach and the optimized approach (without code), THEN implement both approaches with complete code. For follow-up questions or improvements to an existing solution, briefly explain the improvement first, then only focus on implementing the improved optimized solution - don't repeat the naive approach again. Ensure any code is ready to submit with no missing parts. For non-coding content, provide a detailed analysis relevant to what's shown in the screenshot. Always be thorough and complete in your response."
-
         # Connect the signal to the slot
         self.update_conversation_signal.connect(self._update_conversation_text)
 
@@ -913,12 +938,14 @@ class DraggableOverlay(QtWidgets.QWidget):
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error taking screenshot: {e}", flush=True)
 
     def execute_analyze(self):
-        """Execute analysis with a custom prompt"""
         try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Executing analysis with custom prompt", flush=True)
             
+            # Import and use the analyze_prompt from chat.py
+            from chat import analyze_prompt
+            
             # Emit the text_submitted signal with the custom prompt
-            self.text_submitted.emit(self.analyze_prompt)
+            self.text_submitted.emit(analyze_prompt)
             
             # Visual feedback
             self.analyze_button.setStyleSheet("""
@@ -952,6 +979,49 @@ class DraggableOverlay(QtWidgets.QWidget):
             
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing analysis: {e}", flush=True)
+
+    def execute_super_analyze(self):
+        try:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Executing Super Analysis with Pro model", flush=True)
+            
+            # Import and use the super_analyze_prompt from chat.py
+            from chat import super_analyze_prompt
+            
+            # Emit the pro_text_submitted signal with the super analyze prompt
+            self.pro_text_submitted.emit(super_analyze_prompt)
+            
+            # Visual feedback
+            self.super_analyze_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(55, 0, 110, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 14px;
+                }
+            """)
+            
+            # Reset the button style after 500ms
+            QtCore.QTimer.singleShot(500, lambda: self.super_analyze_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(75, 0, 130, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(95, 20, 150, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(55, 0, 110, 200);
+                }
+            """))
+            
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing Super Analysis: {e}", flush=True)
 
 # ----------------------------------------------------------------
 # Main entry point.

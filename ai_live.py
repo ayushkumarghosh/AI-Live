@@ -612,6 +612,154 @@ def process_text_input(text_input):
             overlay.update_response({"user_query": text_input, "response": f"Error: {str(e)}"})
             overlay.set_processing(False)
 
+def process_pro_text_input(text_input):
+    """Process text input from the overlay UI using the Pro model for coding problems"""
+    global overlay
+    
+    try:
+        # Check if we're already processing something
+        if overlay and overlay.is_processing:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring text input", flush=True)
+            return
+        
+        # Set processing state
+        if overlay:
+            overlay.set_processing(True)
+            overlay.update_status("Processing with Pro model...", "#4B0082")  # Indigo color for Pro
+        
+        # Collect screenshots and audio on the main thread before sending to background
+        from overlay import screenshot_queue
+        
+        # Collect all queued screenshots
+        screenshots = []
+        while not screenshot_queue.empty():
+            try:
+                screenshot = screenshot_queue.get_nowait()
+                screenshots.append(screenshot)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
+            except queue.Empty:
+                break
+        
+        # If no queued screenshots, capture a new one
+        if not screenshots:
+            screenshots = [capture_screenshot()]
+        
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Pro analysis request received: {text_input}", flush=True)
+        
+        # Get desktop audio from speech_capture
+        from speech_capture import get_desktop_speech_segments
+        
+        # Check if desktop audio should be included
+        include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
+        desktop_audio = get_desktop_speech_segments() if include_desktop_audio else ""
+        
+        # Log desktop audio status
+        if desktop_audio:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured and included", flush=True)
+        elif not include_desktop_audio:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Desktop audio available but not included (disabled)", flush=True)
+        
+        # Run the API call in a separate thread to avoid blocking the UI
+        def api_call_thread():
+            try:
+                # Apply rate limiting with semaphore
+                with api_semaphore:
+                    # Check if we need to wait to respect the rate limit
+                    global last_request_time
+                    current_time = time.time()
+                    time_since_last_request = current_time - last_request_time
+                    
+                    if time_since_last_request < RATE_LIMIT:
+                        wait_time = RATE_LIMIT - time_since_last_request
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ Rate limiting: waiting {wait_time:.2f}s", flush=True)
+                        time.sleep(wait_time)
+                    
+                    # Update the last request time
+                    last_request_time = time.time()
+                    
+                    # Import the Pro model analysis function
+                    from chat import analyze_with_pro_model
+                    
+                    # Process the text input with all screenshots using the Pro model
+                    response_json = analyze_with_pro_model(
+                        text_input,
+                        screenshots,
+                        "jpeg",
+                        desktop_audio
+                    )
+                    
+                    # Use QtCore.QMetaObject.invokeMethod to safely update UI from background thread
+                    if overlay:
+                        # Update UI from the main thread
+                        QtCore.QMetaObject.invokeMethod(
+                            overlay, 
+                            "update_response",
+                            QtCore.Qt.QueuedConnection,
+                            QtCore.Q_ARG(dict, response_json)
+                        )
+                        QtCore.QMetaObject.invokeMethod(
+                            overlay,
+                            "update_status",
+                            QtCore.Qt.QueuedConnection,
+                            QtCore.Q_ARG(str, "Listening..."),
+                            QtCore.Q_ARG(str, "#4CAF50")
+                        )
+                    
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Pro AI response:", flush=True)
+                    print("-" * 50, flush=True)
+                    sys.stdout.flush()
+                    
+                    # Extract the user query and response
+                    user_query = response_json.get("user_query", text_input)
+                    ai_response = response_json.get("response", "No response generated")
+                    
+                    # Print the complete response
+                    print(f"User's query: {user_query}\n")
+                    print(f"AI response: {ai_response}", flush=True)
+                    print("\n" + "-" * 50, flush=True)
+                    
+                    sys.stdout.flush()
+                    
+            except Exception as e:
+                print(f"Error in Pro model background thread: {e}", flush=True)
+                if overlay:
+                    # Update UI from the main thread
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_status",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(str, "Error"),
+                        QtCore.Q_ARG(str, "#FF0000")
+                    )
+                    error_response = {"user_query": text_input, "response": f"Error: {str(e)}"}
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(dict, error_response)
+                    )
+            finally:
+                # Always reset processing state when done
+                if overlay:
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "set_processing",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(bool, False)
+                    )
+        
+        # Start the thread
+        thread = threading.Thread(target=api_call_thread)
+        thread.daemon = True
+        thread.start()
+        
+    except Exception as e:
+        print(f"Error setting up Pro model text input processing: {e}", flush=True)
+        if overlay:
+            overlay.update_status("Error", "#FF0000")
+            overlay.update_response({"user_query": text_input, "response": f"Error: {str(e)}"})
+            overlay.set_processing(False)
+
 def main():
     # Create Qt application
     app = QtWidgets.QApplication(sys.argv)
@@ -623,6 +771,9 @@ def main():
     
     # Connect the text_submitted signal to the process_text_input function
     overlay.text_submitted.connect(process_text_input)
+    
+    # Connect the pro_text_submitted signal to the process_pro_text_input function
+    overlay.pro_text_submitted.connect(process_pro_text_input)
     
     # Start the audio recorder in a separate thread
     audio_recorder_thread = threading.Thread(

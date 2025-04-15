@@ -761,6 +761,10 @@ def process_pro_text_input(text_input):
             overlay.set_processing(False)
 
 def main():
+    # Set the graphics rendering backend to OpenGL ES
+    # This might improve performance on some systems, especially with integrated graphics
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseDesktopOpenGL)
+    
     # Create Qt application
     app = QtWidgets.QApplication(sys.argv)
     

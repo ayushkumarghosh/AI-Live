@@ -47,6 +47,17 @@ def timestamp():
 chat = model.start_chat(history=[])
 pro_chat = pro_model.start_chat(history=[])
 
+def clear_chat_history():
+    """Clear the chat history for both models and start fresh sessions"""
+    global chat, pro_chat
+    
+    # Create new chat sessions for both models
+    chat = model.start_chat(history=[])
+    pro_chat = pro_model.start_chat(history=[])
+    
+    print(f"{timestamp()} Chat history cleared for both models")
+    return True
+
 def analyze_with_audio_and_image(audio_base64: str, audio_format: str, 
                                 images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
     """Analyze audio and image using Google Gemini's chat history"""

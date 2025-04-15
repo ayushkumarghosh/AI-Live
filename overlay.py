@@ -410,6 +410,29 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.super_analyze_button.setCursor(QtCore.Qt.ArrowCursor)
         self.super_analyze_button.clicked.connect(self.execute_super_analyze)
         input_layout.addWidget(self.super_analyze_button)
+        
+        # Add Clear History button
+        self.clear_button = QtWidgets.QPushButton("🗑️ Clear History")
+        self.clear_button.setFixedHeight(30)  # Set a fixed height
+        self.clear_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(180, 80, 80, 200);  /* Red color */
+                color: white; 
+                border: none;
+                border-radius: 5px;
+                padding: 0 8px;  /* Adjust padding */
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(200, 100, 100, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(160, 60, 60, 200);
+            }
+        """)
+        self.clear_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.clear_button.clicked.connect(self.clear_history)
+        input_layout.addWidget(self.clear_button)
 
         content_layout.addLayout(input_layout)
 
@@ -1022,6 +1045,60 @@ class DraggableOverlay(QtWidgets.QWidget):
             
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing Super Analysis: {e}", flush=True)
+
+    def clear_history(self):
+        try:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Clearing conversation history", flush=True)
+            
+            # Clear local conversation history
+            self.conversation_history = []
+            self.conversation_text.clear()
+            
+            # Clear the chat models' history
+            from chat import clear_chat_history
+            clear_chat_history()
+            
+            # Show confirmation message
+            self.conversation_text.append("<div style='color: #FFA500; text-align: center; margin: 10px 0;'>Conversation history cleared</div>")
+            
+            # Visual feedback for the button
+            self.clear_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(160, 60, 60, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 14px;
+                }
+            """)
+            
+            # Reset the button style after 500ms
+            QtCore.QTimer.singleShot(500, lambda: self.clear_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(180, 80, 80, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(200, 100, 100, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(160, 60, 60, 200);
+                }
+            """))
+            
+            # Update status
+            self.update_status("History cleared", "#FFA500")
+            # Reset status after 2 seconds
+            QtCore.QTimer.singleShot(2000, lambda: self.update_status("Listening...", "#4CAF50"))
+            
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error clearing history: {e}", flush=True)
+            self.update_status("Error clearing history", "#FF0000")
 
 # ----------------------------------------------------------------
 # Main entry point.

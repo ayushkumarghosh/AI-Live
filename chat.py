@@ -67,7 +67,7 @@ def analyze_with_audio_and_image(audio_base64: str, audio_format: str,
     current_parts = []
     
     # Add explanatory text for microphone audio
-    current_parts.append({"text": "This is the user's query, always prioritize it:"})
+    current_parts.append({"text": "This is the user's query, always prioritize it and answer it as you are helping the user when they are in an interview(for a software engineering role) or coding session. If necessary fabricate an answer if you don't know the answer:"})
     
     # Add audio content as a separate part if valid
     if audio_base64 and len(audio_base64) > 100:  # Ensure valid audio data

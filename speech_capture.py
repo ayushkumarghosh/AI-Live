@@ -24,7 +24,7 @@ vad = VADIterator(model, sampling_rate=RATE)
 
 # Global variables to store audio data
 desktop_audio_buffer = []
-MAX_DESKTOP_BUFFER_DURATION = 300  # Max seconds of desktop audio to keep
+MAX_DESKTOP_BUFFER_DURATION = 600  # Max seconds of desktop audio to keep
 
 # Storage for detected speech from desktop audio
 desktop_speech_segments = collections.deque(maxlen=10)  # Store up to 10 recent speech segments

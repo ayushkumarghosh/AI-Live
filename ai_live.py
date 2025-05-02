@@ -8,7 +8,7 @@ from PIL import ImageGrab
 import sys
 import threading
 import time
-from PyQt5 import QtWidgets, QtCore
+from PyQt6 import QtWidgets, QtCore
 from overlay import DraggableOverlay
 import wave
 import concurrent.futures
@@ -411,20 +411,20 @@ def analyze_with_streaming(audio_data, screenshot_base64):
                         QtCore.QMetaObject.invokeMethod(
                             overlay, 
                             "update_response",
-                            QtCore.Qt.QueuedConnection,
+                            QtCore.Qt.ConnectionType.QueuedConnection,
                             QtCore.Q_ARG(dict, response_json)
                         )
                         QtCore.QMetaObject.invokeMethod(
                             overlay,
                             "update_status",
-                            QtCore.Qt.QueuedConnection,
+                            QtCore.Qt.ConnectionType.QueuedConnection,
                             QtCore.Q_ARG(str, "Listening..."),
                             QtCore.Q_ARG(str, "#4CAF50")
                         )
                         QtCore.QMetaObject.invokeMethod(
                             overlay,
                             "set_processing",
-                            QtCore.Qt.QueuedConnection,
+                            QtCore.Qt.ConnectionType.QueuedConnection,
                             QtCore.Q_ARG(bool, False)
                         )
             except Exception as e:
@@ -434,20 +434,20 @@ def analyze_with_streaming(audio_data, screenshot_base64):
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "update_status",
-                        QtCore.Qt.QueuedConnection,
+                        QtCore.Qt.ConnectionType.QueuedConnection,
                         QtCore.Q_ARG(str, "Error"),
                         QtCore.Q_ARG(str, "#FF0000")
                     )
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "update_response",
-                        QtCore.Qt.QueuedConnection,
+                        QtCore.Qt.ConnectionType.QueuedConnection,
                         QtCore.Q_ARG(dict, error_response)
                     )
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "set_processing",
-                        QtCore.Qt.QueuedConnection,
+                        QtCore.Qt.ConnectionType.QueuedConnection,
                         QtCore.Q_ARG(bool, False)
                     )
                 sys.stdout.flush()
@@ -552,13 +552,13 @@ def process_text_input(text_input):
                         QtCore.QMetaObject.invokeMethod(
                             overlay, 
                             "update_response",
-                            QtCore.Qt.QueuedConnection,
+                            QtCore.Qt.ConnectionType.QueuedConnection,
                             QtCore.Q_ARG(dict, response_json)
                         )
                         QtCore.QMetaObject.invokeMethod(
                             overlay,
                             "update_status",
-                            QtCore.Qt.QueuedConnection,
+                            QtCore.Qt.ConnectionType.QueuedConnection,
                             QtCore.Q_ARG(str, "Listening..."),
                             QtCore.Q_ARG(str, "#4CAF50")
                         )
@@ -585,7 +585,7 @@ def process_text_input(text_input):
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "update_status",
-                        QtCore.Qt.QueuedConnection,
+                        QtCore.Qt.ConnectionType.QueuedConnection,
                         QtCore.Q_ARG(str, "Error"),
                         QtCore.Q_ARG(str, "#FF0000")
                     )
@@ -593,7 +593,7 @@ def process_text_input(text_input):
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "update_response",
-                        QtCore.Qt.QueuedConnection,
+                        QtCore.Qt.ConnectionType.QueuedConnection,
                         QtCore.Q_ARG(dict, error_response)
                     )
             finally:
@@ -602,7 +602,7 @@ def process_text_input(text_input):
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "set_processing",
-                        QtCore.Qt.QueuedConnection,
+                        QtCore.Qt.ConnectionType.QueuedConnection,
                         QtCore.Q_ARG(bool, False)
                     )
         
@@ -703,13 +703,13 @@ def process_pro_text_input(text_input):
                         QtCore.QMetaObject.invokeMethod(
                             overlay, 
                             "update_response",
-                            QtCore.Qt.QueuedConnection,
+                            QtCore.Qt.ConnectionType.QueuedConnection,
                             QtCore.Q_ARG(dict, response_json)
                         )
                         QtCore.QMetaObject.invokeMethod(
                             overlay,
                             "update_status",
-                            QtCore.Qt.QueuedConnection,
+                            QtCore.Qt.ConnectionType.QueuedConnection,
                             QtCore.Q_ARG(str, "Listening..."),
                             QtCore.Q_ARG(str, "#4CAF50")
                         )
@@ -736,7 +736,7 @@ def process_pro_text_input(text_input):
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "update_status",
-                        QtCore.Qt.QueuedConnection,
+                        QtCore.Qt.ConnectionType.QueuedConnection,
                         QtCore.Q_ARG(str, "Error"),
                         QtCore.Q_ARG(str, "#FF0000")
                     )
@@ -744,7 +744,7 @@ def process_pro_text_input(text_input):
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "update_response",
-                        QtCore.Qt.QueuedConnection,
+                        QtCore.Qt.ConnectionType.QueuedConnection,
                         QtCore.Q_ARG(dict, error_response)
                     )
             finally:
@@ -753,7 +753,7 @@ def process_pro_text_input(text_input):
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "set_processing",
-                        QtCore.Qt.QueuedConnection,
+                        QtCore.Qt.ConnectionType.QueuedConnection,
                         QtCore.Q_ARG(bool, False)
                     )
         
@@ -772,7 +772,8 @@ def process_pro_text_input(text_input):
 def main():
     # Set the graphics rendering backend to OpenGL ES
     # This might improve performance on some systems, especially with integrated graphics
-    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseDesktopOpenGL)
+    # PyQt6 handles this differently or might not need explicit setting
+    # QtWidgets.QApplication.setAttribute(QtCore.Qt.ApplicationAttribute.AA_UseDesktopOpenGL) # Example if needed
     
     # Create Qt application
     app = QtWidgets.QApplication(sys.argv)
@@ -803,7 +804,7 @@ def main():
     processing_thread.start()
     
     # Run the Qt event loop
-    app.exec_()
+    app.exec()
 
 if __name__ == "__main__":
     main()

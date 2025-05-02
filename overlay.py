@@ -1,5 +1,6 @@
 import sys, ctypes, json
-from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt6 import QtWidgets, QtCore, QtGui
+from PyQt6.QtCore import pyqtSignal as Signal, pyqtSlot as Slot
 from datetime import datetime
 import queue
 import re
@@ -29,8 +30,8 @@ class ResizeHandle(QtWidgets.QWidget):
         self.position = position  # e.g., "top-left", "right", etc.
         self.parent = parent
 
-        self.setCursor(QtCore.Qt.ArrowCursor)
-        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(20, 20)
 
     def paintEvent(self, event):
@@ -44,33 +45,33 @@ class ResizeHandle(QtWidgets.QWidget):
                 painter.drawRect(0, 0, 8, 8)
 
     def mousePressEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
-            self.parent.start_resize(self.position, event.globalPos())
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self.parent.start_resize(self.position, event.globalPosition().toPoint())
 
     def mouseMoveEvent(self, event):
         if self.parent.resizing:
-            self.parent.do_resize(event.globalPos())
+            self.parent.do_resize(event.globalPosition().toPoint())
 
     def mouseReleaseEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self.parent.end_resize()
 
 # ----------------------------------------------------------------
 # InputOverlay: a separate focusable overlay for text input.
 class InputOverlay(QtWidgets.QWidget):
     # Signal emitted when text is submitted.
-    text_submitted = QtCore.pyqtSignal(str)
+    text_submitted = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         # Do not set WS_EX_NOACTIVATE here so that this window can accept focus.
         self.setWindowFlags(
-            QtCore.Qt.FramelessWindowHint |
-            QtCore.Qt.WindowStaysOnTopHint |
-            QtCore.Qt.Tool
+            QtCore.Qt.WindowType.FramelessWindowHint |
+            QtCore.Qt.WindowType.WindowStaysOnTopHint |
+            QtCore.Qt.WindowType.Tool
         )
-        self.setFocusPolicy(QtCore.Qt.StrongFocus)
-        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         self.resize(400, 100)
 
         # Main layout with margins.
@@ -156,22 +157,22 @@ class InputOverlay(QtWidgets.QWidget):
 # ----------------------------------------------------------------
 # DraggableOverlay: the main overlay window.
 class DraggableOverlay(QtWidgets.QWidget):
-    text_submitted = QtCore.pyqtSignal(str)
-    pro_text_submitted = QtCore.pyqtSignal(str)  # New signal for pro model text processing
-    update_conversation_signal = QtCore.pyqtSignal(str)  # New signal for thread-safe updates
+    text_submitted = Signal(str)
+    pro_text_submitted = Signal(str)  # New signal for pro model text processing
+    update_conversation_signal = Signal(str)  # New signal for thread-safe updates
 
     def __init__(self):
         super().__init__()
         # Set up as non-activating.
-        self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
-        self.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.setWindowFlags(
-            QtCore.Qt.FramelessWindowHint |
-            QtCore.Qt.WindowStaysOnTopHint |
-            QtCore.Qt.Tool |
-            QtCore.Qt.WindowDoesNotAcceptFocus
+            QtCore.Qt.WindowType.FramelessWindowHint |
+            QtCore.Qt.WindowType.WindowStaysOnTopHint |
+            QtCore.Qt.WindowType.Tool |
+            QtCore.Qt.WindowType.WindowDoesNotAcceptFocus
         )
-        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         self.resize(800, 600)
 
         # Initialize processing state.
@@ -226,7 +227,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(60, 120, 170, 200);
             }
         """)
-        self.desktop_audio_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.desktop_audio_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.desktop_audio_button.toggled.connect(self.toggle_desktop_audio)
         title_layout.addWidget(self.desktop_audio_button)
         
@@ -253,7 +254,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(60, 170, 120, 200);
             }
         """)
-        self.mic_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.mic_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.mic_button.toggled.connect(self.toggle_microphone)
         title_layout.addWidget(self.mic_button)
         
@@ -282,7 +283,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(90, 170, 90, 200);
             }
         """)
-        self.screenshot_toggle_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.screenshot_toggle_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.screenshot_toggle_button.toggled.connect(self.toggle_screenshots)
         title_layout.addWidget(self.screenshot_toggle_button)
         
@@ -304,7 +305,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(180, 40, 40, 200);
             }
         """)
-        self.close_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.close_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.close_button.clicked.connect(self.quit_application)
         title_layout.addWidget(self.close_button)
         self.layout.addWidget(self.title_bar)
@@ -341,9 +342,9 @@ class DraggableOverlay(QtWidgets.QWidget):
                 height: 0px;
             }
         """)
-        self.conversation_text.viewport().setCursor(QtCore.Qt.ArrowCursor)
-        self.conversation_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
-        self.conversation_text.setLineWrapMode(QtWidgets.QTextEdit.WidgetWidth)
+        self.conversation_text.viewport().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.conversation_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.conversation_text.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.WidgetWidth)
         content_layout.addWidget(self.conversation_text)
 
         # Input area - create a layout for action buttons
@@ -367,7 +368,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(60, 60, 60, 200);
             }
         """)
-        self.input_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.input_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.input_button.clicked.connect(self.open_input_overlay)
         input_layout.addWidget(self.input_button)
         
@@ -390,7 +391,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(170, 120, 60, 200);
             }
         """)
-        self.screenshot_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.screenshot_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.screenshot_button.clicked.connect(self.take_screenshot)
         input_layout.addWidget(self.screenshot_button)
         
@@ -413,7 +414,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(50, 110, 160, 200);
             }
         """)
-        self.analyze_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.analyze_button.clicked.connect(self.execute_analyze)
         input_layout.addWidget(self.analyze_button)
         
@@ -436,7 +437,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(55, 0, 110, 200);
             }
         """)
-        self.super_analyze_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.super_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.super_analyze_button.clicked.connect(self.execute_super_analyze)
         input_layout.addWidget(self.super_analyze_button)
         
@@ -459,7 +460,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(160, 60, 60, 200);
             }
         """)
-        self.clear_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.clear_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.clear_button.clicked.connect(self.clear_history)
         input_layout.addWidget(self.clear_button)
 
@@ -479,7 +480,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Connect the signal to the slot
         self.update_conversation_signal.connect(self._update_conversation_text)
 
-    @QtCore.pyqtSlot(bool)
+    @Slot(bool)
     def set_processing(self, processing_state: bool):
         self.is_processing = processing_state
 
@@ -585,7 +586,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             """)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Screenshots disabled for analysis", flush=True)
 
-    @QtCore.pyqtSlot(str, str)
+    @Slot(str, str)
     def update_status(self, status: str, color="#4CAF50"):
         self.status_label.setText(status)
         self.status_label.setStyleSheet(f"color: {color}; font-size: 14px;")
@@ -596,11 +597,11 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.conversation_text.setHtml(conversation_text)
         
         # Always scroll to the bottom
-        self.conversation_text.moveCursor(QtGui.QTextCursor.End)
+        self.conversation_text.moveCursor(QtGui.QTextCursor.MoveOperation.End)
         self.conversation_text.ensureCursorVisible()
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Scrolling to bottom of conversation", flush=True)
 
-    @QtCore.pyqtSlot(dict)
+    @Slot(dict)
     def update_response(self, response_json: dict):
         # Expecting response_json to include "user_query" and "response".
         user_query = response_json.get("user_query", "")
@@ -948,16 +949,16 @@ class DraggableOverlay(QtWidgets.QWidget):
 
     # ---------------- Mouse Dragging ----------------
     def mousePressEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self.dragging = True
-            self.offset = event.pos()
+            self.offset = event.position().toPoint()
 
     def mouseMoveEvent(self, event):
         if self.dragging:
-            self.move(self.mapToGlobal(event.pos() - self.offset))
+            self.move(self.mapToGlobal(event.position().toPoint() - self.offset))
 
     def mouseReleaseEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self.dragging = False
 
     # ---------------- Focus Behavior and Screen Capture Exclusion ----------------
@@ -1182,4 +1183,4 @@ if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     overlay = DraggableOverlay()
     overlay.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())

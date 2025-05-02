@@ -107,18 +107,18 @@ def analyze_with_audio_and_image(audio_base64: str, audio_format: str,
             print(f"Warning: Invalid current desktop audio data: {e}")
     
     # Add explanatory text for the screens
-    current_parts.append({"text": "These are the screens of the user, analyze them only if they are relevant to the query:"})
-    
-    # Add each image as a separate part
-    for image_base64 in images_base64:
-        img_part = {
-            "inline_data": {
-                "mime_type": f"image/{image_format}",
-                "data": image_base64
+    if images_base64:
+        current_parts.append({"text": "These are the screens of the user, analyze them only if they are relevant to the query:"})
+        # Add each image as a separate part
+        for image_base64 in images_base64:
+            img_part = {
+                "inline_data": {
+                    "mime_type": f"image/{image_format}",
+                    "data": image_base64
+                }
             }
-        }
-        current_parts.append(img_part)
-        
+            current_parts.append(img_part)
+    
     # Implement retry logic
     max_retries = 3
     retry_delay = 1  # seconds
@@ -175,17 +175,17 @@ def analyze_with_text_input(text_input: str,
         current_parts.append(desktop_audio_part)
     
     # Add explanatory text for the screens
-    current_parts.append({"text": "These are the screens of the user, analyze them only if they are relevant to the query:"})
-    
-    # Add each image as a separate part
-    for image_base64 in images_base64:
-        img_part = {
-            "inline_data": {
-                "mime_type": f"image/{image_format}",
-                "data": image_base64
+    if images_base64:
+        current_parts.append({"text": "These are the screens of the user, analyze them only if they are relevant to the query:"})
+        # Add each image as a separate part
+        for image_base64 in images_base64:
+            img_part = {
+                "inline_data": {
+                    "mime_type": f"image/{image_format}",
+                    "data": image_base64
+                }
             }
-        }
-        current_parts.append(img_part)
+            current_parts.append(img_part)
     
     # Implement retry logic
     max_retries = 3
@@ -243,17 +243,17 @@ def analyze_with_pro_model(text_input: str,
         current_parts.append(desktop_audio_part)
     
     # Add explanatory text for the screens
-    current_parts.append({"text": "These are the screens of the user, analyze them only if they are relevant to the query:"})
-    
-    # Add each image as a separate part
-    for image_base64 in images_base64:
-        img_part = {
-            "inline_data": {
-                "mime_type": f"image/{image_format}",
-                "data": image_base64
+    if images_base64:
+        current_parts.append({"text": "These are the screens of the user, analyze them only if they are relevant to the query:"})
+        # Add each image as a separate part
+        for image_base64 in images_base64:
+            img_part = {
+                "inline_data": {
+                    "mime_type": f"image/{image_format}",
+                    "data": image_base64
+                }
             }
-        }
-        current_parts.append(img_part)
+            current_parts.append(img_part)
     
     # Implement retry logic
     max_retries = 3

@@ -257,6 +257,35 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.mic_button.toggled.connect(self.toggle_microphone)
         title_layout.addWidget(self.mic_button)
         
+        # Add Screenshot Toggle button (Moved to Title Bar)
+        self.screenshot_toggle_button = QtWidgets.QPushButton("🖼️ Screenshots On")
+        self.screenshot_toggle_button.setCheckable(True)
+        self.screenshot_toggle_button.setChecked(True) # Enabled by default
+        # Make height consistent with other title bar buttons
+        self.screenshot_toggle_button.setFixedHeight(self.desktop_audio_button.sizeHint().height())
+        self.screenshot_toggle_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(100, 180, 100, 200); /* Greenish */
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 5px 10px; /* Match other title bar buttons */
+                font-size: 12px; /* Match other title bar buttons */
+            }
+            QPushButton:checked {
+                background-color: rgba(70, 150, 70, 200); /* Darker Green */
+            }
+            QPushButton:hover {
+                background-color: rgba(120, 200, 120, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(90, 170, 90, 200);
+            }
+        """)
+        self.screenshot_toggle_button.setCursor(QtCore.Qt.ArrowCursor)
+        self.screenshot_toggle_button.toggled.connect(self.toggle_screenshots)
+        title_layout.addWidget(self.screenshot_toggle_button)
+        
         self.close_button = QtWidgets.QPushButton("✕")
         self.close_button.setFixedSize(24, 24)
         self.close_button.setStyleSheet("""
@@ -508,6 +537,53 @@ class DraggableOverlay(QtWidgets.QWidget):
             """)
             self.update_status("Microphone Off", "#FF5050")
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤫 Microphone disabled", flush=True)
+
+    def toggle_screenshots(self, checked):
+        """Handle screenshot toggle button state changes"""
+        if checked:
+            self.screenshot_toggle_button.setText("🖼️ Screenshots On")
+            self.screenshot_toggle_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(100, 180, 100, 200); /* Greenish */
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    padding: 5px 10px; /* Match other title bar buttons */
+                    font-size: 12px; /* Match other title bar buttons */
+                }
+                QPushButton:checked {
+                    background-color: rgba(70, 150, 70, 200); /* Darker Green */
+                }
+                QPushButton:hover {
+                    background-color: rgba(120, 200, 120, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(90, 170, 90, 200);
+                }
+            """)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🖼️ Screenshots enabled for analysis", flush=True)
+        else:
+            self.screenshot_toggle_button.setText("🚫 Screenshots Off")
+            self.screenshot_toggle_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(180, 100, 100, 200); /* Reddish */
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    padding: 5px 10px; /* Match other title bar buttons */
+                    font-size: 12px; /* Match other title bar buttons */
+                }
+                QPushButton:checked {
+                     background-color: rgba(150, 70, 70, 200); /* Darker Red */
+                }
+                QPushButton:hover {
+                    background-color: rgba(200, 120, 120, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(170, 90, 90, 200);
+                }
+            """)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Screenshots disabled for analysis", flush=True)
 
     @QtCore.pyqtSlot(str, str)
     def update_status(self, status: str, color="#4CAF50"):

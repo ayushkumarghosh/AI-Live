@@ -341,21 +341,24 @@ def analyze_with_streaming(audio_data, screenshot_base64):
         include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
         desktop_audio = audio_data.get("desktop_audio", "") if include_desktop_audio else ""
         
-        # Collect all queued screenshots
+        # Collect all queued screenshots, considering the toggle state
         screenshots = []
-        from overlay import screenshot_queue
-        
-        while not screenshot_queue.empty():
-            try:
-                screenshot = screenshot_queue.get_nowait()
-                screenshots.append(screenshot)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
-            except queue.Empty:
-                break
-        
-        # If no queued screenshots, use the current one
-        if not screenshots:
-            screenshots = [screenshot_base64]
+        if overlay and overlay.screenshot_toggle_button.isChecked():
+            from overlay import screenshot_queue
+            while not screenshot_queue.empty():
+                try:
+                    screenshot = screenshot_queue.get_nowait()
+                    screenshots.append(screenshot)
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot for analysis", flush=True)
+                except queue.Empty:
+                    break
+            
+            # If no queued screenshots, use the current one passed to the function
+            if not screenshots:
+                screenshots = [screenshot_base64]
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using current screenshot for analysis", flush=True)
+        else:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Screenshots disabled, not sending image data", flush=True)
             
         # Update UI to show processing state
         if overlay:
@@ -483,21 +486,24 @@ def process_text_input(text_input):
             overlay.update_status("Processing...", "#FFA500")
         
         # Collect screenshots and audio on the main thread before sending to background
-        from overlay import screenshot_queue
-        
-        # Collect all queued screenshots
         screenshots = []
-        while not screenshot_queue.empty():
-            try:
-                screenshot = screenshot_queue.get_nowait()
-                screenshots.append(screenshot)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
-            except queue.Empty:
-                break
-        
-        # If no queued screenshots, capture a new one
-        if not screenshots:
-            screenshots = [capture_screenshot()]
+        if overlay and overlay.screenshot_toggle_button.isChecked():
+            from overlay import screenshot_queue
+            # Collect all queued screenshots
+            while not screenshot_queue.empty():
+                try:
+                    screenshot = screenshot_queue.get_nowait()
+                    screenshots.append(screenshot)
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot for text input", flush=True)
+                except queue.Empty:
+                    break
+            
+            # If no queued screenshots, capture a new one
+            if not screenshots:
+                screenshots = [capture_screenshot()]
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for text input", flush=True)
+        else:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Screenshots disabled, not sending image data for text input", flush=True)
         
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Text input received: {text_input}", flush=True)
         
@@ -628,21 +634,24 @@ def process_pro_text_input(text_input):
             overlay.update_status("Processing with Pro model...", "#4B0082")  # Indigo color for Pro
         
         # Collect screenshots and audio on the main thread before sending to background
-        from overlay import screenshot_queue
-        
-        # Collect all queued screenshots
         screenshots = []
-        while not screenshot_queue.empty():
-            try:
-                screenshot = screenshot_queue.get_nowait()
-                screenshots.append(screenshot)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot", flush=True)
-            except queue.Empty:
-                break
-        
-        # If no queued screenshots, capture a new one
-        if not screenshots:
-            screenshots = [capture_screenshot()]
+        if overlay and overlay.screenshot_toggle_button.isChecked():
+            from overlay import screenshot_queue
+            # Collect all queued screenshots
+            while not screenshot_queue.empty():
+                try:
+                    screenshot = screenshot_queue.get_nowait()
+                    screenshots.append(screenshot)
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot for Pro input", flush=True)
+                except queue.Empty:
+                    break
+            
+            # If no queued screenshots, capture a new one
+            if not screenshots:
+                screenshots = [capture_screenshot()]
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for Pro input", flush=True)
+        else:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Screenshots disabled, not sending image data for Pro input", flush=True)
         
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Pro analysis request received: {text_input}", flush=True)
         

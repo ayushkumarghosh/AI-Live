@@ -94,7 +94,7 @@ def analyze_with_audio_and_image(audio_base64: str, audio_format: str,
             # Validate base64 data
             base64.b64decode(desktop_audio_base64)
             
-            current_parts.append({"text": "This is the desktop audio output from the user's system, analyze it only if it is relevant to the query:"})
+            current_parts.append({"text": "This is the desktop audio output from the user's system. You MUST provide a comprehensive answer to ANY question or problem it contains. If it's a coding problem, provide a complete solution with both explanation and implementation. If it's any other type of question or problem, provide a detailed answer with examples if applicable. If you don't know the answer, ALWAYS fabricate a reasonable, detailed answer rather than saying you don't know. Never respond that you can't answer - provide a confident, complete response regardless of the question type:" + analyze_prompt})
             
             desktop_audio_part = {
                 "inline_data": {
@@ -108,7 +108,7 @@ def analyze_with_audio_and_image(audio_base64: str, audio_format: str,
     
     # Add explanatory text for the screens
     if images_base64:
-        current_parts.append({"text": "These are the screens of the user, analyze them only if they are relevant to the query:"})
+        current_parts.append({"text": "These are the screens of the user. Analyze them thoroughly and provide a comprehensive answer to any problem or question shown. If they contain a coding problem, solve it completely with both explanation and code implementation. For any other type of content, provide a detailed analysis or answer. If you don't know, always fabricate a reasonable, confident answer:"})
         # Add each image as a separate part
         for image_base64 in images_base64:
             img_part = {
@@ -164,7 +164,7 @@ def analyze_with_text_input(text_input: str,
     
     # Add desktop audio if available
     if desktop_audio_base64:
-        current_parts.append({"text": "This is the desktop audio output from the user's system, analyze it only if it is relevant to the query:"})
+        current_parts.append({"text": "This is the desktop audio output from the user's system. You MUST provide a comprehensive answer to ANY question or problem it contains. If it's a coding problem, provide a complete solution with both explanation and implementation. If it's any other type of question or problem, provide a detailed answer with examples if applicable. If you don't know the answer, ALWAYS fabricate a reasonable, detailed answer rather than saying you don't know. Never respond that you can't answer - provide a confident, complete response regardless of the question type:" + analyze_prompt})
         
         desktop_audio_part = {
             "inline_data": {
@@ -176,7 +176,7 @@ def analyze_with_text_input(text_input: str,
     
     # Add explanatory text for the screens
     if images_base64:
-        current_parts.append({"text": "These are the screens of the user, analyze them only if they are relevant to the query:"})
+        current_parts.append({"text": "These are the screens of the user. Analyze them thoroughly and provide a comprehensive answer to any problem or question shown. If they contain a coding problem, solve it completely with both explanation and code implementation. For any other type of content, provide a detailed analysis or answer. If you don't know, always fabricate a reasonable, confident answer:"})
         # Add each image as a separate part
         for image_base64 in images_base64:
             img_part = {
@@ -232,7 +232,7 @@ def analyze_with_pro_model(text_input: str,
     
     # Add desktop audio if available
     if desktop_audio_base64:
-        current_parts.append({"text": "This is the desktop audio output from the user's system, analyze it only if it is relevant to the query:"})
+        current_parts.append({"text": "This is the desktop audio output from the user's system. You MUST provide a comprehensive answer to ANY question or problem it contains. If it's a coding problem, provide a complete solution with both explanation and implementation. If it's any other type of question or problem, provide a detailed answer with examples if applicable. If you don't know the answer, ALWAYS fabricate a reasonable, detailed answer rather than saying you don't know. Never respond that you can't answer - provide a confident, complete response regardless of the question type:" + super_analyze_prompt})
         
         desktop_audio_part = {
             "inline_data": {
@@ -244,7 +244,7 @@ def analyze_with_pro_model(text_input: str,
     
     # Add explanatory text for the screens
     if images_base64:
-        current_parts.append({"text": "These are the screens of the user, analyze them only if they are relevant to the query:"})
+        current_parts.append({"text": "These are the screens of the user. Analyze them thoroughly and provide a comprehensive answer to any problem or question shown. If they contain a coding problem, solve it completely with both explanation and code implementation. For any other type of content, provide a detailed analysis or answer. If you don't know, always fabricate a reasonable, confident answer:"})
         # Add each image as a separate part
         for image_base64 in images_base64:
             img_part = {

@@ -773,7 +773,7 @@ def main():
     # Set the graphics rendering backend to OpenGL ES
     # This might improve performance on some systems, especially with integrated graphics
     # PyQt6 handles this differently or might not need explicit setting
-    # QtWidgets.QApplication.setAttribute(QtCore.Qt.ApplicationAttribute.AA_UseDesktopOpenGL) # Example if needed
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.ApplicationAttribute.AA_UseDesktopOpenGL) # Example if needed
     
     # Create Qt application
     app = QtWidgets.QApplication(sys.argv)

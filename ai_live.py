@@ -364,6 +364,11 @@ def analyze_with_streaming(audio_data, screenshot_base64):
         if overlay:
             overlay.update_status("Processing...", "#FFA500")
             
+        # Set a flag to track if this request was canceled
+        if not hasattr(overlay, 'current_session_id'):
+            overlay.current_session_id = None
+        overlay.current_session_id = session_id
+            
         # Run the API call in a separate thread to avoid blocking the UI
         def api_call_thread():
             try:
@@ -391,6 +396,11 @@ def analyze_with_streaming(audio_data, screenshot_base64):
                         desktop_audio
                     )
                     
+                    # Check if this session was canceled before updating UI
+                    if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Session {session_id} was canceled, discarding results", flush=True)
+                        return
+                    
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 AI response for session {session_id}:", flush=True)
                     print("-" * 50, flush=True)
                     sys.stdout.flush()
@@ -405,6 +415,11 @@ def analyze_with_streaming(audio_data, screenshot_base64):
                     print("\n" + "-" * 50, flush=True)
                     
                     sys.stdout.flush()
+                    
+                    # Check again if this session was canceled before updating UI
+                    if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Session {session_id} was canceled, discarding results", flush=True)
+                        return
                     
                     # Update overlay with structured response from the main thread
                     if overlay:
@@ -430,6 +445,11 @@ def analyze_with_streaming(audio_data, screenshot_base64):
             except Exception as e:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in analysis session {session_id}: {e}", flush=True)
                 if overlay:
+                    # Check if this session was canceled
+                    if hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Session {session_id} was canceled, not showing error", flush=True)
+                        return
+                        
                     error_response = {"user_query": "Error occurred", "response": f"Error: {str(e)}"}
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
@@ -484,6 +504,13 @@ def process_text_input(text_input):
         if overlay:
             overlay.set_processing(True)
             overlay.update_status("Processing...", "#FFA500")
+            
+            # Generate a session ID for this text analysis
+            session_id = f"text_{datetime.now().strftime('%H%M%S')}_{hash(text_input)}"
+            if not hasattr(overlay, 'current_session_id'):
+                overlay.current_session_id = None
+            overlay.current_session_id = session_id
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🆔 Processing text session {session_id}", flush=True)
         
         # Collect screenshots and audio on the main thread before sending to background
         screenshots = []
@@ -546,6 +573,11 @@ def process_text_input(text_input):
                         desktop_audio
                     )
                     
+                    # Check if this session was canceled before updating UI
+                    if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Text session {session_id} was canceled, discarding results", flush=True)
+                        return
+                    
                     # Use QtCore.QMetaObject.invokeMethod to safely update UI from background thread
                     if overlay:
                         # Update UI from the main thread
@@ -579,7 +611,13 @@ def process_text_input(text_input):
                     sys.stdout.flush()
                     
             except Exception as e:
-                print(f"Error in background thread: {e}", flush=True)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in background thread: {e}", flush=True)
+                
+                # Check if this session was canceled
+                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Text session {session_id} was canceled, not showing error", flush=True)
+                    return
+                    
                 if overlay:
                     # Update UI from the main thread
                     QtCore.QMetaObject.invokeMethod(
@@ -612,7 +650,7 @@ def process_text_input(text_input):
         thread.start()
         
     except Exception as e:
-        print(f"Error setting up text input processing: {e}", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up text input processing: {e}", flush=True)
         if overlay:
             overlay.update_status("Error", "#FF0000")
             overlay.update_response({"user_query": text_input, "response": f"Error: {str(e)}"})
@@ -632,6 +670,13 @@ def process_pro_text_input(text_input):
         if overlay:
             overlay.set_processing(True)
             overlay.update_status("Processing with Pro model...", "#4B0082")  # Indigo color for Pro
+            
+            # Generate a session ID for this pro analysis
+            session_id = f"pro_{datetime.now().strftime('%H%M%S')}_{hash(text_input)}"
+            if not hasattr(overlay, 'current_session_id'):
+                overlay.current_session_id = None
+            overlay.current_session_id = session_id
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🆔 Processing Pro session {session_id}", flush=True)
         
         # Collect screenshots and audio on the main thread before sending to background
         screenshots = []
@@ -697,6 +742,11 @@ def process_pro_text_input(text_input):
                         desktop_audio
                     )
                     
+                    # Check if this session was canceled before updating UI
+                    if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Pro session {session_id} was canceled, discarding results", flush=True)
+                        return
+                    
                     # Use QtCore.QMetaObject.invokeMethod to safely update UI from background thread
                     if overlay:
                         # Update UI from the main thread
@@ -730,7 +780,13 @@ def process_pro_text_input(text_input):
                     sys.stdout.flush()
                     
             except Exception as e:
-                print(f"Error in Pro model background thread: {e}", flush=True)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in Pro model background thread: {e}", flush=True)
+                
+                # Check if this session was canceled
+                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Pro session {session_id} was canceled, not showing error", flush=True)
+                    return
+                    
                 if overlay:
                     # Update UI from the main thread
                     QtCore.QMetaObject.invokeMethod(
@@ -763,7 +819,7 @@ def process_pro_text_input(text_input):
         thread.start()
         
     except Exception as e:
-        print(f"Error setting up Pro model text input processing: {e}", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up Pro model text input processing: {e}", flush=True)
         if overlay:
             overlay.update_status("Error", "#FF0000")
             overlay.update_response({"user_query": text_input, "response": f"Error: {str(e)}"})
@@ -789,6 +845,9 @@ def main():
     # Connect the pro_text_submitted signal to the process_pro_text_input function
     overlay.pro_text_submitted.connect(process_pro_text_input)
     
+    # Connect the clear_history signal to stop processing and clear history
+    overlay.clear_history_signal.connect(stop_processing_and_clear_history)
+    
     # Start the audio recorder in a separate thread
     audio_recorder_thread = threading.Thread(
         target=audio_recorder,
@@ -805,6 +864,33 @@ def main():
     
     # Run the Qt event loop
     app.exec()
+
+def stop_processing_and_clear_history():
+    """Stop any ongoing processing and clear the chat history"""
+    global overlay
+    
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Clearing conversation history and stopping processing", flush=True)
+    
+    # Reset the processing state in the overlay
+    if overlay and overlay.is_processing:
+        # Mark current session as canceled by assigning a new session ID
+        if hasattr(overlay, 'current_session_id'):
+            old_session = overlay.current_session_id
+            overlay.current_session_id = f"canceled_{datetime.now().strftime('%H%M%S')}"
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Marked session {old_session} as canceled", flush=True)
+            
+        overlay.set_processing(False)
+        overlay.update_status("Listening...", "#4CAF50")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Processing stopped", flush=True)
+    
+    # Clear the chat history
+    from chat import clear_chat_history
+    clear_chat_history()
+    
+    # Update the UI to show we're ready for new input
+    if overlay:
+        overlay.update_response({"user_query": "", "response": "Ready for new queries."})
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ System reset complete", flush=True)
 
 if __name__ == "__main__":
     main()

@@ -160,6 +160,7 @@ class DraggableOverlay(QtWidgets.QWidget):
     text_submitted = Signal(str)
     pro_text_submitted = Signal(str)  # New signal for pro model text processing
     update_conversation_signal = Signal(str)  # New signal for thread-safe updates
+    clear_history_signal = Signal()  # Signal to stop processing and clear history
 
     def __init__(self):
         super().__init__()
@@ -1172,6 +1173,9 @@ class DraggableOverlay(QtWidgets.QWidget):
             self.update_status("History cleared", "#FFA500")
             # Reset status after 2 seconds
             QtCore.QTimer.singleShot(2000, lambda: self.update_status("Listening...", "#4CAF50"))
+            
+            # Emit clear_history_signal
+            self.clear_history_signal.emit()
             
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error clearing history: {e}", flush=True)

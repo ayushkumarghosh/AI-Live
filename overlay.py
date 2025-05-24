@@ -680,8 +680,12 @@ class DraggableOverlay(QtWidgets.QWidget):
             return processed_text
         
         def convert_markdown_to_html(text):
-            """Convert markdown text to HTML"""
+            """Convert markdown text to HTML with language-specific syntax highlighting via Pygments"""
             import re
+            from pygments import highlight
+            from pygments.lexers import get_lexer_by_name, guess_lexer, TextLexer
+            from pygments.formatters import HtmlFormatter
+
             lines = text.split('\n')
             html_lines = []
             in_code_block = False
@@ -689,32 +693,56 @@ class DraggableOverlay(QtWidgets.QWidget):
             in_paragraph = False
             in_table = False
             code_language = ""
-            
+            code_block_lines = []
+            style = "monokai"
+
+            formatter = HtmlFormatter(noclasses=True, style=style)
+
             i = 0
             while i < len(lines):
                 line = lines[i]
-                
+
                 # Handle code blocks
                 if line.startswith("```"):
                     if in_paragraph:
                         html_lines.append('</p>')
                         in_paragraph = False
-                        
+
                     if not in_code_block:
                         # Start of code block
                         in_code_block = True
                         code_language = line[3:].strip()
-                        html_lines.append(f'<pre style="background-color: rgba(50, 50, 50, 0.7); '
-                                        f'color: #E0E0E0; padding: 10px; border-radius: 5px; '
-                                        f'margin: 10px 0; font-family: monospace; '
-                                        f'white-space: pre; overflow-x: auto;">')
+                        code_block_lines = []
                     else:
-                        # End of code block
+                        # End of code block - apply syntax highlighting
+                        code = "\n".join(code_block_lines)
+                        lexer = None
+                        lexer_used = False
+                        if code_language:
+                            try:
+                                lexer = get_lexer_by_name(code_language, stripall=True)
+                                lexer_used = True
+                            except Exception:
+                                lexer = TextLexer(stripall=True)
+                                lexer_used = False
+                        else:
+                            try:
+                                lexer = guess_lexer(code)
+                                lexer_used = True
+                            except Exception:
+                                lexer = TextLexer(stripall=True)
+                                lexer_used = False
+                        highlighted_html = highlight(code, lexer, formatter)
+                        # Remove enclosing <div> Pygments generates, keep only <pre>
+                        highlighted_html = re.sub(r'^<div[^>]*>', '', highlighted_html)
+                        highlighted_html = re.sub(r'</div>\s*$', '', highlighted_html)
+                        html_lines.append(highlighted_html)
                         in_code_block = False
-                        html_lines.append('</pre>')
+                        code_language = ""
+                        code_block_lines = []
                 elif in_code_block:
-                    # Content inside code block
-                    html_lines.append(escape_html(line))
+                    # Accumulate lines inside code block
+                    code_block_lines.append(line)
                 else:
                     # Detect table rows - if line contains | character
                     if '|' in line and (line.strip().startswith('|') or line.strip().endswith('|')):

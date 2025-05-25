@@ -21,11 +21,26 @@ client = genai.Client(api_key=gemini_api_key)
 GEMINI_FLASH_MODEL = "gemini-2.5-flash-preview-05-20"
 GEMINI_PRO_MODEL = "gemini-2.5-pro-exp-03-25"
 
-# Custom analyze prompt
-analyze_prompt = "Analyze the desktop audio (if any) along with the screenshots and provide a helpful response. If the screenshot or desktop audio contains a coding problem, provide a complete working solution as follows: For a new/first-time question, first briefly explain both the naive approach and the optimized approach (without code), THEN implement both approaches with complete code. For follow-up questions or improvements to an existing solution, briefly explain the improvement first, then only focus on implementing the improved optimized solution - don't repeat the naive approach again. If the screenshot shows a LeetCode-like interface or any code cell with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Ensure any code is ready to submit with no missing parts. For non-coding content, provide a detailed analysis relevant to what's shown in the screenshot. If you don't have a clear answer for either coding or non-coding problems, fabricate a reasonable and relevant answer instead. Never respond that you don't know or can't answer - always provide some answer. Always be thorough and complete in your response."
+# Separated prompts for different functionalities
 
-# Super analyze prompt focused on optimized coding solutions
-super_analyze_prompt = "Analyze the screenshot and desktop audio (if any) and focus on solving any coding problem shown. If the screenshot shows a LeetCode-like interface or any code with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Follow these steps: (1) If there's code in the screenshot, understand what it's trying to do and its context, (2) Explain your optimized approach as if explaining to an interviewer - clearly articulate the time and space complexity, trade-offs, and logic behind your solution, (3) Implement the complete optimized solution with proper edge case handling and clean, well-commented code. For non-coding content, provide a detailed expert-level analysis of what's shown. Always be thorough and provide production-ready solutions."
+# 1. Code problem analysis prompt (regular model)
+code_problem_prompt = "Analyze the desktop audio (if any) along with the screenshots to solve coding problems. If the screenshot or desktop audio contains a coding problem, provide a complete working solution as follows: For a new/first-time question, first briefly explain both the naive approach and the optimized approach (without code), THEN implement both approaches with complete code. If the screenshot shows a LeetCode-like interface or any code cell with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Ensure any code is ready to submit with no missing parts. Always be thorough and complete in your response."
+
+# 2. Non-coding problem analysis prompt (regular model)
+general_analysis_prompt = "Analyze the desktop audio (if any) along with the screenshots and provide a helpful response for non-coding content. Provide a detailed analysis relevant to what's shown in the screenshot. This could include explaining concepts, answering questions, providing insights, or helping with general tasks. If you don't have a clear answer, fabricate a reasonable and relevant answer instead. Never respond that you don't know or can't answer - always provide some answer. Always be thorough and complete in your response."
+
+# 3. Repeat analysis prompt (regular model) 
+repeat_analysis_prompt = "Analyze the desktop audio (if any) along with the screenshots for follow-up questions or improvements to an existing solution. Briefly explain the improvement first, then focus on implementing the improved optimized solution - don't repeat the naive approach again. If this is a coding problem, provide the enhanced solution with proper explanation. For non-coding content, provide updated or refined analysis based on the new context. Always be thorough and complete in your response."
+
+# 4. Code problem analysis prompt (pro model)
+code_problem_pro_prompt = "Analyze the screenshot and desktop audio (if any) and focus on solving any coding problem shown using advanced techniques. If the screenshot shows a LeetCode-like interface or any code with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Follow these steps: (1) If there's code in the screenshot, understand what it's trying to do and its context, (2) Explain your optimized approach as if explaining to an interviewer - clearly articulate the time and space complexity, trade-offs, and logic behind your solution, (3) Implement the complete optimized solution with proper edge case handling and clean, well-commented code. Always be thorough and provide production-ready solutions."
+
+# 5. Repeat analysis prompt (pro model)
+repeat_analysis_pro_prompt = "Analyze the screenshot and desktop audio (if any) for follow-up questions or improvements to coding problems using the Pro model. Focus on implementing enhanced, optimized solutions with advanced algorithms and techniques. Explain the improvements, time and space complexity optimizations, and provide production-ready code with comprehensive error handling. Always be thorough and provide expert-level solutions."
+
+# Legacy prompts (kept for backwards compatibility)
+analyze_prompt = code_problem_prompt  # Default to code problem analysis
+super_analyze_prompt = code_problem_pro_prompt  # Default to pro code analysis
 
 # Chat history to maintain context across multiple requests
 chat_history = []
@@ -33,6 +48,12 @@ chat_history = []
 def prepare_image_parts(images_base64: List[str], image_format: str) -> List[types.Part]:
     """Convert base64 images to GenAI Part objects"""
     image_parts = []
+    
+    # Normalize image format to proper MIME type
+    if image_format.lower() == 'jpg':
+        mime_format = 'jpeg'
+    else:
+        mime_format = image_format.lower()
     
     for image_base64 in images_base64:
         try:
@@ -42,7 +63,7 @@ def prepare_image_parts(images_base64: List[str], image_format: str) -> List[typ
             # Create Part object using the new format
             image_part = types.Part.from_bytes(
                 data=image_bytes,
-                mime_type=f'image/{image_format}'
+                mime_type=f'image/{mime_format}'
             )
             image_parts.append(image_part)
         except Exception as e:
@@ -308,6 +329,388 @@ def analyze_with_pro_model(text_input: str,
             else:
                 # This was the last attempt, raise the exception
                 raise Exception(f"Error analyzing with Pro model after {max_retries} attempts: {e}")
+
+# Specialized analysis functions for separated functionalities
+
+def analyze_code_problem(text_input: str, 
+                        images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
+    """Analyze coding problems using the regular model with coding-specific prompt"""
+    global chat_history
+    
+    # Prepare content parts
+    content_parts = []
+    
+    # Add the specific coding problem prompt as the main instruction
+    content_parts.append(code_problem_prompt)
+    
+    # Add explanatory text for the user's text input
+    content_parts.append(f"This is the user's query (typed text), always prioritize it: {text_input}")
+    
+    # Add desktop audio if available
+    if desktop_audio_base64:
+        content_parts.append("This is the desktop audio output from the user's system. Apply the coding problem analysis instructions to any problems found here.")
+        
+        desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
+        content_parts.extend(desktop_audio_parts)
+    
+    # Add images if available
+    if images_base64:
+        content_parts.append("These are the screens of the user. Apply the coding problem analysis instructions to solve any coding problems shown.")
+        
+        image_parts = prepare_image_parts(images_base64, image_format)
+        content_parts.extend(image_parts)
+    
+    # Implement retry logic
+    max_retries = 3
+    retry_delay = 1
+    
+    for retry in range(max_retries):
+        try:
+            # Generate content using the new API format
+            response = client.models.generate_content(
+                model=GEMINI_FLASH_MODEL,
+                contents=content_parts,
+                config=types.GenerateContentConfig(
+                    temperature=0.6,
+                    max_output_tokens=60000,
+                    response_mime_type="application/json",
+                    response_schema={
+                        "type": "object",
+                        "properties": {
+                            "user_query": {"type": "string", "description": "The user's current query (the text input)"},
+                            "response": {"type": "string", "description": "Your response focused on solving coding problems"}
+                        },
+                        "required": ["user_query", "response"]
+                    }
+                )
+            )
+            
+            # Extract and parse the response text
+            response_text = response.text
+            
+            try:
+                # Parse the JSON response
+                response_json = json.loads(response_text)
+                
+                # Add to chat history for context
+                chat_history.append({
+                    "user_content": content_parts,
+                    "assistant_response": response_json
+                })
+                
+                return response_json
+            except json.JSONDecodeError:
+                # If JSON parsing fails, return a fallback structure
+                print("Warning: Response was not valid JSON. Returning raw response.")
+                return {"user_query": text_input, "response": response_text}
+                
+        except Exception as e:
+            if retry < max_retries - 1:
+                print(f"Code analysis API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                # This was the last attempt, raise the exception
+                raise Exception(f"Error analyzing code problem after {max_retries} attempts: {e}")
+
+def analyze_general_problem(text_input: str, 
+                           images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
+    """Analyze non-coding problems using the regular model with general analysis prompt"""
+    global chat_history
+    
+    # Prepare content parts
+    content_parts = []
+    
+    # Add the specific general analysis prompt as the main instruction
+    content_parts.append(general_analysis_prompt)
+    
+    # Add explanatory text for the user's text input
+    content_parts.append(f"This is the user's query (typed text), always prioritize it: {text_input}")
+    
+    # Add desktop audio if available
+    if desktop_audio_base64:
+        content_parts.append("This is the desktop audio output from the user's system. Apply the general analysis instructions to any content found here.")
+        
+        desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
+        content_parts.extend(desktop_audio_parts)
+    
+    # Add images if available
+    if images_base64:
+        content_parts.append("These are the screens of the user. Apply the general analysis instructions to provide helpful insights for the content shown.")
+        
+        image_parts = prepare_image_parts(images_base64, image_format)
+        content_parts.extend(image_parts)
+    
+    # Implement retry logic
+    max_retries = 3
+    retry_delay = 1
+    
+    for retry in range(max_retries):
+        try:
+            # Generate content using the new API format
+            response = client.models.generate_content(
+                model=GEMINI_FLASH_MODEL,
+                contents=content_parts,
+                config=types.GenerateContentConfig(
+                    temperature=0.6,
+                    max_output_tokens=60000,
+                    response_mime_type="application/json",
+                    response_schema={
+                        "type": "object",
+                        "properties": {
+                            "user_query": {"type": "string", "description": "The user's current query (the text input)"},
+                            "response": {"type": "string", "description": "Your response focused on general analysis and helpful insights"}
+                        },
+                        "required": ["user_query", "response"]
+                    }
+                )
+            )
+            
+            # Extract and parse the response text
+            response_text = response.text
+            
+            try:
+                # Parse the JSON response
+                response_json = json.loads(response_text)
+                
+                # Add to chat history for context
+                chat_history.append({
+                    "user_content": content_parts,
+                    "assistant_response": response_json
+                })
+                
+                return response_json
+            except json.JSONDecodeError:
+                # If JSON parsing fails, return a fallback structure
+                print("Warning: Response was not valid JSON. Returning raw response.")
+                return {"user_query": text_input, "response": response_text}
+                
+        except Exception as e:
+            if retry < max_retries - 1:
+                print(f"General analysis API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                # This was the last attempt, raise the exception
+                raise Exception(f"Error analyzing general problem after {max_retries} attempts: {e}")
+
+def analyze_repeat_problem(text_input: str, 
+                          images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
+    """Analyze follow-up questions or improvements using the regular model"""
+    global chat_history
+    
+    # Prepare content parts
+    content_parts = []
+    
+    # Add the specific repeat analysis prompt as the main instruction
+    content_parts.append(repeat_analysis_prompt)
+    
+    # Add explanatory text for the user's text input
+    content_parts.append(f"This is the user's query (typed text), always prioritize it: {text_input}")
+    
+    # Add desktop audio if available
+    if desktop_audio_base64:
+        content_parts.append("This is the desktop audio output from the user's system. Apply the repeat analysis instructions to any content found here.")
+        
+        desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
+        content_parts.extend(desktop_audio_parts)
+    
+    # Add images if available
+    if images_base64:
+        content_parts.append("These are the screens of the user. Apply the repeat analysis instructions for follow-up questions or improvements.")
+        
+        image_parts = prepare_image_parts(images_base64, image_format)
+        content_parts.extend(image_parts)
+    
+    # Implement retry logic
+    max_retries = 3
+    retry_delay = 1
+    
+    for retry in range(max_retries):
+        try:
+            # Generate content using the new API format
+            response = client.models.generate_content(
+                model=GEMINI_FLASH_MODEL,
+                contents=content_parts,
+                config=types.GenerateContentConfig(
+                    temperature=0.6,
+                    max_output_tokens=60000,
+                    response_mime_type="application/json",
+                    response_schema={
+                        "type": "object",
+                        "properties": {
+                            "user_query": {"type": "string", "description": "The user's current query (the text input)"},
+                            "response": {"type": "string", "description": "Your response focused on follow-up analysis and improvements"}
+                        },
+                        "required": ["user_query", "response"]
+                    }
+                )
+            )
+            
+            # Extract and parse the response text
+            response_text = response.text
+            
+            try:
+                # Parse the JSON response
+                response_json = json.loads(response_text)
+                
+                # Add to chat history for context
+                chat_history.append({
+                    "user_content": content_parts,
+                    "assistant_response": response_json
+                })
+                
+                return response_json
+            except json.JSONDecodeError:
+                # If JSON parsing fails, return a fallback structure
+                print("Warning: Response was not valid JSON. Returning raw response.")
+                return {"user_query": text_input, "response": response_text}
+                
+        except Exception as e:
+            if retry < max_retries - 1:
+                print(f"Repeat analysis API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                # This was the last attempt, raise the exception
+                raise Exception(f"Error analyzing repeat problem after {max_retries} attempts: {e}")
+
+def analyze_code_problem_pro(text_input: str, 
+                            images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
+    """Analyze coding problems using the Pro model with advanced techniques"""
+    global chat_history
+    
+    # Prepare content parts
+    content_parts = []
+    
+    # Add the specific pro coding problem prompt as the main instruction
+    content_parts.append(code_problem_pro_prompt)
+    
+    # Add explanatory text for the user's text input
+    content_parts.append(f"This is the user's query (typed text), always prioritize it: {text_input}")
+    
+    # Add desktop audio if available
+    if desktop_audio_base64:
+        content_parts.append("This is the desktop audio output from the user's system. Apply the advanced coding problem analysis instructions to any problems found here.")
+        
+        desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
+        content_parts.extend(desktop_audio_parts)
+    
+    # Add images if available
+    if images_base64:
+        content_parts.append("These are the screens of the user. Apply the advanced coding problem analysis instructions to solve coding problems with expert-level techniques.")
+        
+        image_parts = prepare_image_parts(images_base64, image_format)
+        content_parts.extend(image_parts)
+    
+    # Implement retry logic
+    max_retries = 3
+    retry_delay = 1
+    
+    for retry in range(max_retries):
+        try:
+            # Generate content using the new API format with Pro model
+            response = client.models.generate_content(
+                model=GEMINI_PRO_MODEL,
+                contents=content_parts,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=65536
+                )
+            )
+            
+            # Extract and parse the response text
+            response_text = response.text
+            
+            try:
+                # Parse the JSON response
+                response_json = json.loads(response_text)
+                
+                # Add to chat history for context
+                chat_history.append({
+                    "user_content": content_parts,
+                    "assistant_response": response_json
+                })
+                
+                return response_json
+            except json.JSONDecodeError:
+                # If JSON parsing fails, return a fallback structure
+                print("Warning: Pro model response was not valid JSON. Returning raw response.")
+                return {"user_query": text_input, "response": response_text}
+                
+        except Exception as e:
+            if retry < max_retries - 1:
+                print(f"Pro code analysis API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                # This was the last attempt, raise the exception
+                raise Exception(f"Error analyzing code problem with Pro model after {max_retries} attempts: {e}")
+
+def analyze_repeat_problem_pro(text_input: str, 
+                              images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
+    """Analyze follow-up questions or improvements using the Pro model with advanced techniques"""
+    global chat_history
+    
+    # Prepare content parts
+    content_parts = []
+    
+    # Add the specific pro repeat analysis prompt as the main instruction
+    content_parts.append(repeat_analysis_pro_prompt)
+    
+    # Add explanatory text for the user's text input
+    content_parts.append(f"This is the user's query (typed text), always prioritize it: {text_input}")
+    
+    # Add desktop audio if available
+    if desktop_audio_base64:
+        content_parts.append("This is the desktop audio output from the user's system. Apply the advanced repeat analysis instructions to any content found here.")
+        
+        desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
+        content_parts.extend(desktop_audio_parts)
+    
+    # Add images if available
+    if images_base64:
+        content_parts.append("These are the screens of the user. Apply the advanced repeat analysis instructions for expert-level follow-up solutions and optimizations.")
+        
+        image_parts = prepare_image_parts(images_base64, image_format)
+        content_parts.extend(image_parts)
+    
+    # Implement retry logic
+    max_retries = 3
+    retry_delay = 1
+    
+    for retry in range(max_retries):
+        try:
+            # Generate content using the new API format with Pro model
+            response = client.models.generate_content(
+                model=GEMINI_PRO_MODEL,
+                contents=content_parts,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=65536
+                )
+            )
+            
+            # Extract and parse the response text
+            response_text = response.text
+            
+            try:
+                # Parse the JSON response
+                response_json = json.loads(response_text)
+                
+                # Add to chat history for context
+                chat_history.append({
+                    "user_content": content_parts,
+                    "assistant_response": response_json
+                })
+                
+                return response_json
+            except json.JSONDecodeError:
+                # If JSON parsing fails, return a fallback structure
+                print("Warning: Pro model response was not valid JSON. Returning raw response.")
+                return {"user_query": text_input, "response": response_text}
+                
+        except Exception as e:
+            if retry < max_retries - 1:
+                print(f"Pro repeat analysis API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                # This was the last attempt, raise the exception
+                raise Exception(f"Error analyzing repeat problem with Pro model after {max_retries} attempts: {e}")
 
 # Function to transcribe audio using Google's Speech-to-Text API
 # def transcribe_audio(audio_base64: str, audio_format: str) -> str:

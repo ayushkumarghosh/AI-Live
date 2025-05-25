@@ -159,6 +159,14 @@ class InputOverlay(QtWidgets.QWidget):
 class DraggableOverlay(QtWidgets.QWidget):
     text_submitted = Signal(str)
     pro_text_submitted = Signal(str)  # New signal for pro model text processing
+    
+    # New signals for specialized analysis functions
+    code_analysis_signal = Signal(str)  # For code problem analysis
+    general_analysis_signal = Signal(str)  # For general problem analysis  
+    repeat_analysis_signal = Signal(str)  # For repeat analysis
+    pro_code_analysis_signal = Signal(str)  # For pro code analysis
+    pro_repeat_analysis_signal = Signal(str)  # For pro repeat analysis
+    
     update_conversation_signal = Signal(str)  # New signal for thread-safe updates
     clear_history_signal = Signal()  # Signal to stop processing and clear history
 
@@ -395,18 +403,20 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.screenshot_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.screenshot_button.clicked.connect(self.take_screenshot)
         input_layout.addWidget(self.screenshot_button)
+          # Create a second row for analysis buttons
+        analysis_layout = QtWidgets.QHBoxLayout()
         
-        # Add Analyze button
-        self.analyze_button = QtWidgets.QPushButton("🔍 Analyze")
-        self.analyze_button.setFixedHeight(30)  # Set a fixed height
-        self.analyze_button.setStyleSheet("""
+        # Add Code Analysis button
+        self.code_analyze_button = QtWidgets.QPushButton("🔍 Code Analysis")
+        self.code_analyze_button.setFixedHeight(30)
+        self.code_analyze_button.setStyleSheet("""
             QPushButton {
                 background-color: rgba(70, 130, 180, 200);
                 color: white; 
                 border: none;
                 border-radius: 5px;
-                padding: 0 8px;  /* Adjust padding */
-                font-size: 14px;
+                padding: 0 8px;
+                font-size: 12px;
             }
             QPushButton:hover {
                 background-color: rgba(90, 150, 200, 200);
@@ -415,21 +425,72 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(50, 110, 160, 200);
             }
         """)
-        self.analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.analyze_button.clicked.connect(self.execute_analyze)
-        input_layout.addWidget(self.analyze_button)
+        self.code_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.code_analyze_button.clicked.connect(self.execute_code_analyze)
+        analysis_layout.addWidget(self.code_analyze_button)
         
-        # Add Super Analyze button
-        self.super_analyze_button = QtWidgets.QPushButton("🚀 Super Analyze")
-        self.super_analyze_button.setFixedHeight(30)  # Set a fixed height
-        self.super_analyze_button.setStyleSheet("""
+        # Add General Analysis button
+        self.general_analyze_button = QtWidgets.QPushButton("📝 General Analysis")
+        self.general_analyze_button.setFixedHeight(30)
+        self.general_analyze_button.setStyleSheet("""
             QPushButton {
-                background-color: rgba(75, 0, 130, 200);  /* Indigo color */
+                background-color: rgba(34, 150, 50, 200);
                 color: white; 
                 border: none;
                 border-radius: 5px;
-                padding: 0 8px;  /* Adjust padding */
-                font-size: 14px;
+                padding: 0 8px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: rgba(54, 170, 70, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(14, 130, 30, 200);
+            }
+        """)
+        self.general_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.general_analyze_button.clicked.connect(self.execute_general_analyze)
+        analysis_layout.addWidget(self.general_analyze_button)
+        
+        # Add Repeat Analysis button
+        self.repeat_analyze_button = QtWidgets.QPushButton("🔄 Repeat Analysis")
+        self.repeat_analyze_button.setFixedHeight(30)
+        self.repeat_analyze_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 140, 0, 200);
+                color: white; 
+                border: none;
+                border-radius: 5px;
+                padding: 0 8px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 160, 20, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(235, 120, 0, 200);
+            }
+        """)
+        self.repeat_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.repeat_analyze_button.clicked.connect(self.execute_repeat_analyze)
+        analysis_layout.addWidget(self.repeat_analyze_button)
+        
+        content_layout.addLayout(analysis_layout)
+        
+        # Create a third row for Pro model buttons
+        pro_layout = QtWidgets.QHBoxLayout()
+        
+        # Add Pro Code Analysis button
+        self.pro_code_analyze_button = QtWidgets.QPushButton("🚀 Pro Code Analysis")
+        self.pro_code_analyze_button.setFixedHeight(30)
+        self.pro_code_analyze_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(75, 0, 130, 200);
+                color: white; 
+                border: none;
+                border-radius: 5px;
+                padding: 0 8px;
+                font-size: 12px;
             }
             QPushButton:hover {
                 background-color: rgba(95, 20, 150, 200);
@@ -438,9 +499,34 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(55, 0, 110, 200);
             }
         """)
-        self.super_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.super_analyze_button.clicked.connect(self.execute_super_analyze)
-        input_layout.addWidget(self.super_analyze_button)
+        self.pro_code_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.pro_code_analyze_button.clicked.connect(self.execute_pro_code_analyze)
+        pro_layout.addWidget(self.pro_code_analyze_button)
+        
+        # Add Pro Repeat Analysis button
+        self.pro_repeat_analyze_button = QtWidgets.QPushButton("⚡ Pro Repeat Analysis")
+        self.pro_repeat_analyze_button.setFixedHeight(30)
+        self.pro_repeat_analyze_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(139, 0, 139, 200);
+                color: white; 
+                border: none;
+                border-radius: 5px;
+                padding: 0 8px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: rgba(159, 20, 159, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(119, 0, 119, 200);
+            }
+        """)
+        self.pro_repeat_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.pro_repeat_analyze_button.clicked.connect(self.execute_pro_repeat_analyze)
+        pro_layout.addWidget(self.pro_repeat_analyze_button)
+        
+        content_layout.addLayout(pro_layout)
         
         # Add Clear History button
         self.clear_button = QtWidgets.QPushButton("🗑️ Clear History")
@@ -1061,42 +1147,41 @@ class DraggableOverlay(QtWidgets.QWidget):
                 }
                 QPushButton:pressed {
                     background-color: rgba(170, 120, 60, 200);
-                }
-            """))
+                }            """))
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error taking screenshot: {e}", flush=True)
-
-    def execute_analyze(self):
+    
+    def execute_code_analyze(self):
         try:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Executing analysis with custom prompt", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Executing code analysis with specialized prompt", flush=True)
             
-            # Import and use the analyze_prompt from chat.py
-            from chat import analyze_prompt
+            # Import and use the code_problem_prompt from chat.py
+            from chat import code_problem_prompt
             
-            # Emit the text_submitted signal with the custom prompt
-            self.text_submitted.emit(analyze_prompt)
+            # Emit the code_analysis_signal with the specialized prompt
+            self.code_analysis_signal.emit(code_problem_prompt)
             
             # Visual feedback
-            self.analyze_button.setStyleSheet("""
+            self.code_analyze_button.setStyleSheet("""
                 QPushButton {
                     background-color: rgba(50, 110, 160, 200);
                     color: white; 
                     border: none;
                     border-radius: 5px;
                     padding: 0 8px;
-                    font-size: 14px;
+                    font-size: 12px;
                 }
             """)
             
             # Reset the button style after 500ms
-            QtCore.QTimer.singleShot(500, lambda: self.analyze_button.setStyleSheet("""
+            QtCore.QTimer.singleShot(500, lambda: self.code_analyze_button.setStyleSheet("""
                 QPushButton {
                     background-color: rgba(70, 130, 180, 200);
                     color: white; 
                     border: none;
                     border-radius: 5px;
                     padding: 0 8px;
-                    font-size: 14px;
+                    font-size: 12px;
                 }
                 QPushButton:hover {
                     background-color: rgba(90, 150, 200, 200);
@@ -1107,39 +1192,125 @@ class DraggableOverlay(QtWidgets.QWidget):
             """))
             
         except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing analysis: {e}", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing code analysis: {e}", flush=True)
 
-    def execute_super_analyze(self):
+    def execute_general_analyze(self):
         try:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Executing Super Analysis with Pro model", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Executing general analysis with specialized prompt", flush=True)
             
-            # Import and use the super_analyze_prompt from chat.py
-            from chat import super_analyze_prompt
+            # Import and use the general_analysis_prompt from chat.py
+            from chat import general_analysis_prompt
             
-            # Emit the pro_text_submitted signal with the super analyze prompt
-            self.pro_text_submitted.emit(super_analyze_prompt)
+            # Emit the general_analysis_signal with the specialized prompt
+            self.general_analysis_signal.emit(general_analysis_prompt)
             
             # Visual feedback
-            self.super_analyze_button.setStyleSheet("""
+            self.general_analyze_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(14, 130, 30, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 12px;
+                }
+            """)
+            
+            # Reset the button style after 500ms
+            QtCore.QTimer.singleShot(500, lambda: self.general_analyze_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(34, 150, 50, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(54, 170, 70, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(14, 130, 30, 200);
+                }
+            """))
+            
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing general analysis: {e}", flush=True)
+
+    def execute_repeat_analyze(self):
+        try:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Executing repeat analysis with specialized prompt", flush=True)
+            
+            # Import and use the repeat_analysis_prompt from chat.py
+            from chat import repeat_analysis_prompt
+            
+            # Emit the repeat_analysis_signal with the specialized prompt
+            self.repeat_analysis_signal.emit(repeat_analysis_prompt)
+            
+            # Visual feedback
+            self.repeat_analyze_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(235, 120, 0, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 12px;
+                }
+            """)
+            
+            # Reset the button style after 500ms
+            QtCore.QTimer.singleShot(500, lambda: self.repeat_analyze_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(255, 140, 0, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(255, 160, 20, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(235, 120, 0, 200);
+                }
+            """))
+            
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing repeat analysis: {e}", flush=True)
+
+    def execute_pro_code_analyze(self):
+        try:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Executing Pro code analysis with specialized prompt", flush=True)
+            
+            # Import and use the code_problem_pro_prompt from chat.py
+            from chat import code_problem_pro_prompt
+            
+            # Emit the pro_code_analysis_signal with the specialized prompt
+            self.pro_code_analysis_signal.emit(code_problem_pro_prompt)
+            
+            # Visual feedback
+            self.pro_code_analyze_button.setStyleSheet("""
                 QPushButton {
                     background-color: rgba(55, 0, 110, 200);
                     color: white; 
                     border: none;
                     border-radius: 5px;
                     padding: 0 8px;
-                    font-size: 14px;
+                    font-size: 12px;
                 }
             """)
             
             # Reset the button style after 500ms
-            QtCore.QTimer.singleShot(500, lambda: self.super_analyze_button.setStyleSheet("""
+            QtCore.QTimer.singleShot(500, lambda: self.pro_code_analyze_button.setStyleSheet("""
                 QPushButton {
                     background-color: rgba(75, 0, 130, 200);
                     color: white; 
                     border: none;
                     border-radius: 5px;
                     padding: 0 8px;
-                    font-size: 14px;
+                    font-size: 12px;
                 }
                 QPushButton:hover {
                     background-color: rgba(95, 20, 150, 200);
@@ -1150,7 +1321,50 @@ class DraggableOverlay(QtWidgets.QWidget):
             """))
             
         except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing Super Analysis: {e}", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing Pro code analysis: {e}", flush=True)
+
+    def execute_pro_repeat_analyze(self):
+        try:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚡ Executing Pro repeat analysis with specialized prompt", flush=True)
+            
+            # Import and use the repeat_analysis_pro_prompt from chat.py
+            from chat import repeat_analysis_pro_prompt
+            
+            # Emit the pro_repeat_analysis_signal with the specialized prompt
+            self.pro_repeat_analysis_signal.emit(repeat_analysis_pro_prompt)
+            
+            # Visual feedback
+            self.pro_repeat_analyze_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(119, 0, 119, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 12px;
+                }
+            """)
+            
+            # Reset the button style after 500ms
+            QtCore.QTimer.singleShot(500, lambda: self.pro_repeat_analyze_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(139, 0, 139, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(159, 20, 159, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(119, 0, 119, 200);
+                }
+            """))
+            
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing Pro repeat analysis: {e}", flush=True)
 
     def clear_history(self):
         try:

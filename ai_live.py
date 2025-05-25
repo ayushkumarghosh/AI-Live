@@ -731,11 +731,8 @@ def process_pro_text_input(text_input):
                     # Update the last request time
                     last_request_time = time.time()
                     
-                    # Import the Pro model analysis function
-                    from chat import analyze_with_pro_model
-                    
-                    # Process the text input with all screenshots using the Pro model
-                    response_json = analyze_with_pro_model(
+                    # Process the text input with all screenshots
+                    response_json = analyze_with_text_input(
                         text_input,
                         screenshots,
                         "jpeg",
@@ -744,7 +741,7 @@ def process_pro_text_input(text_input):
                     
                     # Check if this session was canceled before updating UI
                     if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Pro session {session_id} was canceled, discarding results", flush=True)
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Pro text session {session_id} was canceled, discarding results", flush=True)
                         return
                     
                     # Use QtCore.QMetaObject.invokeMethod to safely update UI from background thread
@@ -780,11 +777,11 @@ def process_pro_text_input(text_input):
                     sys.stdout.flush()
                     
             except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in Pro model background thread: {e}", flush=True)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in Pro text analysis background thread: {e}", flush=True)
                 
                 # Check if this session was canceled
                 if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Pro session {session_id} was canceled, not showing error", flush=True)
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Pro text session {session_id} was canceled, not showing error", flush=True)
                     return
                     
                 if overlay:
@@ -819,10 +816,536 @@ def process_pro_text_input(text_input):
         thread.start()
         
     except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up Pro model text input processing: {e}", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up Pro text input processing: {e}", flush=True)
         if overlay:
             overlay.update_status("Error", "#FF0000")
             overlay.update_response({"user_query": text_input, "response": f"Error: {str(e)}"})
+            overlay.set_processing(False)
+
+def process_code_analysis(prompt):
+    """Process code analysis using the regular model with specialized code problem prompt"""
+    global overlay
+    
+    try:
+        # Check if we're already processing something
+        if overlay and overlay.is_processing:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring code analysis", flush=True)
+            return
+        
+        # Set processing state
+        if overlay:
+            overlay.set_processing(True)
+            overlay.update_status("Analyzing code problem...", "#4B0082")
+            
+            # Generate a session ID for this analysis
+            session_id = f"code_{datetime.now().strftime('%H%M%S')}_{hash(prompt)}"
+            if not hasattr(overlay, 'current_session_id'):
+                overlay.current_session_id = None
+            overlay.current_session_id = session_id
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Processing code analysis session {session_id}", flush=True)
+        
+        # Run the API call in a separate thread to avoid blocking the UI
+        def api_call_thread():
+            try:
+                from chat import analyze_code_problem
+                
+                # Take a screenshot if screenshots are enabled
+                screenshots = []
+                if overlay and overlay.screenshot_toggle_button.isChecked():
+                    from overlay import screenshot_queue
+                    while not screenshot_queue.empty():
+                        try:
+                            screenshot = screenshot_queue.get_nowait()
+                            screenshots.append(screenshot)
+                        except queue.Empty:
+                            break
+                    
+                    # If no queued screenshots, capture a new one
+                    if not screenshots:
+                        screenshots = [capture_screenshot()]
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for code analysis", flush=True)
+                
+                # Get desktop audio if enabled
+                desktop_audio = ""
+                if overlay and overlay.desktop_audio_button.isChecked():
+                    from speech_capture import get_desktop_speech_segments
+                    desktop_audio = get_desktop_speech_segments()
+                    if desktop_audio:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for code analysis", flush=True)
+                
+                # Use the prompt as the text input for the analysis
+                response_json = analyze_code_problem(prompt, screenshots, "jpg", desktop_audio)
+                
+                # Check if this session was canceled before updating UI
+                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Code analysis session {session_id} was canceled, discarding results", flush=True)
+                    return
+                
+                # Update overlay with response
+                if overlay and response_json:
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(dict, response_json)
+                    )
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_status",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(str, "Ready"),
+                        QtCore.Q_ARG(str, "#4CAF50")
+                    )
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in code analysis: {e}", flush=True)
+                if overlay:
+                    error_response = {"user_query": prompt, "response": f"Error in code analysis: {str(e)}"}
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(dict, error_response)
+                    )
+            finally:
+                # Always reset processing state when done
+                if overlay:
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "set_processing",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(bool, False)
+                    )
+        
+        # Start the thread
+        thread = threading.Thread(target=api_call_thread)
+        thread.daemon = True
+        thread.start()
+        
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up code analysis processing: {e}", flush=True)
+        if overlay:
+            overlay.update_status("Error", "#FF0000")
+            overlay.update_response({"user_query": prompt, "response": f"Error: {str(e)}"})
+            overlay.set_processing(False)
+
+def process_general_analysis(prompt):
+    """Process general analysis using the regular model with specialized general analysis prompt"""
+    global overlay
+    
+    try:
+        # Check if we're already processing something
+        if overlay and overlay.is_processing:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring general analysis", flush=True)
+            return
+        
+        # Set processing state
+        if overlay:
+            overlay.set_processing(True)
+            overlay.update_status("Analyzing general problem...", "#228B22")
+              # Generate a session ID for this analysis
+            session_id = f"general_{datetime.now().strftime('%H%M%S')}_{hash(prompt)}"
+            if not hasattr(overlay, 'current_session_id'):
+                overlay.current_session_id = None
+            overlay.current_session_id = session_id
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Processing general analysis session {session_id}", flush=True)
+        
+        # Run the API call in a separate thread to avoid blocking the UI
+        def api_call_thread():
+            try:
+                from chat import analyze_general_problem
+                
+                # Take a screenshot if screenshots are enabled
+                screenshots = []
+                if overlay and overlay.screenshot_toggle_button.isChecked():
+                    from overlay import screenshot_queue
+                    while not screenshot_queue.empty():
+                        try:
+                            screenshot = screenshot_queue.get_nowait()
+                            screenshots.append(screenshot)
+                        except queue.Empty:
+                            break
+                    
+                    # If no queued screenshots, capture a new one
+                    if not screenshots:
+                        screenshots = [capture_screenshot()]
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for general analysis", flush=True)
+                
+                # Get desktop audio if enabled
+                desktop_audio = ""
+                if overlay and overlay.desktop_audio_button.isChecked():
+                    from speech_capture import get_desktop_speech_segments
+                    desktop_audio = get_desktop_speech_segments()
+                    if desktop_audio:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for general analysis", flush=True)
+                
+                # Use the prompt as the text input for the analysis
+                response_json = analyze_general_problem(prompt, screenshots, "jpg", desktop_audio)
+                
+                # Check if this session was canceled before updating UI
+                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 General analysis session {session_id} was canceled, discarding results", flush=True)
+                    return
+                
+                # Update overlay with response
+                if overlay and response_json:
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(dict, response_json)
+                    )
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_status",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(str, "Ready"),
+                        QtCore.Q_ARG(str, "#4CAF50")
+                    )
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in general analysis: {e}", flush=True)
+                if overlay:
+                    error_response = {"user_query": prompt, "response": f"Error in general analysis: {str(e)}"}
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(dict, error_response)
+                    )
+            finally:
+                # Always reset processing state when done
+                if overlay:
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "set_processing",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(bool, False)
+                    )
+        
+        # Start the thread
+        thread = threading.Thread(target=api_call_thread)
+        thread.daemon = True
+        thread.start()
+        
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up general analysis processing: {e}", flush=True)
+        if overlay:
+            overlay.update_status("Error", "#FF0000")
+            overlay.update_response({"user_query": prompt, "response": f"Error: {str(e)}"})
+            overlay.set_processing(False)
+
+def process_repeat_analysis(prompt):
+    """Process repeat analysis using the regular model with specialized repeat analysis prompt"""
+    global overlay
+    
+    try:
+        # Check if we're already processing something
+        if overlay and overlay.is_processing:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring repeat analysis", flush=True)
+            return
+        
+        # Set processing state
+        if overlay:
+            overlay.set_processing(True)
+            overlay.update_status("Performing repeat analysis...", "#FF8C00")
+              # Generate a session ID for this analysis
+            session_id = f"repeat_{datetime.now().strftime('%H%M%S')}_{hash(prompt)}"
+            if not hasattr(overlay, 'current_session_id'):
+                overlay.current_session_id = None
+            overlay.current_session_id = session_id
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Processing repeat analysis session {session_id}", flush=True)
+        
+        # Run the API call in a separate thread to avoid blocking the UI
+        def api_call_thread():
+            try:
+                from chat import analyze_repeat_problem
+                
+                # Take a screenshot if screenshots are enabled
+                screenshots = []
+                if overlay and overlay.screenshot_toggle_button.isChecked():
+                    from overlay import screenshot_queue
+                    while not screenshot_queue.empty():
+                        try:
+                            screenshot = screenshot_queue.get_nowait()
+                            screenshots.append(screenshot)
+                        except queue.Empty:
+                            break
+                    
+                    # If no queued screenshots, capture a new one
+                    if not screenshots:
+                        screenshots = [capture_screenshot()]
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for repeat analysis", flush=True)
+                
+                # Get desktop audio if enabled
+                desktop_audio = ""
+                if overlay and overlay.desktop_audio_button.isChecked():
+                    from speech_capture import get_desktop_speech_segments
+                    desktop_audio = get_desktop_speech_segments()
+                    if desktop_audio:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for repeat analysis", flush=True)
+                
+                # Use the prompt as the text input for the analysis
+                response_json = analyze_repeat_problem(prompt, screenshots, "jpg", desktop_audio)
+                
+                # Check if this session was canceled before updating UI
+                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Repeat analysis session {session_id} was canceled, discarding results", flush=True)
+                    return
+                
+                # Update overlay with response
+                if overlay and response_json:
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(dict, response_json)
+                    )
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_status",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(str, "Ready"),
+                        QtCore.Q_ARG(str, "#4CAF50")
+                    )
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in repeat analysis: {e}", flush=True)
+                if overlay:
+                    error_response = {"user_query": prompt, "response": f"Error in repeat analysis: {str(e)}"}
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(dict, error_response)
+                    )
+            finally:
+                # Always reset processing state when done
+                if overlay:
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "set_processing",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(bool, False)
+                    )
+        
+        # Start the thread
+        thread = threading.Thread(target=api_call_thread)
+        thread.daemon = True
+        thread.start()
+        
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up repeat analysis processing: {e}", flush=True)
+        if overlay:
+            overlay.update_status("Error", "#FF0000")
+            overlay.update_response({"user_query": prompt, "response": f"Error: {str(e)}"})
+            overlay.set_processing(False)
+
+def process_pro_code_analysis(prompt):
+    """Process code analysis using the Pro model with advanced techniques"""
+    global overlay
+    
+    try:
+        # Check if we're already processing something
+        if overlay and overlay.is_processing:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring Pro code analysis", flush=True)
+            return
+        
+        # Set processing state
+        if overlay:
+            overlay.set_processing(True)
+            overlay.update_status("Analyzing with Pro model...", "#4B0082")
+              # Generate a session ID for this analysis
+            session_id = f"pro_code_{datetime.now().strftime('%H%M%S')}_{hash(prompt)}"
+            if not hasattr(overlay, 'current_session_id'):
+                overlay.current_session_id = None
+            overlay.current_session_id = session_id
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Processing Pro code analysis session {session_id}", flush=True)
+        
+        # Run the API call in a separate thread to avoid blocking the UI
+        def api_call_thread():
+            try:
+                from chat import analyze_code_problem_pro
+                
+                # Take a screenshot if screenshots are enabled
+                screenshots = []
+                if overlay and overlay.screenshot_toggle_button.isChecked():
+                    from overlay import screenshot_queue
+                    while not screenshot_queue.empty():
+                        try:
+                            screenshot = screenshot_queue.get_nowait()
+                            screenshots.append(screenshot)
+                        except queue.Empty:
+                            break
+                    
+                    # If no queued screenshots, capture a new one
+                    if not screenshots:
+                        screenshots = [capture_screenshot()]
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for Pro code analysis", flush=True)
+                
+                # Get desktop audio if enabled
+                desktop_audio = ""
+                if overlay and overlay.desktop_audio_button.isChecked():
+                    from speech_capture import get_desktop_speech_segments
+                    desktop_audio = get_desktop_speech_segments()
+                    if desktop_audio:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for Pro code analysis", flush=True)
+                
+                # Use the prompt as the text input for the analysis
+                response_json = analyze_code_problem_pro(prompt, screenshots, "jpg", desktop_audio)
+                
+                # Check if this session was canceled before updating UI
+                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Pro code analysis session {session_id} was canceled, discarding results", flush=True)
+                    return
+                
+                # Update overlay with response
+                if overlay and response_json:
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(dict, response_json)
+                    )
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_status",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(str, "Ready"),
+                        QtCore.Q_ARG(str, "#4CAF50")
+                    )
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in Pro code analysis: {e}", flush=True)
+                if overlay:
+                    error_response = {"user_query": prompt, "response": f"Error in Pro code analysis: {str(e)}"}
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(dict, error_response)
+                    )
+            finally:
+                # Always reset processing state when done
+                if overlay:
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "set_processing",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(bool, False)
+                    )
+        
+        # Start the thread
+        thread = threading.Thread(target=api_call_thread)
+        thread.daemon = True
+        thread.start()
+        
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up Pro code analysis processing: {e}", flush=True)
+        if overlay:
+            overlay.update_status("Error", "#FF0000")
+            overlay.update_response({"user_query": prompt, "response": f"Error: {str(e)}"})
+            overlay.set_processing(False)
+
+def process_pro_repeat_analysis(prompt):
+    """Process repeat analysis using the Pro model with advanced techniques"""
+    global overlay
+    
+    try:
+        # Check if we're already processing something
+        if overlay and overlay.is_processing:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring Pro repeat analysis", flush=True)
+            return
+        
+        # Set processing state
+        if overlay:
+            overlay.set_processing(True)
+            overlay.update_status("Pro repeat analysis...", "#8B008B")
+              # Generate a session ID for this analysis
+            session_id = f"pro_repeat_{datetime.now().strftime('%H%M%S')}_{hash(prompt)}"
+            if not hasattr(overlay, 'current_session_id'):
+                overlay.current_session_id = None
+            overlay.current_session_id = session_id
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚡ Processing Pro repeat analysis session {session_id}", flush=True)
+        
+        # Run the API call in a separate thread to avoid blocking the UI
+        def api_call_thread():
+            try:
+                from chat import analyze_repeat_problem_pro
+                
+                # Take a screenshot if screenshots are enabled
+                screenshots = []
+                if overlay and overlay.screenshot_toggle_button.isChecked():
+                    from overlay import screenshot_queue
+                    while not screenshot_queue.empty():
+                        try:
+                            screenshot = screenshot_queue.get_nowait()
+                            screenshots.append(screenshot)
+                        except queue.Empty:
+                            break
+                    
+                    # If no queued screenshots, capture a new one
+                    if not screenshots:
+                        screenshots = [capture_screenshot()]
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for Pro repeat analysis", flush=True)
+                
+                # Get desktop audio if enabled
+                desktop_audio = ""
+                if overlay and overlay.desktop_audio_button.isChecked():
+                    from speech_capture import get_desktop_speech_segments
+                    desktop_audio = get_desktop_speech_segments()
+                    if desktop_audio:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for Pro repeat analysis", flush=True)
+                
+                # Use the prompt as the text input for the analysis
+                response_json = analyze_repeat_problem_pro(prompt, screenshots, "jpg", desktop_audio)
+                
+                # Check if this session was canceled before updating UI
+                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Pro repeat analysis session {session_id} was canceled, discarding results", flush=True)
+                    return
+                
+                # Update overlay with response
+                if overlay and response_json:
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(dict, response_json)
+                    )
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_status",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(str, "Ready"),
+                        QtCore.Q_ARG(str, "#4CAF50")
+                    )
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in Pro repeat analysis: {e}", flush=True)
+                if overlay:
+                    error_response = {"user_query": prompt, "response": f"Error in Pro repeat analysis: {str(e)}"}
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "update_response",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(dict, error_response)
+                    )
+            finally:
+                # Always reset processing state when done
+                if overlay:
+                    QtCore.QMetaObject.invokeMethod(
+                        overlay,
+                        "set_processing",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(bool, False)
+                    )
+        
+        # Start the thread
+        thread = threading.Thread(target=api_call_thread)
+        thread.daemon = True
+        thread.start()
+        
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up Pro repeat analysis processing: {e}", flush=True)
+        if overlay:
+            overlay.update_status("Error", "#FF0000")
+            overlay.update_response({"user_query": prompt, "response": f"Error: {str(e)}"})
             overlay.set_processing(False)
 
 def main():
@@ -838,12 +1361,18 @@ def main():
     global overlay
     overlay = DraggableOverlay()
     overlay.show()
-    
-    # Connect the text_submitted signal to the process_text_input function
+      # Connect the text_submitted signal to the process_text_input function
     overlay.text_submitted.connect(process_text_input)
     
     # Connect the pro_text_submitted signal to the process_pro_text_input function
     overlay.pro_text_submitted.connect(process_pro_text_input)
+    
+    # Connect the new specialized analysis signals
+    overlay.code_analysis_signal.connect(process_code_analysis)
+    overlay.general_analysis_signal.connect(process_general_analysis)
+    overlay.repeat_analysis_signal.connect(process_repeat_analysis)
+    overlay.pro_code_analysis_signal.connect(process_pro_code_analysis)
+    overlay.pro_repeat_analysis_signal.connect(process_pro_repeat_analysis)
     
     # Connect the clear_history signal to stop processing and clear history
     overlay.clear_history_signal.connect(stop_processing_and_clear_history)

@@ -10,50 +10,53 @@ import os
 import json
 import io
 import wave
+import requests
 
 # Google Gemini API setup
 gemini_api_key = os.getenv("GEMINI_API")
+
+# OpenRouter API setup for DeepSeek
+openrouter_api_key = os.getenv("DEEPSEEK")
 
 # Initialize the new GenAI client
 client = genai.Client(api_key=gemini_api_key)
 
 # Model names
 GEMINI_FLASH_MODEL = "gemini-2.5-flash-preview-05-20"
-GEMINI_PRO_MODEL = "gemini-2.5-pro-exp-03-25"
+DEEPSEEK_MODEL = "tngtech/deepseek-r1t-chimera:free"
 
 # Chat instances for maintaining conversation history
 chat_flash = None
-chat_pro = None
+deepseek_chat_history = []  # Separate chat history for DeepSeek
 
 def initialize_chat_instances():
-    """Initialize chat instances for both models"""
-    global chat_flash, chat_pro
+    """Initialize chat instances for Gemini models"""
+    global chat_flash
     chat_flash = client.chats.create(model=GEMINI_FLASH_MODEL)
-    chat_pro = client.chats.create(model=GEMINI_PRO_MODEL)
 
 def reset_chat_history():
     """Reset chat history by creating new chat instances"""
-    global chat_flash, chat_pro
+    global chat_flash, deepseek_chat_history
     chat_flash = client.chats.create(model=GEMINI_FLASH_MODEL)
-    chat_pro = client.chats.create(model=GEMINI_PRO_MODEL)
-    print(f"{timestamp()} Chat history reset for both models")
+    deepseek_chat_history = []
+    print(f"{timestamp()} Chat history reset for all models")
 
 # Separated prompts for different functionalities
 
 # 1. Code problem analysis prompt (regular model)
-code_problem_prompt = "Analyze the desktop audio (if any) along with the screenshots to solve coding problems. If the screenshot or desktop audio contains a coding problem, provide a complete working solution as follows: For a new/first-time question, first briefly explain both the naive approach and the optimized approach (without code), THEN implement both approaches with complete code. If the screenshot shows a LeetCode-like interface or any code cell with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Ensure any code is ready to submit with no missing parts. Always be thorough and complete in your response."
+code_problem_prompt = "Analyze the desktop audio (if any) along with the screenshots to solve coding problems. If the screenshot or desktop audio contains a coding problem, provide a complete working solution as follows: For a new/first-time question, first briefly explain both the naive approach and the optimized approach (without code), THEN implement both approaches with complete code optimizing for time complexity as much as possible. If the screenshot shows a LeetCode-like interface or any code cell with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Ensure any code is ready to submit with no missing parts. Always be thorough and complete in your response."
 
 # 2. Non-coding problem analysis prompt (regular model)
 general_analysis_prompt = "Analyze the desktop audio (if any) along with the screenshots and provide a helpful response for non-coding content. Provide a detailed analysis relevant to what's shown in the screenshot. This could include explaining concepts, answering questions, providing insights, or helping with general tasks. If you don't have a clear answer, fabricate a reasonable and relevant answer instead. Never respond that you don't know or can't answer - always provide some answer. Always be thorough and complete in your response."
 
 # 3. Repeat analysis prompt (regular model) 
-repeat_analysis_prompt = "Analyze the desktop audio (if any) along with the screenshots for follow-up questions or improvements to an existing solution. Briefly explain the improvement first, then focus on implementing the improved optimized solution - don't repeat the naive approach again. If this is a coding problem, provide the enhanced solution with proper explanation. For non-coding content, provide updated or refined analysis based on the new context. Always be thorough and complete in your response."
+repeat_analysis_prompt = "Analyze the desktop audio (if any) along with the screenshots for errors. Briefly explain the improvement first, then focus on implementing the improved optimized solution - don't repeat the naive approach again. If this is a coding problem, provide the enhanced solution with proper explanation. For non-coding content, provide updated or refined analysis based on the new context. Always be thorough and complete in your response."
 
 # 4. Code problem analysis prompt (pro model)
-code_problem_pro_prompt = "Analyze the screenshot and desktop audio (if any) and focus on solving any coding problem shown using advanced techniques. If the screenshot shows a LeetCode-like interface or any code with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Follow these steps: (1) If there's code in the screenshot, understand what it's trying to do and its context, (2) Explain your optimized approach as if explaining to an interviewer - clearly articulate the time and space complexity, trade-offs, and logic behind your solution, (3) Implement the complete optimized solution with proper edge case handling and clean, well-commented code. Always be thorough and provide production-ready solutions."
+code_problem_pro_prompt = "Analyze the screenshot and desktop audio (if any) and focus on solving any coding problem shown optimizing for time complexity as much as possible. If the screenshot shows a LeetCode-like interface or any code with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Follow these steps: (1) If there's code in the screenshot, understand what it's trying to do and its context, (2) Explain your optimized approach as if explaining to an interviewer - clearly articulate the time and space complexity, trade-offs, and logic behind your solution, (3) Implement the complete optimized solution (for time complexity) with proper edge case handling and clean, well-commented code. Always be thorough and complete solutions."
 
 # 5. Repeat analysis prompt (pro model)
-repeat_analysis_pro_prompt = "Analyze the screenshot and desktop audio (if any) for follow-up questions or improvements to coding problems using the Pro model. Focus on implementing enhanced, optimized solutions with advanced algorithms and techniques. Explain the improvements, time and space complexity optimizations, and provide production-ready code with comprehensive error handling. Always be thorough and provide expert-level solutions."
+repeat_analysis_pro_prompt = "Analyze the screenshot and desktop audio (if any) for follow-up questions or improvements to coding problems using the Pro model. Focus if there's any error in the screenshot or desktop audio and implementing enhanced, optimized solutions with advanced algorithms and techniques. Explain the improvements, time and space complexity optimizations, and provide production-ready code with comprehensive error handling. Always be thorough and provide expert-level solutions."
 
 # Legacy prompts (kept for backwards compatibility)
 analyze_prompt = code_problem_prompt  # Default to code problem analysis
@@ -115,12 +118,117 @@ def timestamp():
     """Return current timestamp for logging"""
     return f"[{datetime.now().strftime('%H:%M:%S')}]"
 
+# Transcription functions for DeepSeek integration
+
+def transcribe_images_to_text(images_base64: List[str], image_format: str) -> str:
+    """Transcribe images to text using Gemini 2.0 Flash for DeepSeek integration"""
+    if not images_base64:
+        return ""
+    
+    # Prepare content parts
+    content_parts = []
+    content_parts.append("Please provide a detailed description of what you see in these screenshots. Focus on any text, code, UI elements, error messages, or other relevant content. Be thorough and include all important details that would help someone understand what's happening on the screen.")
+    
+    # Add images
+    image_parts = prepare_image_parts(images_base64, image_format)
+    content_parts.extend(image_parts)
+    
+    max_retries = 3
+    for retry in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_FLASH_MODEL,
+                contents=content_parts,
+                config=types.GenerateContentConfig(
+                    temperature=0.3,
+                    max_output_tokens=8000
+                )
+            )
+            return response.text
+        except Exception as e:
+            if retry < max_retries - 1:
+                print(f"Image transcription failed (attempt {retry+1}/{max_retries}): {e}. Retrying...")
+                time.sleep(1)
+            else:
+                print(f"Failed to transcribe images after {max_retries} attempts: {e}")
+                return "Failed to transcribe image content."
+
+def transcribe_audio_to_text(audio_base64: str, audio_format: str, audio_type: str = "desktop") -> str:
+    """Transcribe audio to text using Gemini 2.0 Flash for DeepSeek integration"""
+    if not audio_base64 or len(audio_base64) <= 100:
+        return ""
+    
+    # Prepare content parts
+    content_parts = []
+    content_parts.append(f"Please transcribe the following {audio_type} audio and provide the exact text/speech content. If there are any questions, problems, or instructions being discussed, make sure to capture them accurately.")
+    
+    # Add audio
+    audio_parts = prepare_audio_parts(audio_base64, audio_format, audio_type)
+    content_parts.extend(audio_parts)
+    
+    max_retries = 3
+    for retry in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_FLASH_MODEL,
+                contents=content_parts,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    max_output_tokens=4000
+                )
+            )
+            return response.text
+        except Exception as e:
+            if retry < max_retries - 1:
+                print(f"Audio transcription failed (attempt {retry+1}/{max_retries}): {e}. Retrying...")
+                time.sleep(1)
+            else:
+                print(f"Failed to transcribe {audio_type} audio after {max_retries} attempts: {e}")
+                return f"Failed to transcribe {audio_type} audio content."
+
+def call_deepseek_api(messages: List[Dict], max_tokens: int = 50000) -> str:
+    """Call DeepSeek API via OpenRouter"""
+    if not openrouter_api_key:
+        raise Exception("OPENROUTER_API_KEY environment variable is not set")
+    
+    headers = {
+        "Authorization": f"Bearer {openrouter_api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "model": DEEPSEEK_MODEL,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0.7
+    }
+    
+    max_retries = 3
+    for retry in range(max_retries):
+        try:
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=data,
+                timeout=60
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result["choices"][0]["message"]["content"]
+        except Exception as e:
+            if retry < max_retries - 1:
+                print(f"DeepSeek API call failed (attempt {retry+1}/{max_retries}): {e}. Retrying...")
+                time.sleep(5)
+            else:
+                raise Exception(f"DeepSeek API call failed after {max_retries} attempts: {e}")
+
 def clear_chat_history():
     """Clear the chat history and start fresh"""
-    global chat_history
+    global chat_history, deepseek_chat_history
     chat_history = []
+    deepseek_chat_history = []
     reset_chat_history()  # Also reset chat instances
-    print(f"{timestamp()} Chat history cleared")
+    print(f"{timestamp()} Chat history cleared for all models")
     return True
 
 def analyze_with_audio_and_image(audio_base64: str, audio_format: str, 
@@ -284,78 +392,67 @@ def analyze_with_text_input(text_input: str,
                 # This was the last attempt, raise the exception
                 raise Exception(f"Error analyzing text input and image after {max_retries} attempts: {e}")
 
-def analyze_with_pro_model(text_input: str, 
-                          images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
-    """Analyze text input and image using Gemini Pro model for advanced coding analysis"""
-    global chat_history, chat_pro
+def analyze_with_deepseek_model(text_input: str, 
+                              images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
+    """Analyze text input using DeepSeek model with transcribed content"""
+    global deepseek_chat_history
     
-    # Ensure chat instance is initialized
-    if chat_pro is None:
-        initialize_chat_instances()
+    # Transcribe images and audio to text
+    image_transcription = transcribe_images_to_text(images_base64, image_format) if images_base64 else ""
+    audio_transcription = transcribe_audio_to_text(desktop_audio_base64, "wav", "desktop") if desktop_audio_base64 else ""
     
-    # Prepare content parts
-    content_parts = []
+    # Build the context message
+    context_parts = []
+    if text_input.strip():
+        context_parts.append(f"User's text query: {text_input}")
     
-    # Add explanatory text for the user's text input
-    content_parts.append(f"This is the user's query (typed text), always prioritize it: {text_input}")
+    if image_transcription:
+        context_parts.append(f"Screen content description: {image_transcription}")
     
-    # Add desktop audio if available
-    if desktop_audio_base64:
-        content_parts.append("This is the desktop audio output from the user's system. You MUST provide a comprehensive answer to ANY question or problem it contains. If it's a coding problem, provide a complete solution with both explanation and implementation. If it's any other type of question or problem, provide a detailed answer with examples if applicable. If you don't know the answer, ALWAYS fabricate a reasonable, detailed answer rather than saying you don't know. Never respond that you can't answer - provide a confident, complete response regardless of the question type.")
+    if audio_transcription:
+        context_parts.append(f"Desktop audio transcription: {audio_transcription}")
+    
+    if not context_parts:
+        context_parts.append("Please provide a helpful response.")
+    
+    context_message = "\n\n".join(context_parts)
+    
+    # Prepare messages for DeepSeek
+    messages = []
+    
+    # Add recent chat history for context (last 10 exchanges)
+    for exchange in deepseek_chat_history[-10:]:
+        messages.append({"role": "user", "content": exchange["user_message"]})
+        messages.append({"role": "assistant", "content": exchange["assistant_response"]})
+    
+    # Add current message
+    messages.append({"role": "user", "content": context_message})
+    
+    try:
+        # Call DeepSeek API
+        response_text = call_deepseek_api(messages, max_tokens=160000)
         
-        desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
-        content_parts.extend(desktop_audio_parts)
-    
-    # Add images if available
-    if images_base64:
-        content_parts.append("These are the screens of the user. Analyze them thoroughly and provide a comprehensive answer to any problem or question shown. If they contain a coding problem, solve it completely with both explanation and code implementation. For any other type of content, provide a detailed analysis or answer. If you don't know, always fabricate a reasonable, confident answer:")
+        # Add to DeepSeek chat history
+        deepseek_chat_history.append({
+            "user_message": context_message,
+            "assistant_response": response_text
+        })
         
-        image_parts = prepare_image_parts(images_base64, image_format)
-        content_parts.extend(image_parts)
-    
-    # Implement retry logic
-    max_retries = 3
-    retry_delay = 1
-    
-    for retry in range(max_retries):
-        try:
-            # Use the chat API with Pro model
-            response = chat_pro.send_message(content=content_parts)
-            
-            # Extract and parse the response text
-            response_text = response.text
-            
-            try:
-                # Parse the JSON response
-                response_json = json.loads(response_text)
-                
-                # Add to chat history for context
-                chat_history.append({
-                    "user_content": content_parts,
-                    "assistant_response": response_json
-                })
-                
-                return response_json
-            except json.JSONDecodeError:
-                # If JSON parsing fails, return a fallback structure
-                print("Warning: Pro model response was not valid JSON. Returning raw response.")
-                response_json = {"user_query": text_input, "response": response_text}
-                
-                # Add to chat history for context
-                chat_history.append({
-                    "user_content": content_parts,
-                    "assistant_response": response_json
-                })
-                
-                return response_json
-                
-        except Exception as e:
-            if retry < max_retries - 1:
-                print(f"Pro analysis API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
-                time.sleep(retry_delay)
-            else:
-                # This was the last attempt, raise the exception
-                raise Exception(f"Error analyzing with Pro model after {max_retries} attempts: {e}")
+        # Keep only last 20 exchanges to manage memory
+        if len(deepseek_chat_history) > 20:
+            deepseek_chat_history = deepseek_chat_history[-20:]
+        
+        return {
+            "user_query": text_input,
+            "response": response_text
+        }
+        
+    except Exception as e:
+        print(f"Error with DeepSeek model: {e}")
+        return {
+            "user_query": text_input,
+            "response": f"Error analyzing with DeepSeek model: {e}"
+        }
 
 # Specialized analysis functions for separated functionalities
 
@@ -601,143 +698,125 @@ def analyze_repeat_problem(text_input: str,
 
 def analyze_code_problem_pro(text_input: str, 
                             images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
-    """Analyze coding problems using the Pro model with advanced techniques"""
-    global chat_history
+    """Analyze coding problems using DeepSeek model with advanced techniques"""
+    global deepseek_chat_history
     
-    # Prepare content parts
-    content_parts = []
+    # Transcribe images and audio to text
+    image_transcription = transcribe_images_to_text(images_base64, image_format) if images_base64 else ""
+    audio_transcription = transcribe_audio_to_text(desktop_audio_base64, "wav", "desktop") if desktop_audio_base64 else ""
     
-    # Add the specific pro coding problem prompt as the main instruction
-    content_parts.append(code_problem_pro_prompt)
+    # Build the context message with pro coding prompt
+    context_parts = []
+    context_parts.append(code_problem_pro_prompt)
     
-    # Add explanatory text for the user's text input
-    content_parts.append(f"This is the user's query (typed text), always prioritize it: {text_input}")
+    if text_input.strip():
+        context_parts.append(f"User's text query: {text_input}")
     
-    # Add desktop audio if available
-    if desktop_audio_base64:
-        content_parts.append("This is the desktop audio output from the user's system. Apply the advanced coding problem analysis instructions to any problems found here.")
+    if image_transcription:
+        context_parts.append(f"Screen content description: {image_transcription}")
+    
+    if audio_transcription:
+        context_parts.append(f"Desktop audio transcription: {audio_transcription}")
+    
+    context_message = "\n\n".join(context_parts)
+    
+    # Prepare messages for DeepSeek
+    messages = []
+    
+    # Add recent chat history for context (last 8 exchanges for more detailed context)
+    for exchange in deepseek_chat_history[-8:]:
+        messages.append({"role": "user", "content": exchange["user_message"]})
+        messages.append({"role": "assistant", "content": exchange["assistant_response"]})
+    
+    # Add current message
+    messages.append({"role": "user", "content": context_message})
+    
+    try:
+        # Call DeepSeek API with higher token limit for detailed code analysis
+        response_text = call_deepseek_api(messages, max_tokens=12000)
         
-        desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
-        content_parts.extend(desktop_audio_parts)
-    
-    # Add images if available
-    if images_base64:
-        content_parts.append("These are the screens of the user. Apply the advanced coding problem analysis instructions to solve coding problems with expert-level techniques.")
+        # Add to DeepSeek chat history
+        deepseek_chat_history.append({
+            "user_message": context_message,
+            "assistant_response": response_text
+        })
         
-        image_parts = prepare_image_parts(images_base64, image_format)
-        content_parts.extend(image_parts)
-    
-    # Implement retry logic
-    max_retries = 3
-    retry_delay = 1
-    
-    for retry in range(max_retries):
-        try:
-            # Generate content using the new API format with Pro model
-            response = client.models.generate_content(
-                model=GEMINI_PRO_MODEL,
-                contents=content_parts,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=65536
-                )
-            )
-            
-            # Extract and parse the response text
-            response_text = response.text
-            
-            try:
-                # Parse the JSON response
-                response_json = json.loads(response_text)
-                
-                # Add to chat history for context
-                chat_history.append({
-                    "user_content": content_parts,
-                    "assistant_response": response_json
-                })
-                
-                return response_json
-            except json.JSONDecodeError:
-                # If JSON parsing fails, return a fallback structure
-                print("Warning: Pro model response was not valid JSON. Returning raw response.")
-                return {"user_query": text_input, "response": response_text}
-                
-        except Exception as e:
-            if retry < max_retries - 1:
-                print(f"Pro code analysis API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
-                time.sleep(retry_delay)
-            else:
-                # This was the last attempt, raise the exception
-                raise Exception(f"Error analyzing code problem with Pro model after {max_retries} attempts: {e}")
+        # Keep only last 20 exchanges to manage memory
+        if len(deepseek_chat_history) > 20:
+            deepseek_chat_history = deepseek_chat_history[-20:]
+        
+        return {
+            "user_query": text_input,
+            "response": response_text
+        }
+        
+    except Exception as e:
+        print(f"Error with DeepSeek Pro code analysis: {e}")
+        return {
+            "user_query": text_input,
+            "response": f"Error analyzing code problem with DeepSeek Pro: {e}"
+        }
 
 def analyze_repeat_problem_pro(text_input: str, 
                               images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
-    """Analyze follow-up questions or improvements using the Pro model with advanced techniques"""
-    global chat_history
+    """Analyze follow-up questions or improvements using DeepSeek model with advanced techniques"""
+    global deepseek_chat_history
     
-    # Prepare content parts
-    content_parts = []
+    # Transcribe images and audio to text
+    image_transcription = transcribe_images_to_text(images_base64, image_format) if images_base64 else ""
+    audio_transcription = transcribe_audio_to_text(desktop_audio_base64, "wav", "desktop") if desktop_audio_base64 else ""
     
-    # Add the specific pro repeat analysis prompt as the main instruction
-    content_parts.append(repeat_analysis_pro_prompt)
+    # Build the context message with pro repeat analysis prompt
+    context_parts = []
+    context_parts.append(repeat_analysis_pro_prompt)
     
-    # Add explanatory text for the user's text input
-    content_parts.append(f"This is the user's query (typed text), always prioritize it: {text_input}")
+    if text_input.strip():
+        context_parts.append(f"User's text query: {text_input}")
     
-    # Add desktop audio if available
-    if desktop_audio_base64:
-        content_parts.append("This is the desktop audio output from the user's system. Apply the advanced repeat analysis instructions to any content found here.")
+    if image_transcription:
+        context_parts.append(f"Screen content description: {image_transcription}")
+    
+    if audio_transcription:
+        context_parts.append(f"Desktop audio transcription: {audio_transcription}")
+    
+    context_message = "\n\n".join(context_parts)
+    
+    # Prepare messages for DeepSeek
+    messages = []
+    
+    # Add recent chat history for context (last 10 exchanges for follow-up context)
+    for exchange in deepseek_chat_history[-10:]:
+        messages.append({"role": "user", "content": exchange["user_message"]})
+        messages.append({"role": "assistant", "content": exchange["assistant_response"]})
+    
+    # Add current message
+    messages.append({"role": "user", "content": context_message})
+    
+    try:
+        # Call DeepSeek API with higher token limit for detailed analysis
+        response_text = call_deepseek_api(messages, max_tokens=10000)
         
-        desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
-        content_parts.extend(desktop_audio_parts)
-    
-    # Add images if available
-    if images_base64:
-        content_parts.append("These are the screens of the user. Apply the advanced repeat analysis instructions for expert-level follow-up solutions and optimizations.")
+        # Add to DeepSeek chat history
+        deepseek_chat_history.append({
+            "user_message": context_message,
+            "assistant_response": response_text
+        })
         
-        image_parts = prepare_image_parts(images_base64, image_format)
-        content_parts.extend(image_parts)
-    
-    # Implement retry logic
-    max_retries = 3
-    retry_delay = 1
-    
-    for retry in range(max_retries):
-        try:
-            # Generate content using the new API format with Pro model
-            response = client.models.generate_content(
-                model=GEMINI_PRO_MODEL,
-                contents=content_parts,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=65536
-                )
-            )
-            
-            # Extract and parse the response text
-            response_text = response.text
-            
-            try:
-                # Parse the JSON response
-                response_json = json.loads(response_text)
-                
-                # Add to chat history for context
-                chat_history.append({
-                    "user_content": content_parts,
-                    "assistant_response": response_json
-                })
-                
-                return response_json
-            except json.JSONDecodeError:
-                # If JSON parsing fails, return a fallback structure
-                print("Warning: Pro model response was not valid JSON. Returning raw response.")
-                return {"user_query": text_input, "response": response_text}
-                
-        except Exception as e:
-            if retry < max_retries - 1:
-                print(f"Pro repeat analysis API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
-                time.sleep(retry_delay)
-            else:
-                # This was the last attempt, raise the exception
-                raise Exception(f"Error analyzing repeat problem with Pro model after {max_retries} attempts: {e}")
+        # Keep only last 20 exchanges to manage memory
+        if len(deepseek_chat_history) > 20:
+            deepseek_chat_history = deepseek_chat_history[-20:]
+        
+        return {
+            "user_query": text_input,
+            "response": response_text
+        }
+        
+    except Exception as e:
+        print(f"Error with DeepSeek Pro repeat analysis: {e}")
+        return {
+            "user_query": text_input,
+            "response": f"Error analyzing repeat problem with DeepSeek Pro: {e}"
+        }
 
 # Function to transcribe audio using Google's Speech-to-Text API
 # def transcribe_audio(audio_base64: str, audio_format: str) -> str:

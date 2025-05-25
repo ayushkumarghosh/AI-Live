@@ -835,7 +835,7 @@ def process_code_analysis(prompt):
         # Set processing state
         if overlay:
             overlay.set_processing(True)
-            overlay.update_status("Analyzing code problem...", "#4B0082")
+            overlay.update_status("Analyzing code problem...", "#00ADD8")
             
             # Generate a session ID for this analysis
             session_id = f"code_{datetime.now().strftime('%H%M%S')}_{hash(prompt)}"

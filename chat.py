@@ -21,6 +21,23 @@ client = genai.Client(api_key=gemini_api_key)
 GEMINI_FLASH_MODEL = "gemini-2.5-flash-preview-05-20"
 GEMINI_PRO_MODEL = "gemini-2.5-pro-exp-03-25"
 
+# Chat instances for maintaining conversation history
+chat_flash = None
+chat_pro = None
+
+def initialize_chat_instances():
+    """Initialize chat instances for both models"""
+    global chat_flash, chat_pro
+    chat_flash = client.chats.create(model=GEMINI_FLASH_MODEL)
+    chat_pro = client.chats.create(model=GEMINI_PRO_MODEL)
+
+def reset_chat_history():
+    """Reset chat history by creating new chat instances"""
+    global chat_flash, chat_pro
+    chat_flash = client.chats.create(model=GEMINI_FLASH_MODEL)
+    chat_pro = client.chats.create(model=GEMINI_PRO_MODEL)
+    print(f"{timestamp()} Chat history reset for both models")
+
 # Separated prompts for different functionalities
 
 # 1. Code problem analysis prompt (regular model)
@@ -41,6 +58,9 @@ repeat_analysis_pro_prompt = "Analyze the screenshot and desktop audio (if any) 
 # Legacy prompts (kept for backwards compatibility)
 analyze_prompt = code_problem_prompt  # Default to code problem analysis
 super_analyze_prompt = code_problem_pro_prompt  # Default to pro code analysis
+
+# Initialize chat instances
+initialize_chat_instances()
 
 # Chat history to maintain context across multiple requests
 chat_history = []
@@ -99,6 +119,7 @@ def clear_chat_history():
     """Clear the chat history and start fresh"""
     global chat_history
     chat_history = []
+    reset_chat_history()  # Also reset chat instances
     print(f"{timestamp()} Chat history cleared")
     return True
 
@@ -266,7 +287,11 @@ def analyze_with_text_input(text_input: str,
 def analyze_with_pro_model(text_input: str, 
                           images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
     """Analyze text input and image using Gemini Pro model for advanced coding analysis"""
-    global chat_history
+    global chat_history, chat_pro
+    
+    # Ensure chat instance is initialized
+    if chat_pro is None:
+        initialize_chat_instances()
     
     # Prepare content parts
     content_parts = []
@@ -276,7 +301,7 @@ def analyze_with_pro_model(text_input: str,
     
     # Add desktop audio if available
     if desktop_audio_base64:
-        content_parts.append("This is the desktop audio output from the user's system. You MUST provide a comprehensive answer to ANY question or problem it contains. If it's a coding problem, provide a complete solution with both explanation and implementation. If it's any other type of question or problem, provide a detailed answer with examples if applicable. If you don't know the answer, ALWAYS fabricate a reasonable, detailed answer rather than saying you don't know. Never respond that you can't answer - provide a confident, complete response regardless of the question type:" + super_analyze_prompt)
+        content_parts.append("This is the desktop audio output from the user's system. You MUST provide a comprehensive answer to ANY question or problem it contains. If it's a coding problem, provide a complete solution with both explanation and implementation. If it's any other type of question or problem, provide a detailed answer with examples if applicable. If you don't know the answer, ALWAYS fabricate a reasonable, detailed answer rather than saying you don't know. Never respond that you can't answer - provide a confident, complete response regardless of the question type.")
         
         desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
         content_parts.extend(desktop_audio_parts)
@@ -294,14 +319,8 @@ def analyze_with_pro_model(text_input: str,
     
     for retry in range(max_retries):
         try:
-            # Generate content using the new API format with Pro model
-            response = client.models.generate_content(
-                model=GEMINI_PRO_MODEL,
-                contents=content_parts,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=65536
-                )
-            )
+            # Use the chat API with Pro model
+            response = chat_pro.send_message(content=content_parts)
             
             # Extract and parse the response text
             response_text = response.text
@@ -320,7 +339,15 @@ def analyze_with_pro_model(text_input: str,
             except json.JSONDecodeError:
                 # If JSON parsing fails, return a fallback structure
                 print("Warning: Pro model response was not valid JSON. Returning raw response.")
-                return {"user_query": text_input, "response": response_text}
+                response_json = {"user_query": text_input, "response": response_text}
+                
+                # Add to chat history for context
+                chat_history.append({
+                    "user_content": content_parts,
+                    "assistant_response": response_json
+                })
+                
+                return response_json
                 
         except Exception as e:
             if retry < max_retries - 1:

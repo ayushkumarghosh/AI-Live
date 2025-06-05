@@ -1405,7 +1405,10 @@ def process_general_analysis_no_thinking(prompt):
             desktop_audio_base64 = ""
             if overlay and overlay.desktop_audio_button.isChecked():
                 # Desktop audio processing would go here if available
-                pass
+                from speech_capture import get_desktop_speech_segments
+                desktop_audio_base64 = get_desktop_speech_segments() 
+                if desktop_audio_base64:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for no-thinking analysis", flush=True)
             
             # Call the core chat processing function with no thinking budget
             from chat import analyze_general_problem_no_thinking

@@ -172,6 +172,9 @@ class DraggableOverlay(QtWidgets.QWidget):
 
     # New signal for general analysis with no thinking
     general_analysis_no_thinking_signal = Signal(str)
+    
+    # New signal for interview answers
+    interview_answer_signal = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -554,6 +557,34 @@ class DraggableOverlay(QtWidgets.QWidget):
         
         content_layout.addLayout(pro_layout)
         
+        # Create a fourth row for utility buttons
+        utils_layout = QtWidgets.QHBoxLayout()
+        
+        # Add Interview Answer button
+        self.interview_answer_button = QtWidgets.QPushButton("🎤 Interview Answer")
+        self.interview_answer_button.setFixedHeight(30)
+        self.interview_answer_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(153, 50, 204, 200); /* DarkOrchid */
+                color: white; 
+                border: none;
+                border-radius: 5px;
+                padding: 0 8px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: rgba(173, 70, 224, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(133, 30, 184, 200);
+            }
+        """)
+        self.interview_answer_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.interview_answer_button.clicked.connect(self.execute_interview_answer)
+        utils_layout.addWidget(self.interview_answer_button)
+        
+        content_layout.addLayout(utils_layout)
+
         # Add Clear History button
         self.clear_button = QtWidgets.QPushButton("🗑️ Clear History")
         self.clear_button.setFixedHeight(30)  # Set a fixed height
@@ -1491,6 +1522,46 @@ class DraggableOverlay(QtWidgets.QWidget):
             
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing general analysis (no thinking): {e}", flush=True)
+
+    def execute_interview_answer(self):
+        try:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 Executing interview answer", flush=True)
+            
+            # Emit the interview_answer_signal
+            self.interview_answer_signal.emit("")
+            
+            # Visual feedback
+            self.interview_answer_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(173, 70, 224, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 12px;
+                }
+            """)
+            
+            # Reset the button style after 500ms
+            QtCore.QTimer.singleShot(500, lambda: self.interview_answer_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(153, 50, 204, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(173, 70, 224, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(133, 30, 184, 200);
+                }
+            """))
+            
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing interview answer: {e}", flush=True)
 
 # ----------------------------------------------------------------
 # Main entry point.

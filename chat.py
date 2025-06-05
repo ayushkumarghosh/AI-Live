@@ -901,50 +901,80 @@ def analyze_general_problem_no_thinking(text_input: str,
                 # This was the last attempt, raise the exception
                 raise Exception(f"Error analyzing general problem after {max_retries} attempts: {e}")
 
-# Function to transcribe audio using Google's Speech-to-Text API
-# def transcribe_audio(audio_base64: str, audio_format: str) -> str:
-#     """
-#     Transcribe audio using Google's Speech-to-Text API
-#     """
-#     # Decode the base64 audio
-#     audio_content = base64.b64decode(audio_base64)
-#     
-#     # Configure the speech recognition request
-#     audio = speech.RecognitionAudio(content=audio_content)
-#     config = speech.RecognitionConfig(
-#         encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-#         sample_rate_hertz=16000,  # Adjust based on your audio
-#         language_code="en-US",
-#     )
-#     
-#     # Make the API call
-#     response = speech_client.recognize(config=config, audio=audio)
-#     
-#     # Extract and return the transcript
-#     transcript = ""
-#     for result in response.results:
-#         transcript += result.alternatives[0].transcript
-#     
-#     return transcript
-
-# def process_stream_response(response):
-#     """Process a streaming response from Gemini"""
-#     full_response = ""
-#     for chunk in response:
-#         if chunk.text:
-#             content = chunk.text
-#             full_response += content
-#             print(content, end="", flush=True)
-#     print()  # Add a newline at the end
+# Function to process interview questions from desktop audio
+def answer_interview_question(desktop_audio_base64: str = ""):
+    """Process desktop audio to answer interview questions"""
+    global chat_history
     
-#     try:
-#         # Parse the JSON response
-#         response_json = json.loads(full_response)
-#         return response_json
-#     except json.JSONDecodeError:
-#         # If JSON parsing fails, return the raw response
-#         print("Warning: Response was not valid JSON. Returning raw response.")
-#         return {"user_query": "Could not extract query", "response": full_response}
+    # Prepare content parts
+    content_parts = []
+    
+    # Add a specialized prompt for interview questions
+    interview_prompt = "Listen to the desktop audio and answer any interview questions being asked. Respond as if you are the candidate being interviewed for a software engineering role. Give thorough, professional answers that showcase relevant skills and experience. Be concise but thorough, and maintain a professional tone throughout. Disregard any other sounds from the desktop audio only consider the speech. ALWAYS ANSWER FIRST WITHOUT EXPLAINING YOUR ANSWER THEN EXPLAIN YOUR ANSWER. If you don't know the answer, fabricate a relevant and reasonable answer instead. Never respond that you don't know or can't answer—always provide some answer."
+    content_parts.append(interview_prompt)
+    
+    # Add desktop audio if available
+    if desktop_audio_base64:
+        content_parts.append("This is the desktop audio containing the interview question:")
+        
+        desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
+        content_parts.extend(desktop_audio_parts)
+    else:
+        # If no audio, provide a fallback message
+        content_parts.append("No audio was detected. Please provide a brief professional introduction.")
+    
+    # Implement retry logic
+    max_retries = 3
+    retry_delay = 1
+    
+    for retry in range(max_retries):
+        try:
+            # Generate content using gemini-2.0-flash model
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=content_parts,
+                config=types.GenerateContentConfig(
+                    temperature=0.4,  # Lower temperature for more professional responses
+                    max_output_tokens=20000,
+                    response_mime_type="application/json",
+                    response_schema={
+                        "type": "object",
+                        "properties": {
+                            # "user_query": {"type": "string", "description": "The interview question detected in the audio"},
+                            "user_query": {"type": "string", "description": "The transcription of the audio"},
+                            "response": {"type": "string", "description": "Your professional interview response"}
+                        },
+                        "required": ["user_query", "response"]
+                    }
+                )
+            )
+            
+            # Extract and parse the response text
+            response_text = response.text
+            
+            try:
+                # Parse the JSON response
+                response_json = json.loads(response_text)
+                
+                # Add to chat history for context
+                chat_history.append({
+                    "user_content": content_parts,
+                    "assistant_response": response_json
+                })
+                
+                return response_json
+            except json.JSONDecodeError:
+                # If JSON parsing fails, return a fallback structure
+                print("Warning: Response was not valid JSON. Returning raw response.")
+                return {"user_query": "Interview Question", "response": response_text}
+                
+        except Exception as e:
+            if retry < max_retries - 1:
+                print(f"Interview answer API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                # This was the last attempt, raise the exception
+                raise Exception(f"Error answering interview question after {max_retries} attempts: {e}")
 
 # Example usage
 # if __name__ == "__main__":

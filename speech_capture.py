@@ -26,65 +26,31 @@ vad = VADIterator(model, sampling_rate=RATE)
 desktop_audio_buffer = []
 MAX_DESKTOP_BUFFER_DURATION = 600  # Max seconds of desktop audio to keep
 
-# Storage for detected speech from desktop audio
-desktop_speech_segments = collections.deque(maxlen=10)  # Store up to 10 recent speech segments
+# Storage for continuous desktop audio (last 30 seconds)
+DESKTOP_CONTINUOUS_BUFFER_DURATION = 120  # Max seconds of continuous desktop audio to keep
+desktop_continuous_buffer = collections.deque(maxlen=int(DESKTOP_CONTINUOUS_BUFFER_DURATION * RATE / CHUNK))  # ~30 seconds at 16kHz
 
 # Flag to control the desktop audio capture thread
 desktop_capture_running = False
 
-# Manual speech detection states for desktop audio
-desktop_speech_state = {
-    "is_speech": False,
-    "speech_prob": 0.0,
-    "silence_duration": 0,
-    "speech_duration": 0, 
-    "recording": False,
-    "frames": [],
-    "silence_start": None
-}
+# No longer needed for manual speech detection
 
 def detect_speech(audio_float, is_desktop=False):
     """
     Detect speech in audio using a stateful algorithm instead of VAD iterator.
     This is a simplified speech detection algorithm that doesn't rely on the VAD model.
+    Note: For desktop audio, we no longer detect speech segments as we now capture continuously.
     """
-    # Energy-based speech detection
+    # Only used for microphone audio now
+    if is_desktop:
+        return None
+        
+    # Energy-based speech detection for microphone
     energy = np.mean(np.abs(audio_float))
     is_speech = energy > 0.01  # Simple threshold-based detection
     
-    # Get the appropriate state object
-    state = desktop_speech_state if is_desktop else {}
-    
-    # Create an event similar to what VAD would return
-    event = None
-    
-    # For desktop audio, update the state
-    if is_desktop:
-        # Update silence/speech duration
-        if is_speech:
-            desktop_speech_state["silence_duration"] = 0
-            desktop_speech_state["speech_duration"] += 1
-            
-            # If we've seen enough speech frames and weren't already in speech mode
-            if desktop_speech_state["speech_duration"] > 3 and not desktop_speech_state["is_speech"]:
-                desktop_speech_state["is_speech"] = True
-                event = "start"
-        else:
-            desktop_speech_state["speech_duration"] = 0
-            desktop_speech_state["silence_duration"] += 1
-            
-            # If we've seen enough silence frames and were in speech mode
-            if desktop_speech_state["silence_duration"] > 5 and desktop_speech_state["is_speech"]:
-                desktop_speech_state["is_speech"] = False
-                event = "end"
-    
-    # Return the detection result
-    if event == "start":
-        return {"start": True}
-    elif event == "end":
-        return {"end": True}
-    else:
-        return None
+    # For microphone audio this will be handled by the VAD model
+    return None
 
 def record_speech(audio_queue=None):
     p = pyaudio.PyAudio()
@@ -312,33 +278,7 @@ def capture_desktop_audio_with_sounddevice():
                 # Scale float32 (-1.0 to 1.0) to int16 values
                 int16_data = (mono_data * 32767).astype(np.int16)
                 
-                # Detect speech in desktop audio without using the VAD model
-                speech_event = detect_speech(mono_data, is_desktop=True)
-                
-                # Handle desktop speech events
-                if speech_event is not None:
-                    if 'start' in speech_event:
-                        if not desktop_speech_state["recording"]:
-                            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Speech detected in desktop audio")
-                            desktop_speech_state["recording"] = True
-                            desktop_speech_state["silence_start"] = None
-                            desktop_speech_state["frames"] = []
-                    elif 'end' in speech_event:
-                        desktop_speech_state["silence_start"] = time.time()
-                
-                # Record desktop audio if speech is detected
-                if desktop_speech_state["recording"]:
-                    desktop_speech_state["frames"].append(int16_data.tobytes())
-                
-                # Check for silence timeout after desktop speech ends
-                if desktop_speech_state["recording"] and desktop_speech_state["silence_start"] is not None:
-                    if time.time() - desktop_speech_state["silence_start"] > SILENCE_LIMIT:
-                        desktop_speech_state["recording"] = False
-                        
-                        # Save the desktop speech segment
-                        if desktop_speech_state["frames"]:
-                            save_desktop_speech_segment(desktop_speech_state["frames"])
-                            desktop_speech_state["frames"] = []
+                # No longer detect speech in desktop audio - just continuously capture
                 
                 # Calculate how many samples can fit in the remaining buffer
                 samples_to_copy = min(len(int16_data), max_buffer_samples - buffer_position)
@@ -353,8 +293,11 @@ def capture_desktop_audio_with_sounddevice():
                     buffer_position = 0
                 
                 # Store the audio in the global buffer
-                global desktop_audio_buffer
+                global desktop_audio_buffer, desktop_continuous_buffer
                 desktop_audio_buffer = buffer.copy()  # Store the entire buffer
+                
+                # Add to continuous buffer
+                desktop_continuous_buffer.append(int16_data.tobytes())
             
             # Start capturing audio from Stereo Mix
             with sd.InputStream(
@@ -377,33 +320,7 @@ def capture_desktop_audio_with_sounddevice():
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture error: {e}")
         try_pyaudio_fallback()
 
-def save_desktop_speech_segment(frames):
-    """Save a desktop speech segment to the global list"""
-    global desktop_speech_segments
-    
-    if not frames:
-        return
-    
-    audio_data = b''.join(frames)
-    wav_io = io.BytesIO()
-    wf = wave.open(wav_io, 'wb')
-    wf.setnchannels(CHANNELS)
-    wf.setsampwidth(2)  # 16-bit audio
-    wf.setframerate(RATE)
-    wf.writeframes(audio_data)
-    wf.close()
-    wav_io.seek(0)
-    base64_audio = base64.b64encode(wav_io.read()).decode('utf-8')
-    
-    duration = len(frames) * CHUNK / RATE
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 💾 Saved desktop speech segment: {duration:.1f} seconds")
-    
-    # Add timestamp and audio data
-    desktop_speech_segments.append({
-        "timestamp": datetime.now().isoformat(),
-        "audio": base64_audio,
-        "duration": duration
-    })
+# Function no longer needed as we don't save speech segments
 
 def try_pyaudio_fallback():
     """Try capturing desktop audio using PyAudio as a fallback"""
@@ -447,17 +364,7 @@ def try_pyaudio_fallback():
         # Initialize buffer
         max_frames = int(MAX_DESKTOP_BUFFER_DURATION * RATE / CHUNK)
         
-        # Reset the desktop speech state for PyAudio capture
-        global desktop_speech_state
-        desktop_speech_state = {
-            "is_speech": False,
-            "speech_prob": 0.0,
-            "silence_duration": 0,
-            "speech_duration": 0,
-            "recording": False,
-            "frames": [],
-            "silence_start": None
-        }
+        # No longer need to track speech state for desktop audio
         
         # Continuous capture loop
         while desktop_capture_running:
@@ -477,38 +384,12 @@ def try_pyaudio_fallback():
                 # Keep buffer size within limits
                 if len(desktop_audio_buffer) > max_frames:
                     desktop_audio_buffer = desktop_audio_buffer[-max_frames:]
+                    
+                # Add to continuous buffer (always keeps the last 30 seconds)
+                global desktop_continuous_buffer
+                desktop_continuous_buffer.append(audio_chunk)
                 
-                # Process for speech detection
-                audio_array = np.frombuffer(audio_chunk, dtype=np.int16).copy()
-                audio_float = audio_array.astype(np.float32) / 32768.0  # Normalize to [-1, 1]
-                
-                # Detect speech using our custom function
-                speech_event = detect_speech(audio_float, is_desktop=True)
-                
-                # Handle desktop speech events
-                if speech_event is not None:
-                    if 'start' in speech_event:
-                        if not desktop_speech_state["recording"]:
-                            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Speech detected in desktop audio")
-                            desktop_speech_state["recording"] = True
-                            desktop_speech_state["silence_start"] = None
-                            desktop_speech_state["frames"] = []
-                    elif 'end' in speech_event:
-                        desktop_speech_state["silence_start"] = time.time()
-                
-                # Record desktop audio if speech is detected
-                if desktop_speech_state["recording"]:
-                    desktop_speech_state["frames"].append(audio_chunk)
-                
-                # Check for silence timeout after desktop speech ends
-                if desktop_speech_state["recording"] and desktop_speech_state["silence_start"] is not None:
-                    if time.time() - desktop_speech_state["silence_start"] > SILENCE_LIMIT:
-                        desktop_speech_state["recording"] = False
-                        
-                        # Save the desktop speech segment
-                        if desktop_speech_state["frames"]:
-                            save_desktop_speech_segment(desktop_speech_state["frames"])
-                            desktop_speech_state["frames"] = []
+                # No longer need to process for speech detection - just capture continuously
                 
                 # Avoid high CPU usage
                 time.sleep(0.001)
@@ -528,48 +409,41 @@ def try_pyaudio_fallback():
         desktop_audio_buffer = []
 
 def get_desktop_speech_segments():
-    """Get all stored desktop speech segments as a single base64 WAV"""
-    global desktop_speech_segments
+    """Get the last 30 seconds of continuous desktop audio as a single base64 WAV"""
+    global desktop_continuous_buffer
     
-    if not desktop_speech_segments:
+    if not desktop_continuous_buffer:
         return ""
     
     try:
-        # Collect all speech segments
-        all_segments = []
-        for segment in desktop_speech_segments:
-            all_segments.append(base64.b64decode(segment["audio"]))
+        # Combine all audio chunks in the continuous buffer
+        audio_data = b''.join(desktop_continuous_buffer)
         
-        if not all_segments:
+        if not audio_data:
             return ""
         
-        # Merge all segments into one WAV file
+        # Create a WAV file from the continuous buffer
         combined_wav = io.BytesIO()
         with wave.open(combined_wav, 'wb') as wf:
             wf.setnchannels(CHANNELS)
             wf.setsampwidth(2)  # 16-bit audio
             wf.setframerate(RATE)
-            
-            # Write all segments to the WAV file
-            for segment_data in all_segments:
-                # Skip the WAV header and just write the audio data
-                with wave.open(io.BytesIO(segment_data), 'rb') as segment_wav:
-                    wf.writeframes(segment_wav.readframes(segment_wav.getnframes()))
+            wf.writeframes(audio_data)
         
         combined_wav.seek(0)
         base64_audio = base64.b64encode(combined_wav.read()).decode('utf-8')
         
-        # Log info about segments
-        total_duration = sum(segment["duration"] for segment in desktop_speech_segments)
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📤 Sending {len(desktop_speech_segments)} desktop speech segments ({total_duration:.1f}s total)")
+        # Log info about the continuous buffer
+        buffer_duration = len(desktop_continuous_buffer) * CHUNK / RATE
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📤 Sending {buffer_duration:.1f}s of continuous desktop audio")
         
-        # Clear the segments after sending
-        desktop_speech_segments.clear()
+        # Clear the buffer after sending
+        desktop_continuous_buffer.clear()
         
         return base64_audio
         
     except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error combining desktop speech segments: {e}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error processing continuous desktop audio: {e}")
         return ""
 
 def get_desktop_audio_buffer(p):

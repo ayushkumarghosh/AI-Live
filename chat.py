@@ -47,7 +47,7 @@ def reset_chat_history():
 code_problem_prompt = "Analyze the desktop audio (if any) along with the screenshots to solve coding problems. If the screenshot or desktop audio contains a coding problem, provide a complete working solution as follows: For a new/first-time question, first briefly explain both the naive approach and the optimized approach (without code), THEN implement both approaches with complete code optimizing for time complexity as much as possible. If the screenshot shows a LeetCode-like interface or any code cell with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point without changing the signature of the function: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Ensure any code is ready to submit with no missing parts. Always be thorough and complete in your response."
 
 # 2. Non-coding problem analysis prompt (regular model)
-general_analysis_prompt = "Analyze the desktop audio (if any) along with the screenshots and identify any problem or question present. Always provide the correct answer or solution first, followed by a clear and thorough explanation of how you arrived at that answer. If there is no clear answer, fabricate a relevant and reasonable answer instead. Never respond that you don't know or can't answer—always provide some answer. Be thorough and complete in your response."
+general_analysis_prompt = "Analyze the desktop audio (if any) along with the screenshots and identify any problem or question present. Always provide the correct answer or solution first, followed by a clear and thorough explanation of how you arrived at that answer. If there is no clear answer, fabricate a relevant and reasonable answer instead. Never respond that you don't know or can't answer—always provide some answer. Be thorough and complete in your response. There can be interview questions like introduce yourself, fabricate an answer for a software engineering role."
 
 
 # 3. Repeat analysis prompt (regular model) 
@@ -553,14 +553,14 @@ def analyze_general_problem(text_input: str,
     
     # Add desktop audio if available
     if desktop_audio_base64:
-        content_parts.append("This is the desktop audio output from the user's system. Apply the general analysis instructions to any content found here.")
+        content_parts.append("This is the desktop audio output from the user's system. Apply the general analysis instructions to any content found here:")
         
         desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
         content_parts.extend(desktop_audio_parts)
     
     # Add images if available
     if images_base64:
-        content_parts.append("These are the screens of the user. Apply the general analysis instructions to provide helpful insights for the content shown.")
+        content_parts.append("These are the screens of the user. Apply the general analysis instructions to provide helpful insights for the content shown:")
         
         image_parts = prepare_image_parts(images_base64, image_format)
         content_parts.extend(image_parts)
@@ -633,7 +633,7 @@ def analyze_repeat_problem(text_input: str,
     
     # Add desktop audio if available
     if desktop_audio_base64:
-        content_parts.append("This is the desktop audio output from the user's system. Apply the repeat analysis instructions to any content found here.")
+        content_parts.append("This is the desktop audio output from the user's system. Apply the repeat analysis instructions to any content found here:")
         
         desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
         content_parts.extend(desktop_audio_parts)
@@ -818,6 +818,88 @@ def analyze_repeat_problem_pro(text_input: str,
             "user_query": text_input,
             "response": f"Error analyzing repeat problem with DeepSeek Pro: {e}"
         }
+
+# Analyze non-coding problems using the regular model with general analysis prompt and thinking_budget=0
+def analyze_general_problem_no_thinking(text_input: str, 
+                           images_base64: List[str], image_format: str, desktop_audio_base64: str = ""):
+    """Analyze non-coding problems using the regular model with general analysis prompt and no thinking budget"""
+    global chat_history
+    
+    # Prepare content parts
+    content_parts = []
+    
+    # Add the specific general analysis prompt as the main instruction
+    content_parts.append(general_analysis_prompt)
+    
+    # Add explanatory text for the user's text input
+    content_parts.append(f"This is the user's query (typed text), always prioritize it: {text_input}")
+    
+    # Add desktop audio if available
+    if desktop_audio_base64:
+        content_parts.append("This is the desktop audio output from the user's system. Apply the general analysis instructions to any content found here:")
+        
+        desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
+        content_parts.extend(desktop_audio_parts)
+    
+    # Add images if available
+    if images_base64:
+        content_parts.append("These are the screens of the user. Apply the general analysis instructions to provide helpful insights for the content shown:")
+        
+        image_parts = prepare_image_parts(images_base64, image_format)
+        content_parts.extend(image_parts)
+    
+    # Implement retry logic
+    max_retries = 3
+    retry_delay = 1
+    
+    for retry in range(max_retries):
+        try:
+            # Generate content using the new API format WITH thinking_budget=0
+            response = client.models.generate_content(
+                model=GEMINI_FLASH_MODEL,
+                contents=content_parts,
+                config=types.GenerateContentConfig(
+                    temperature=0.6,
+                    max_output_tokens=60000,
+                    response_mime_type="application/json",
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    response_schema={
+                        "type": "object",
+                        "properties": {
+                            "user_query": {"type": "string", "description": "The user's current query (the text input)"},
+                            "response": {"type": "string", "description": "Your response focused on general analysis and helpful insights"}
+                        },
+                        "required": ["user_query", "response"]
+                    }
+                )
+            )
+            
+            # Extract and parse the response text
+            response_text = response.text
+            
+            try:
+                # Parse the JSON response
+                response_json = json.loads(response_text)
+                
+                # Add to chat history for context
+                chat_history.append({
+                    "user_content": content_parts,
+                    "assistant_response": response_json
+                })
+                
+                return response_json
+            except json.JSONDecodeError:
+                # If JSON parsing fails, return a fallback structure
+                print("Warning: Response was not valid JSON. Returning raw response.")
+                return {"user_query": text_input, "response": response_text}
+                
+        except Exception as e:
+            if retry < max_retries - 1:
+                print(f"General analysis API request failed (attempt {retry+1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                # This was the last attempt, raise the exception
+                raise Exception(f"Error analyzing general problem after {max_retries} attempts: {e}")
 
 # Function to transcribe audio using Google's Speech-to-Text API
 # def transcribe_audio(audio_base64: str, audio_format: str) -> str:

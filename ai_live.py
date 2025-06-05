@@ -1348,6 +1348,99 @@ def process_pro_repeat_analysis(prompt):
             overlay.update_response({"user_query": prompt, "response": f"Error: {str(e)}"})
             overlay.set_processing(False)
 
+def process_general_analysis_no_thinking(prompt):
+    """Process text input with the no-thinking general analysis mode"""
+    global overlay
+    
+    if not prompt:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ No prompt provided for general analysis (no thinking)", flush=True)
+        return
+    
+    # Handle rate limiting
+    global last_request_time
+    current_time = time.time()
+    time_since_last = current_time - last_request_time
+    if time_since_last < RATE_LIMIT:
+        wait_time = RATE_LIMIT - time_since_last
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ Rate limiting: waiting {wait_time:.2f}s before processing", flush=True)
+        time.sleep(wait_time)
+    
+    # Update UI to show processing state
+    if overlay:
+        overlay.update_status("Processing...", "#FFA500")  # Orange color for processing
+    
+    # Get any screenshots from the queue
+    screenshot_base64 = None
+    try:
+        from overlay import screenshot_queue
+        if not screenshot_queue.empty():
+            screenshot_base64 = screenshot_queue.get_nowait()
+            screenshot_queue.task_done()
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot for analysis", flush=True)
+        else:
+            # Only take a new screenshot if screenshots are enabled
+            if overlay and overlay.screenshot_toggle_button.isChecked():
+                screenshot_base64 = capture_screenshot()
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Captured new screenshot for analysis", flush=True)
+            else:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Screenshots disabled, skipping capture", flush=True)
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Error capturing screenshot: {e}", flush=True)
+    
+    # Create and start a thread for the API call
+    def api_call_thread():
+        global api_semaphore
+        
+        try:
+            # Acquire semaphore to ensure only one API call at a time
+            api_semaphore.acquire()
+            
+            # Update global timestamp for rate limiting
+            global last_request_time
+            last_request_time = time.time()
+            
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🧠 Processing general analysis (no thinking) with prompt: {prompt[:50]}...", flush=True)
+            
+            # Get desktop audio if enabled
+            desktop_audio_base64 = ""
+            if overlay and overlay.desktop_audio_button.isChecked():
+                # Desktop audio processing would go here if available
+                pass
+            
+            # Call the core chat processing function with no thinking budget
+            from chat import analyze_general_problem_no_thinking
+            
+            # Process the screenshot
+            images = []
+            if screenshot_base64:
+                images.append(screenshot_base64)
+            
+            # Call the API
+            start_time = time.time()
+            response_json = analyze_general_problem_no_thinking("", images, "jpg", desktop_audio_base64)
+            processing_time = time.time() - start_time
+            
+            # Update the UI with the response
+            if overlay:
+                overlay.update_response(response_json)
+                overlay.update_status("Listening...", "#4CAF50")  # Green color for listening state
+                overlay.set_processing(False)
+            
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ General analysis (no thinking) processed in {processing_time:.2f}s", flush=True)
+        
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Error in general analysis (no thinking): {e}", flush=True)
+            if overlay:
+                overlay.update_status("Error processing", "#FF0000")  # Red for error
+                overlay.set_processing(False)
+        
+        finally:
+            # Always release the semaphore
+            api_semaphore.release()
+    
+    # Start processing in a separate thread
+    threading.Thread(target=api_call_thread, daemon=True).start()
+
 def main():
     # Set the graphics rendering backend to OpenGL ES
     # This might improve performance on some systems, especially with integrated graphics
@@ -1370,6 +1463,7 @@ def main():
     # Connect the new specialized analysis signals
     overlay.code_analysis_signal.connect(process_code_analysis)
     overlay.general_analysis_signal.connect(process_general_analysis)
+    overlay.general_analysis_no_thinking_signal.connect(process_general_analysis_no_thinking)
     overlay.repeat_analysis_signal.connect(process_repeat_analysis)
     overlay.pro_code_analysis_signal.connect(process_pro_code_analysis)
     overlay.pro_repeat_analysis_signal.connect(process_pro_repeat_analysis)

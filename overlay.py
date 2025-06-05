@@ -170,6 +170,9 @@ class DraggableOverlay(QtWidgets.QWidget):
     update_conversation_signal = Signal(str)  # New signal for thread-safe updates
     clear_history_signal = Signal()  # Signal to stop processing and clear history
 
+    # New signal for general analysis with no thinking
+    general_analysis_no_thinking_signal = Signal(str)
+
     def __init__(self):
         super().__init__()
         # Set up as non-activating.
@@ -430,9 +433,9 @@ class DraggableOverlay(QtWidgets.QWidget):
         analysis_layout.addWidget(self.code_analyze_button)
         
         # Add General Analysis button
-        self.general_analyze_button = QtWidgets.QPushButton("📝 General Analysis")
-        self.general_analyze_button.setFixedHeight(30)
-        self.general_analyze_button.setStyleSheet("""
+        self.general_analyze_button_regular = QtWidgets.QPushButton("📝 General Analysis")
+        self.general_analyze_button_regular.setFixedHeight(30)
+        self.general_analyze_button_regular.setStyleSheet("""
             QPushButton {
                 background-color: rgba(34, 150, 50, 200);
                 color: white; 
@@ -448,9 +451,9 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(14, 130, 30, 200);
             }
         """)
-        self.general_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.general_analyze_button.clicked.connect(self.execute_general_analyze)
-        analysis_layout.addWidget(self.general_analyze_button)
+        self.general_analyze_button_regular.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.general_analyze_button_regular.clicked.connect(self.execute_general_analyze_no_thinking)
+        analysis_layout.addWidget(self.general_analyze_button_regular)
         
         # Add Repeat Analysis button
         self.repeat_analyze_button = QtWidgets.QPushButton("🔄 Repeat Analysis")
@@ -502,6 +505,29 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.pro_code_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.pro_code_analyze_button.clicked.connect(self.execute_pro_code_analyze)
         pro_layout.addWidget(self.pro_code_analyze_button)
+        
+        # Add General Analysis button
+        self.general_analyze_button = QtWidgets.QPushButton("📝 Pro General Analysis")
+        self.general_analyze_button.setFixedHeight(30)
+        self.general_analyze_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(34, 150, 50, 200);
+                color: white; 
+                border: none;
+                border-radius: 5px;
+                padding: 0 8px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: rgba(54, 170, 70, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(14, 130, 30, 200);
+            }
+        """)
+        self.general_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.general_analyze_button.clicked.connect(self.execute_general_analyze)
+        pro_layout.addWidget(self.general_analyze_button)
         
         # Add Pro Repeat Analysis button
         self.pro_repeat_analyze_button = QtWidgets.QPushButton("⚡ Pro Repeat Analysis")
@@ -1422,6 +1448,49 @@ class DraggableOverlay(QtWidgets.QWidget):
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error clearing history: {e}", flush=True)
             self.update_status("Error clearing history", "#FF0000")
+
+    def execute_general_analyze_no_thinking(self):
+        try:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Executing general analysis with thinking_budget=0", flush=True)
+            
+            # Import and use the general_analysis_prompt from chat.py
+            from chat import general_analysis_prompt
+            
+            # Emit the general_analysis_no_thinking_signal with the specialized prompt
+            self.general_analysis_no_thinking_signal.emit(general_analysis_prompt)
+            
+            # Visual feedback
+            self.general_analyze_button_regular.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(14, 130, 30, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 12px;
+                }
+            """)
+            
+            # Reset the button style after 500ms
+            QtCore.QTimer.singleShot(500, lambda: self.general_analyze_button_regular.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(34, 150, 50, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(54, 170, 70, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(14, 130, 30, 200);
+                }
+            """))
+            
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing general analysis (no thinking): {e}", flush=True)
 
 # ----------------------------------------------------------------
 # Main entry point.

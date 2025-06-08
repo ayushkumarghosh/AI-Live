@@ -192,6 +192,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             QtCore.Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setWindowOpacity(0.9)  # Default opacity of 90%
         self.resize(1200, 600)  # Wider to accommodate the transcription section
 
         # Initialize processing state.
@@ -225,6 +226,39 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.status_label.setStyleSheet("color: #4CAF50; font-size: 14px;")
         title_layout.addWidget(self.status_label)
         title_layout.addStretch(1)
+        
+        # Add opacity slider
+        opacity_layout = QtWidgets.QHBoxLayout()
+        opacity_layout.setContentsMargins(0, 0, 0, 0)
+        opacity_layout.setSpacing(5)
+        
+        opacity_label = QtWidgets.QLabel("Opacity:")
+        opacity_label.setStyleSheet("color: white; font-size: 12px;")
+        opacity_layout.addWidget(opacity_label)
+        
+        self.opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.opacity_slider.setMinimum(20)  # 20% minimum opacity
+        self.opacity_slider.setMaximum(100)  # 100% maximum opacity
+        self.opacity_slider.setValue(90)  # 90% default opacity
+        self.opacity_slider.setFixedWidth(80)
+        self.opacity_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 4px;
+                background: rgba(100, 100, 100, 150);
+                margin: 0px;
+                border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                background: white;
+                width: 10px;
+                margin: -3px 0;
+                border-radius: 5px;
+            }
+        """)
+        self.opacity_slider.valueChanged.connect(self.change_opacity)
+        opacity_layout.addWidget(self.opacity_slider)
+        
+        title_layout.addLayout(opacity_layout)
         
         # Desktop audio button removed
         
@@ -282,7 +316,8 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.screenshot_toggle_button.toggled.connect(self.toggle_screenshots)
         title_layout.addWidget(self.screenshot_toggle_button)
         
-        # Add Transcription Toggle button
+        # Add Transcription Toggle buttons
+        # First button is for including transcripts in analysis
         self.transcription_toggle_button = QtWidgets.QPushButton("🗣️ Include Transcripts")
         self.transcription_toggle_button.setCheckable(True)
         self.transcription_toggle_button.setChecked(True) # Enabled by default
@@ -310,6 +345,34 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.transcription_toggle_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.transcription_toggle_button.toggled.connect(self.toggle_transcriptions)
         title_layout.addWidget(self.transcription_toggle_button)
+        
+        # Second button is for showing/hiding transcription panel
+        self.show_transcription_panel_button = QtWidgets.QPushButton("👁️ Show Transcriptions")
+        self.show_transcription_panel_button.setCheckable(True)
+        self.show_transcription_panel_button.setChecked(True) # Visible by default
+        self.show_transcription_panel_button.setFixedHeight(26)
+        self.show_transcription_panel_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(140, 100, 180, 200); /* Purple */
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 5px 10px;
+                font-size: 12px;
+            }
+            QPushButton:checked {
+                background-color: rgba(120, 80, 160, 200); /* Darker Purple */
+            }
+            QPushButton:hover {
+                background-color: rgba(160, 120, 200, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(130, 90, 170, 200);
+            }
+        """)
+        self.show_transcription_panel_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.show_transcription_panel_button.toggled.connect(self.toggle_transcription_panel)
+        title_layout.addWidget(self.show_transcription_panel_button)
         
         self.close_button = QtWidgets.QPushButton("✕")
         self.close_button.setFixedSize(24, 24)
@@ -607,14 +670,30 @@ class DraggableOverlay(QtWidgets.QWidget):
         
         # Create the transcription panel (right side)
         self.transcription_panel = QtWidgets.QWidget()
+        self.transcription_panel.setMinimumWidth(200)  # Set minimum width when expanded
         transcription_layout = QtWidgets.QVBoxLayout(self.transcription_panel)
         transcription_layout.setContentsMargins(10, 0, 0, 0)
         
+        # Store reference to the layout for collapsing
+        self.transcription_layout = transcription_layout
+        self.content_split_layout = content_split_layout
+        self.is_transcription_collapsed = False
+        
+        # Store the original stretch factors
+        self.conversation_stretch = 2
+        self.transcription_stretch = 1
+        
         # Transcription title
-        transcription_title = QtWidgets.QLabel("Live Transcription")
-        transcription_title.setStyleSheet("color: white; font-weight: bold; font-size: 14px;")
-        transcription_title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        transcription_layout.addWidget(transcription_title)
+        transcription_header = QtWidgets.QWidget()
+        transcription_header_layout = QtWidgets.QHBoxLayout(transcription_header)
+        transcription_header_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.transcription_title = QtWidgets.QLabel("Live Transcription")
+        self.transcription_title.setStyleSheet("color: white; font-weight: bold; font-size: 14px;")
+        transcription_header_layout.addWidget(self.transcription_title)
+        transcription_header_layout.addStretch(1)
+        
+        transcription_layout.addWidget(transcription_header)
         
         # Transcription display
         self.transcription_text = QtWidgets.QTextEdit()
@@ -1777,6 +1856,68 @@ class DraggableOverlay(QtWidgets.QWidget):
         
         # If no transcriptions available
         return ""
+
+    def change_opacity(self, value):
+        """Change the opacity of the window based on slider value"""
+        opacity = value / 100.0
+        self.setWindowOpacity(opacity)
+    
+    def toggle_transcription_panel(self, checked=None):
+        """Toggle the visibility of the transcription panel"""
+        # Store the current window size before making changes
+        current_size = self.size()
+        
+        # Use the checked value if available, otherwise toggle the current state
+        if checked is not None:
+            self.is_transcription_collapsed = not checked
+        else:
+            self.is_transcription_collapsed = not self.is_transcription_collapsed
+            
+        if not self.is_transcription_collapsed:
+            # Update button state first
+            self.show_transcription_panel_button.setText("👁️ Hide Transcriptions")
+            self.show_transcription_panel_button.setChecked(True)
+            
+            # Keep panel hidden until fully configured
+            self.transcription_panel.setVisible(False)
+            
+            # Calculate sizes
+            current_width = self.width()
+            conversation_width = (current_width * self.conversation_stretch) / (self.conversation_stretch + self.transcription_stretch)
+            transcription_width = (current_width * self.transcription_stretch) / (self.conversation_stretch + self.transcription_stretch)
+            
+            # Configure panel before adding it
+            self.transcription_panel.setFixedWidth(int(transcription_width))
+            
+            # Add to layout with proper stretch
+            self.content_split_layout.insertWidget(1, self.transcription_panel)
+            self.content_split_layout.setStretch(0, self.conversation_stretch)
+            self.content_split_layout.setStretch(1, self.transcription_stretch)
+            
+            # Process any pending events before making visible
+            QtWidgets.QApplication.processEvents()
+            
+            # Now make visible
+            self.transcription_panel.setVisible(True)
+            
+            # Release fixed width constraint after everything is stable
+            def release_width_constraint():
+                self.transcription_panel.setFixedWidth(16777215)  # QWIDGETSIZE_MAX
+                
+            QtCore.QTimer.singleShot(150, release_width_constraint)
+            
+        else:
+            # Completely collapse the panel
+            self.transcription_panel.setVisible(False)
+            self.show_transcription_panel_button.setText("👁️ Show Transcriptions")
+            self.show_transcription_panel_button.setChecked(False)
+            # Remove the panel from the layout entirely
+            self.transcription_panel.setParent(None)
+        
+        # Update the layout without resizing the window
+        self.update()
+        # Restore the original size
+        self.resize(current_size)
 
 # ----------------------------------------------------------------
 # Main entry point.

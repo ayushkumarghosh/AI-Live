@@ -173,14 +173,12 @@ class DraggableOverlay(QtWidgets.QWidget):
     # New signal for general analysis with no thinking
     general_analysis_no_thinking_signal = Signal(str)
     
-    # New signal for interview answers
-    interview_answer_signal = Signal(str)
+    # Signal for interview answers removed
     
     # New signal for updating transcriptions
     update_transcription_signal = Signal(str, str)
     
-    # New signal for processing selected transcription
-    process_transcription_signal = Signal(str)
+    # Signal for processing selected transcription removed
 
     def __init__(self):
         super().__init__()
@@ -570,33 +568,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         
         conversation_layout.addLayout(pro_layout)
         
-        # Create a fourth row for utility buttons
-        utils_layout = QtWidgets.QHBoxLayout()
-        
-        # Add Interview Answer button
-        self.interview_answer_button = QtWidgets.QPushButton("🎤 Interview Answer")
-        self.interview_answer_button.setFixedHeight(30)
-        self.interview_answer_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(153, 50, 204, 200); /* DarkOrchid */
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: rgba(173, 70, 224, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(133, 30, 184, 200);
-            }
-        """)
-        self.interview_answer_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.interview_answer_button.clicked.connect(self.execute_interview_answer)
-        utils_layout.addWidget(self.interview_answer_button)
-        
-        conversation_layout.addLayout(utils_layout)
+        # Fourth row for utility buttons removed
         
         # Add the conversation panel to the split layout
         content_split_layout.addWidget(self.conversation_panel, 2)  # 2/3 of width
@@ -651,29 +623,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         
         # Create a layout for transcription action buttons
         transcription_buttons_layout = QtWidgets.QHBoxLayout()
-        
-        # Process selected transcription button
-        self.process_transcription_button = QtWidgets.QPushButton("💬 Process Selected Text")
-        self.process_transcription_button.setFixedHeight(30)
-        self.process_transcription_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(70, 130, 180, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: rgba(100, 160, 210, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(60, 120, 170, 200);
-            }
-        """)
-        self.process_transcription_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.process_transcription_button.clicked.connect(self.process_selected_transcription)
-        transcription_buttons_layout.addWidget(self.process_transcription_button)
         
         # Clear transcription button
         self.clear_transcription_button = QtWidgets.QPushButton("🗑️ Clear Transcriptions")
@@ -1231,6 +1180,16 @@ class DraggableOverlay(QtWidgets.QWidget):
     def handle_text_submitted(self, text):
         # Emit signal to process the text
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Text submitted: {text}", flush=True)
+        
+        # If text is empty, use transcriptions instead
+        if not text.strip():
+            text = self.get_transcriptions()
+            if text:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Using transcriptions as input", flush=True)
+            else:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ No text or transcriptions available", flush=True)
+                return
+                
         self.text_submitted.emit(text)
         # No need to set processing state here as it's set in the process_text_input function
 
@@ -1276,11 +1235,17 @@ class DraggableOverlay(QtWidgets.QWidget):
         try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Executing code analysis with specialized prompt", flush=True)
             
-            # Import and use the code_problem_prompt from chat.py
-            from chat import code_problem_prompt
+            # Get transcriptions to use for the analysis
+            transcriptions = self.get_transcriptions()
             
-            # Emit the code_analysis_signal with the specialized prompt
-            self.code_analysis_signal.emit(code_problem_prompt)
+            # Send the transcriptions directly, no need to append the prompt
+            # since the analyze_code_problem function already handles this
+            if transcriptions:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Including transcriptions in code analysis", flush=True)
+                self.code_analysis_signal.emit(transcriptions)
+            else:
+                # Emit an empty string if no transcriptions
+                self.code_analysis_signal.emit("")
             
             # Visual feedback
             self.code_analyze_button.setStyleSheet("""
@@ -1319,11 +1284,17 @@ class DraggableOverlay(QtWidgets.QWidget):
         try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Executing general analysis with specialized prompt", flush=True)
             
-            # Import and use the general_analysis_prompt from chat.py
-            from chat import general_analysis_prompt
+            # Get transcriptions to use for the analysis
+            transcriptions = self.get_transcriptions()
             
-            # Emit the general_analysis_signal with the specialized prompt
-            self.general_analysis_signal.emit(general_analysis_prompt)
+            # Send the transcriptions directly, no need to append the prompt
+            # since the analyze_general_problem function already handles this
+            if transcriptions:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Including transcriptions in general analysis", flush=True)
+                self.general_analysis_signal.emit(transcriptions)
+            else:
+                # Emit an empty string if no transcriptions
+                self.general_analysis_signal.emit("")
             
             # Visual feedback
             self.general_analyze_button.setStyleSheet("""
@@ -1362,11 +1333,17 @@ class DraggableOverlay(QtWidgets.QWidget):
         try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Executing repeat analysis with specialized prompt", flush=True)
             
-            # Import and use the repeat_analysis_prompt from chat.py
-            from chat import repeat_analysis_prompt
+            # Get transcriptions to use for the analysis
+            transcriptions = self.get_transcriptions()
             
-            # Emit the repeat_analysis_signal with the specialized prompt
-            self.repeat_analysis_signal.emit(repeat_analysis_prompt)
+            # Send the transcriptions directly, no need to append the prompt
+            # since the analyze_repeat_problem function already handles this
+            if transcriptions:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Including transcriptions in repeat analysis", flush=True)
+                self.repeat_analysis_signal.emit(transcriptions)
+            else:
+                # Emit an empty string if no transcriptions
+                self.repeat_analysis_signal.emit("")
             
             # Visual feedback
             self.repeat_analyze_button.setStyleSheet("""
@@ -1405,11 +1382,17 @@ class DraggableOverlay(QtWidgets.QWidget):
         try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Executing Pro code analysis with specialized prompt", flush=True)
             
-            # Import and use the code_problem_pro_prompt from chat.py
-            from chat import code_problem_pro_prompt
+            # Get transcriptions to use for the analysis
+            transcriptions = self.get_transcriptions()
             
-            # Emit the pro_code_analysis_signal with the specialized prompt
-            self.pro_code_analysis_signal.emit(code_problem_pro_prompt)
+            # Send the transcriptions directly, no need to append the prompt
+            # since the analyze_code_problem_pro function already handles this
+            if transcriptions:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Including transcriptions in Pro code analysis", flush=True)
+                self.pro_code_analysis_signal.emit(transcriptions)
+            else:
+                # Emit an empty string if no transcriptions
+                self.pro_code_analysis_signal.emit("")
             
             # Visual feedback
             self.pro_code_analyze_button.setStyleSheet("""
@@ -1448,11 +1431,17 @@ class DraggableOverlay(QtWidgets.QWidget):
         try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚡ Executing Pro repeat analysis with specialized prompt", flush=True)
             
-            # Import and use the repeat_analysis_pro_prompt from chat.py
-            from chat import repeat_analysis_pro_prompt
+            # Get transcriptions to use for the analysis
+            transcriptions = self.get_transcriptions()
             
-            # Emit the pro_repeat_analysis_signal with the specialized prompt
-            self.pro_repeat_analysis_signal.emit(repeat_analysis_pro_prompt)
+            # Send the transcriptions directly, no need to append the prompt
+            # since the analyze_repeat_problem_pro function already handles this
+            if transcriptions:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Including transcriptions in Pro repeat analysis", flush=True)
+                self.pro_repeat_analysis_signal.emit(transcriptions)
+            else:
+                # Emit an empty string if no transcriptions
+                self.pro_repeat_analysis_signal.emit("")
             
             # Visual feedback
             self.pro_repeat_analyze_button.setStyleSheet("""
@@ -1548,11 +1537,17 @@ class DraggableOverlay(QtWidgets.QWidget):
         try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Executing general analysis with thinking_budget=0", flush=True)
             
-            # Import and use the general_analysis_prompt from chat.py
-            from chat import general_analysis_prompt
+            # Get transcriptions to use for the analysis
+            transcriptions = self.get_transcriptions()
             
-            # Emit the general_analysis_no_thinking_signal with the specialized prompt
-            self.general_analysis_no_thinking_signal.emit(general_analysis_prompt)
+            # Send the transcriptions directly, no need to append the prompt
+            # since the analyze_general_problem_no_thinking function already handles this
+            if transcriptions:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Including transcriptions in general analysis (no thinking)", flush=True)
+                self.general_analysis_no_thinking_signal.emit(transcriptions)
+            else:
+                # Emit an empty string if no transcriptions
+                self.general_analysis_no_thinking_signal.emit("")
             
             # Visual feedback
             self.general_analyze_button_regular.setStyleSheet("""
@@ -1587,45 +1582,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing general analysis (no thinking): {e}", flush=True)
 
-    def execute_interview_answer(self):
-        try:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 Executing interview answer", flush=True)
-            
-            # Emit the interview_answer_signal
-            self.interview_answer_signal.emit("")
-            
-            # Visual feedback
-            self.interview_answer_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(173, 70, 224, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-            """)
-            
-            # Reset the button style after 500ms
-            QtCore.QTimer.singleShot(500, lambda: self.interview_answer_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(153, 50, 204, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(173, 70, 224, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(133, 30, 184, 200);
-                }
-            """))
-            
-        except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing interview answer: {e}", flush=True)
+    # Interview answer method removed
 
     # Add a new method to clear transcriptions
     def clear_transcriptions(self):
@@ -1697,70 +1654,41 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.transcription_text.moveCursor(QtGui.QTextCursor.MoveOperation.End)
         self.transcription_text.ensureCursorVisible()
 
-    def process_selected_transcription(self):
-        """Process the currently selected text from the transcription area"""
-        # Get selected text
+    # Process selected transcription method removed
+    
+    # HTML tag cleaning method removed
+
+    # Add helper method to get transcriptions
+    def get_transcriptions(self):
+        """
+        Get either the selected transcriptions or the last 4 transcriptions.
+        Returns a string formatted as interviewer/user conversation.
+        """
+        # Check if there's any selected text
         cursor = self.transcription_text.textCursor()
         selected_text = cursor.selectedText()
         
-        # If no text is selected, get the latest transcription
-        if not selected_text:
-            if self.transcription_history:
-                # Get the latest transcription
-                latest = self.transcription_history[-1]
-                selected_text = latest.get("text", "")
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] No text selected, using latest transcription", flush=True)
-            else:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] No text selected and no transcription history", flush=True)
-                return
+        if selected_text:
+            # If text is selected, use that
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Using selected transcription text", flush=True)
+            return selected_text
         
-        # Clean up the text (remove HTML tags)
-        clean_text = self._clean_html_tags(selected_text)
+        # Otherwise, use the last 4 transcriptions
+        if len(self.transcription_history) > 0:
+            # Get last 4 transcriptions (or fewer if not enough available)
+            last_transcriptions = self.transcription_history[-4:] if len(self.transcription_history) >= 4 else self.transcription_history
+            formatted_text = ""
+            
+            # Format them as interviewer/user conversation
+            for entry in last_transcriptions:
+                speaker = "Interviewer" if entry["source"] == "desktop" else "Me"
+                formatted_text += f"{speaker}: {entry['text']}\n\n"
+                
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Using last {len(last_transcriptions)} transcriptions", flush=True)
+            return formatted_text + "Please answer the last question in this conversation."
         
-        if clean_text:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Processing selected transcription: {clean_text[:50]}...", flush=True)
-            
-            # Visual feedback for the button
-            self.process_transcription_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(60, 120, 170, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 14px;
-                }
-            """)
-            
-            # Reset the button style after 500ms
-            QtCore.QTimer.singleShot(500, lambda: self.process_transcription_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(70, 130, 180, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 14px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(100, 160, 210, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(60, 120, 170, 200);
-                }
-            """))
-            
-            # Emit the signal to process the text
-            self.process_transcription_signal.emit(clean_text)
-    
-    def _clean_html_tags(self, text):
-        """Remove HTML tags from text"""
-        import re
-        # Define pattern to match HTML tags
-        pattern = re.compile(r'<.*?>')
-        # Replace HTML tags with empty string
-        cleaned_text = re.sub(pattern, '', text)
-        return cleaned_text.strip()
+        # If no transcriptions available
+        return ""
 
 # ----------------------------------------------------------------
 # Main entry point.

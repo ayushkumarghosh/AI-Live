@@ -847,7 +847,7 @@ def process_pro_text_input(text_input):
             overlay.update_response({"user_query": text_input, "response": f"Error: {str(e)}"})
             overlay.set_processing(False)
 
-def process_code_analysis(prompt):
+def process_code_analysis(transcription):
     """Process code analysis using the regular model with specialized code problem prompt"""
     global overlay
     
@@ -863,7 +863,7 @@ def process_code_analysis(prompt):
             overlay.update_status("Analyzing code problem...", "#00ADD8")
             
             # Generate a session ID for this analysis
-            session_id = f"code_{datetime.now().strftime('%H%M%S')}_{hash(prompt)}"
+            session_id = f"code_{datetime.now().strftime('%H%M%S')}_{hash(transcription)}"
             if not hasattr(overlay, 'current_session_id'):
                 overlay.current_session_id = None
             overlay.current_session_id = session_id
@@ -897,8 +897,9 @@ def process_code_analysis(prompt):
                     if desktop_audio:
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for code analysis", flush=True)
                 
-                # Use the prompt as the text input for the analysis
-                response_json = analyze_code_problem(prompt, screenshots, "jpg", desktop_audio)
+                # Pass the transcription directly 
+                # If empty, the function will still work with just screenshots/audio
+                response_json = analyze_code_problem(transcription, screenshots, "jpg", desktop_audio)
                 
                 # Check if this session was canceled before updating UI
                 if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
@@ -923,7 +924,7 @@ def process_code_analysis(prompt):
             except Exception as e:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in code analysis: {e}", flush=True)
                 if overlay:
-                    error_response = {"user_query": prompt, "response": f"Error in code analysis: {str(e)}"}
+                    error_response = {"user_query": transcription, "response": f"Error in code analysis: {str(e)}"}
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "update_response",
@@ -949,10 +950,10 @@ def process_code_analysis(prompt):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up code analysis processing: {e}", flush=True)
         if overlay:
             overlay.update_status("Error", "#FF0000")
-            overlay.update_response({"user_query": prompt, "response": f"Error: {str(e)}"})
+            overlay.update_response({"user_query": transcription, "response": f"Error: {str(e)}"})
             overlay.set_processing(False)
 
-def process_general_analysis(prompt):
+def process_general_analysis(transcription):
     """Process general analysis using the regular model with specialized general analysis prompt"""
     global overlay
     
@@ -967,7 +968,7 @@ def process_general_analysis(prompt):
             overlay.set_processing(True)
             overlay.update_status("Analyzing general problem...", "#228B22")
               # Generate a session ID for this analysis
-            session_id = f"general_{datetime.now().strftime('%H%M%S')}_{hash(prompt)}"
+            session_id = f"general_{datetime.now().strftime('%H%M%S')}_{hash(transcription)}"
             if not hasattr(overlay, 'current_session_id'):
                 overlay.current_session_id = None
             overlay.current_session_id = session_id
@@ -1001,8 +1002,9 @@ def process_general_analysis(prompt):
                     if desktop_audio:
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for general analysis", flush=True)
                 
-                # Use the prompt as the text input for the analysis
-                response_json = analyze_general_problem(prompt, screenshots, "jpg", desktop_audio)
+                # Pass the transcription directly
+                # If empty, the function will still work with just screenshots/audio
+                response_json = analyze_general_problem(transcription, screenshots, "jpg", desktop_audio)
                 
                 # Check if this session was canceled before updating UI
                 if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
@@ -1027,7 +1029,7 @@ def process_general_analysis(prompt):
             except Exception as e:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in general analysis: {e}", flush=True)
                 if overlay:
-                    error_response = {"user_query": prompt, "response": f"Error in general analysis: {str(e)}"}
+                    error_response = {"user_query": transcription, "response": f"Error in general analysis: {str(e)}"}
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "update_response",
@@ -1053,10 +1055,10 @@ def process_general_analysis(prompt):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up general analysis processing: {e}", flush=True)
         if overlay:
             overlay.update_status("Error", "#FF0000")
-            overlay.update_response({"user_query": prompt, "response": f"Error: {str(e)}"})
+            overlay.update_response({"user_query": transcription, "response": f"Error: {str(e)}"})
             overlay.set_processing(False)
 
-def process_repeat_analysis(prompt):
+def process_repeat_analysis(transcription):
     """Process repeat analysis using the regular model with specialized repeat analysis prompt"""
     global overlay
     
@@ -1069,9 +1071,10 @@ def process_repeat_analysis(prompt):
         # Set processing state
         if overlay:
             overlay.set_processing(True)
-            overlay.update_status("Performing repeat analysis...", "#FF8C00")
-              # Generate a session ID for this analysis
-            session_id = f"repeat_{datetime.now().strftime('%H%M%S')}_{hash(prompt)}"
+            overlay.update_status("Analyzing repeated problem...", "#FF8C00")
+            
+            # Generate a session ID for this analysis
+            session_id = f"repeat_{datetime.now().strftime('%H%M%S')}_{hash(transcription)}"
             if not hasattr(overlay, 'current_session_id'):
                 overlay.current_session_id = None
             overlay.current_session_id = session_id
@@ -1105,8 +1108,9 @@ def process_repeat_analysis(prompt):
                     if desktop_audio:
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for repeat analysis", flush=True)
                 
-                # Use the prompt as the text input for the analysis
-                response_json = analyze_repeat_problem(prompt, screenshots, "jpg", desktop_audio)
+                # Pass the transcription directly
+                # If empty, the function will still work with just screenshots/audio  
+                response_json = analyze_repeat_problem(transcription, screenshots, "jpg", desktop_audio)
                 
                 # Check if this session was canceled before updating UI
                 if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
@@ -1131,7 +1135,7 @@ def process_repeat_analysis(prompt):
             except Exception as e:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in repeat analysis: {e}", flush=True)
                 if overlay:
-                    error_response = {"user_query": prompt, "response": f"Error in repeat analysis: {str(e)}"}
+                    error_response = {"user_query": transcription, "response": f"Error in repeat analysis: {str(e)}"}
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "update_response",
@@ -1157,11 +1161,11 @@ def process_repeat_analysis(prompt):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up repeat analysis processing: {e}", flush=True)
         if overlay:
             overlay.update_status("Error", "#FF0000")
-            overlay.update_response({"user_query": prompt, "response": f"Error: {str(e)}"})
+            overlay.update_response({"user_query": transcription, "response": f"Error: {str(e)}"})
             overlay.set_processing(False)
 
-def process_pro_code_analysis(prompt):
-    """Process code analysis using the Pro model with advanced techniques"""
+def process_pro_code_analysis(transcription):
+    """Process code analysis using the Pro model with specialized code problem prompt"""
     global overlay
     
     try:
@@ -1173,9 +1177,10 @@ def process_pro_code_analysis(prompt):
         # Set processing state
         if overlay:
             overlay.set_processing(True)
-            overlay.update_status("Analyzing with Pro model...", "#4B0082")
-              # Generate a session ID for this analysis
-            session_id = f"pro_code_{datetime.now().strftime('%H%M%S')}_{hash(prompt)}"
+            overlay.update_status("Analyzing code with Pro model...", "#4B0082")
+            
+            # Generate a session ID for this analysis
+            session_id = f"pro_code_{datetime.now().strftime('%H%M%S')}_{hash(transcription)}"
             if not hasattr(overlay, 'current_session_id'):
                 overlay.current_session_id = None
             overlay.current_session_id = session_id
@@ -1209,8 +1214,9 @@ def process_pro_code_analysis(prompt):
                     if desktop_audio:
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for Pro code analysis", flush=True)
                 
-                # Use the prompt as the text input for the analysis
-                response_json = analyze_code_problem_pro(prompt, screenshots, "jpg", desktop_audio)
+                # Pass the transcription directly
+                # If empty, the function will still work with just screenshots/audio
+                response_json = analyze_code_problem_pro(transcription, screenshots, "jpg", desktop_audio)
                 
                 # Check if this session was canceled before updating UI
                 if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
@@ -1235,7 +1241,7 @@ def process_pro_code_analysis(prompt):
             except Exception as e:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in Pro code analysis: {e}", flush=True)
                 if overlay:
-                    error_response = {"user_query": prompt, "response": f"Error in Pro code analysis: {str(e)}"}
+                    error_response = {"user_query": transcription, "response": f"Error in Pro code analysis: {str(e)}"}
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "update_response",
@@ -1261,11 +1267,11 @@ def process_pro_code_analysis(prompt):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up Pro code analysis processing: {e}", flush=True)
         if overlay:
             overlay.update_status("Error", "#FF0000")
-            overlay.update_response({"user_query": prompt, "response": f"Error: {str(e)}"})
+            overlay.update_response({"user_query": transcription, "response": f"Error: {str(e)}"})
             overlay.set_processing(False)
 
-def process_pro_repeat_analysis(prompt):
-    """Process repeat analysis using the Pro model with advanced techniques"""
+def process_pro_repeat_analysis(transcription):
+    """Process repeat analysis using the Pro model with specialized repeat analysis prompt"""
     global overlay
     
     try:
@@ -1277,9 +1283,10 @@ def process_pro_repeat_analysis(prompt):
         # Set processing state
         if overlay:
             overlay.set_processing(True)
-            overlay.update_status("Pro repeat analysis...", "#8B008B")
-              # Generate a session ID for this analysis
-            session_id = f"pro_repeat_{datetime.now().strftime('%H%M%S')}_{hash(prompt)}"
+            overlay.update_status("Analyzing repeat problem with Pro model...", "#8B008B")
+            
+            # Generate a session ID for this analysis
+            session_id = f"pro_repeat_{datetime.now().strftime('%H%M%S')}_{hash(transcription)}"
             if not hasattr(overlay, 'current_session_id'):
                 overlay.current_session_id = None
             overlay.current_session_id = session_id
@@ -1313,8 +1320,9 @@ def process_pro_repeat_analysis(prompt):
                     if desktop_audio:
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for Pro repeat analysis", flush=True)
                 
-                # Use the prompt as the text input for the analysis
-                response_json = analyze_repeat_problem_pro(prompt, screenshots, "jpg", desktop_audio)
+                # Pass the transcription directly
+                # If empty, the function will still work with just screenshots/audio
+                response_json = analyze_repeat_problem_pro(transcription, screenshots, "jpg", desktop_audio)
                 
                 # Check if this session was canceled before updating UI
                 if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
@@ -1339,7 +1347,7 @@ def process_pro_repeat_analysis(prompt):
             except Exception as e:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in Pro repeat analysis: {e}", flush=True)
                 if overlay:
-                    error_response = {"user_query": prompt, "response": f"Error in Pro repeat analysis: {str(e)}"}
+                    error_response = {"user_query": transcription, "response": f"Error in Pro repeat analysis: {str(e)}"}
                     QtCore.QMetaObject.invokeMethod(
                         overlay,
                         "update_response",
@@ -1365,16 +1373,12 @@ def process_pro_repeat_analysis(prompt):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up Pro repeat analysis processing: {e}", flush=True)
         if overlay:
             overlay.update_status("Error", "#FF0000")
-            overlay.update_response({"user_query": prompt, "response": f"Error: {str(e)}"})
+            overlay.update_response({"user_query": transcription, "response": f"Error: {str(e)}"})
             overlay.set_processing(False)
 
-def process_general_analysis_no_thinking(prompt):
+def process_general_analysis_no_thinking(transcription):
     """Process text input with the no-thinking general analysis mode"""
     global overlay
-    
-    if not prompt:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ No prompt provided for general analysis (no thinking)", flush=True)
-        return
     
     # Handle rate limiting
     global last_request_time
@@ -1419,7 +1423,7 @@ def process_general_analysis_no_thinking(prompt):
             global last_request_time
             last_request_time = time.time()
             
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🧠 Processing general analysis (no thinking) with prompt: {prompt[:50]}...", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🧠 Processing general analysis (no thinking) with transcription: {transcription[:50] if transcription else 'None'}...", flush=True)
             
             # Get desktop audio if enabled
             desktop_audio_base64 = ""
@@ -1437,9 +1441,10 @@ def process_general_analysis_no_thinking(prompt):
             if screenshot_base64:
                 images.append(screenshot_base64)
             
-            # Call the API
+            # Call the API - pass the transcription directly
+            # Even if empty, the function will still work with just screenshots/audio
             start_time = time.time()
-            response_json = analyze_general_problem_no_thinking("", images, "jpg", desktop_audio_base64)
+            response_json = analyze_general_problem_no_thinking(transcription, images, "jpg", desktop_audio_base64)
             processing_time = time.time() - start_time
             
             # Update the UI with the response
@@ -1463,7 +1468,7 @@ def process_general_analysis_no_thinking(prompt):
     # Start processing in a separate thread
     threading.Thread(target=api_call_thread, daemon=True).start()
 
-def process_interview_answer(prompt=""):
+def process_interview_answer(transcription=""):
     """Process interview questions using only desktop audio"""
     global overlay
     
@@ -1479,7 +1484,7 @@ def process_interview_answer(prompt=""):
             overlay.update_status("Processing interview answer...", "#9932CC")  # Purple color for interview answers
             
             # Generate a session ID for this analysis
-            session_id = f"interview_{datetime.now().strftime('%H%M%S')}_{hash(prompt)}"
+            session_id = f"interview_{datetime.now().strftime('%H%M%S')}_{hash(transcription)}"
             if not hasattr(overlay, 'current_session_id'):
                 overlay.current_session_id = None
             overlay.current_session_id = session_id
@@ -1617,11 +1622,10 @@ def main():
     overlay.repeat_analysis_signal.connect(process_repeat_analysis)
     overlay.pro_code_analysis_signal.connect(process_pro_code_analysis)
     overlay.pro_repeat_analysis_signal.connect(process_pro_repeat_analysis)
-    overlay.interview_answer_signal.connect(process_interview_answer)
+    # Interview answer signal connection removed
     overlay.clear_history_signal.connect(stop_processing_and_clear_history)
     
-    # Connect the process_transcription_signal to process_text_input
-    overlay.process_transcription_signal.connect(process_text_input)
+    # Process transcription signal connection removed
     
     # Initialize live transcription
     initialize_live_transcription()

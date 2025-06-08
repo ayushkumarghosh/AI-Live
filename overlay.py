@@ -175,6 +175,9 @@ class DraggableOverlay(QtWidgets.QWidget):
     
     # New signal for interview answers
     interview_answer_signal = Signal(str)
+    
+    # New signal for updating transcriptions
+    update_transcription_signal = Signal(str, str)
 
     def __init__(self):
         super().__init__()
@@ -188,7 +191,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             QtCore.Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(800, 600)
+        self.resize(1200, 600)  # Wider to accommodate the transcription section
 
         # Initialize processing state.
         self.is_processing = False
@@ -325,12 +328,20 @@ class DraggableOverlay(QtWidgets.QWidget):
         title_layout.addWidget(self.close_button)
         self.layout.addWidget(self.title_bar)
 
-        # Content area.
+        # Main content area with split for conversation and transcription
         self.content_area = QtWidgets.QWidget(self)
         self.content_area.setStyleSheet("background-color: rgba(30, 30, 30, 180); border-radius: 5px;")
-        content_layout = QtWidgets.QVBoxLayout(self.content_area)
-        content_layout.setContentsMargins(10, 10, 10, 10)
-
+        
+        # Create a horizontal layout for the split
+        content_split_layout = QtWidgets.QHBoxLayout(self.content_area)
+        content_split_layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Create the conversation panel (left side)
+        self.conversation_panel = QtWidgets.QWidget()
+        conversation_layout = QtWidgets.QVBoxLayout(self.conversation_panel)
+        conversation_layout.setContentsMargins(0, 0, 10, 0)
+        
+        # Conversation area
         self.conversation_text = QtWidgets.QTextEdit()
         self.conversation_text.setReadOnly(True)
         self.conversation_text.setStyleSheet("""
@@ -360,8 +371,8 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.conversation_text.viewport().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.conversation_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.conversation_text.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.WidgetWidth)
-        content_layout.addWidget(self.conversation_text)
-
+        conversation_layout.addWidget(self.conversation_text)
+        
         # Input area - create a layout for action buttons
         input_layout = QtWidgets.QHBoxLayout()
         
@@ -409,7 +420,33 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.screenshot_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.screenshot_button.clicked.connect(self.take_screenshot)
         input_layout.addWidget(self.screenshot_button)
-          # Create a second row for analysis buttons
+        
+        # Add Clear History button
+        self.clear_button = QtWidgets.QPushButton("🗑️ Clear History")
+        self.clear_button.setFixedHeight(30)  # Set a fixed height
+        self.clear_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(180, 80, 80, 200);  /* Red color */
+                color: white; 
+                border: none;
+                border-radius: 5px;
+                padding: 0 8px;  /* Adjust padding */
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(200, 100, 100, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(160, 60, 60, 200);
+            }
+        """)
+        self.clear_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.clear_button.clicked.connect(self.clear_history)
+        input_layout.addWidget(self.clear_button)
+        
+        conversation_layout.addLayout(input_layout)
+        
+        # Create a second row for analysis buttons
         analysis_layout = QtWidgets.QHBoxLayout()
         
         # Add Code Analysis button
@@ -481,7 +518,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.repeat_analyze_button.clicked.connect(self.execute_repeat_analyze)
         analysis_layout.addWidget(self.repeat_analyze_button)
         
-        content_layout.addLayout(analysis_layout)
+        conversation_layout.addLayout(analysis_layout)
         
         # Create a third row for Pro model buttons
         pro_layout = QtWidgets.QHBoxLayout()
@@ -555,7 +592,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.pro_repeat_analyze_button.clicked.connect(self.execute_pro_repeat_analyze)
         pro_layout.addWidget(self.pro_repeat_analyze_button)
         
-        content_layout.addLayout(pro_layout)
+        conversation_layout.addLayout(pro_layout)
         
         # Create a fourth row for utility buttons
         utils_layout = QtWidgets.QHBoxLayout()
@@ -583,18 +620,64 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.interview_answer_button.clicked.connect(self.execute_interview_answer)
         utils_layout.addWidget(self.interview_answer_button)
         
-        content_layout.addLayout(utils_layout)
-
-        # Add Clear History button
-        self.clear_button = QtWidgets.QPushButton("🗑️ Clear History")
-        self.clear_button.setFixedHeight(30)  # Set a fixed height
-        self.clear_button.setStyleSheet("""
+        conversation_layout.addLayout(utils_layout)
+        
+        # Add the conversation panel to the split layout
+        content_split_layout.addWidget(self.conversation_panel, 2)  # 2/3 of width
+        
+        # Create the transcription panel (right side)
+        self.transcription_panel = QtWidgets.QWidget()
+        transcription_layout = QtWidgets.QVBoxLayout(self.transcription_panel)
+        transcription_layout.setContentsMargins(10, 0, 0, 0)
+        
+        # Transcription title
+        transcription_title = QtWidgets.QLabel("Live Transcription")
+        transcription_title.setStyleSheet("color: white; font-weight: bold; font-size: 14px;")
+        transcription_title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        transcription_layout.addWidget(transcription_title)
+        
+        # Transcription display
+        self.transcription_text = QtWidgets.QTextEdit()
+        self.transcription_text.setReadOnly(True)
+        self.transcription_text.setStyleSheet("""
+            QTextEdit {
+                background-color: rgba(40, 40, 40, 150);
+                color: #E0E0E0;
+                border: none;
+                font-size: 14px;
+                padding: 10px;
+                line-height: 1.5;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: rgba(50, 50, 50, 100);
+                width: 10px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(100, 100, 100, 150);
+                min-height: 20px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+        self.transcription_text.viewport().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.transcription_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.transcription_text.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.WidgetWidth)
+        transcription_layout.addWidget(self.transcription_text)
+        
+        # Clear transcription button
+        self.clear_transcription_button = QtWidgets.QPushButton("🗑️ Clear Transcriptions")
+        self.clear_transcription_button.setFixedHeight(30)
+        self.clear_transcription_button.setStyleSheet("""
             QPushButton {
-                background-color: rgba(180, 80, 80, 200);  /* Red color */
+                background-color: rgba(180, 80, 80, 200);
                 color: white; 
                 border: none;
                 border-radius: 5px;
-                padding: 0 8px;  /* Adjust padding */
+                padding: 0 8px;
                 font-size: 14px;
             }
             QPushButton:hover {
@@ -604,12 +687,14 @@ class DraggableOverlay(QtWidgets.QWidget):
                 background-color: rgba(160, 60, 60, 200);
             }
         """)
-        self.clear_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.clear_button.clicked.connect(self.clear_history)
-        input_layout.addWidget(self.clear_button)
-
-        content_layout.addLayout(input_layout)
-
+        self.clear_transcription_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.clear_transcription_button.clicked.connect(self.clear_transcriptions)
+        transcription_layout.addWidget(self.clear_transcription_button)
+        
+        # Add the transcription panel to the split layout
+        content_split_layout.addWidget(self.transcription_panel, 1)  # 1/3 of width
+        
+        # Add the content area to the main layout
         self.layout.addWidget(self.content_area)
         self.setLayout(self.layout)
 
@@ -618,11 +703,15 @@ class DraggableOverlay(QtWidgets.QWidget):
 
         # Conversation history.
         self.conversation_history = []
+        # Transcription history
+        self.transcription_history = []
+        
         # Keep track of input overlay instance.
         self.input_overlay = None
         
-        # Connect the signal to the slot
+        # Connect the signals to slots
         self.update_conversation_signal.connect(self._update_conversation_text)
+        self.update_transcription_signal.connect(self._update_transcription_text)
 
     @Slot(bool)
     def set_processing(self, processing_state: bool):
@@ -1145,7 +1234,13 @@ class DraggableOverlay(QtWidgets.QWidget):
     def quit_application(self):
         print("Closing AI Live application...")
         self.close()
-        QtWidgets.QApplication.quit()
+        # Import the quit_application function from ai_live.py
+        try:
+            from ai_live import quit_application
+            quit_application()
+        except ImportError:
+            # Fallback if the import fails
+            QtWidgets.QApplication.quit()
 
     # ---------------- Open the Input Overlay ----------------
     def open_input_overlay(self):
@@ -1562,6 +1657,78 @@ class DraggableOverlay(QtWidgets.QWidget):
             
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing interview answer: {e}", flush=True)
+
+    # Add a new method to clear transcriptions
+    def clear_transcriptions(self):
+        """Clear the transcription history and display"""
+        self.transcription_history = []
+        self.transcription_text.clear()
+        self.transcription_text.append("<div style='color: #FFA500; text-align: center; margin: 10px 0;'>Transcription history cleared</div>")
+        
+        # Visual feedback for the button
+        self.clear_transcription_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(160, 60, 60, 200);
+                color: white; 
+                border: none;
+                border-radius: 5px;
+                padding: 0 8px;
+                font-size: 14px;
+            }
+        """)
+        
+        # Reset the button style after 500ms
+        QtCore.QTimer.singleShot(500, lambda: self.clear_transcription_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(180, 80, 80, 200);
+                color: white; 
+                border: none;
+                border-radius: 5px;
+                padding: 0 8px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(200, 100, 100, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(160, 60, 60, 200);
+            }
+        """))
+        
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Transcription history cleared", flush=True)
+    
+    # Add a new method to update transcriptions
+    @Slot(str, str)
+    def update_transcription(self, text, source_type):
+        """Update the transcription display with new text"""
+        # Add to transcription history
+        self.transcription_history.append({"text": text, "source": source_type})
+        
+        # Use signal to update the UI thread-safely
+        self.update_transcription_signal.emit(text, source_type)
+    
+    # Add a new slot to handle transcription updates
+    @Slot(str, str)
+    def _update_transcription_text(self, text, source_type):
+        """Thread-safe method to update the transcription text"""
+        # Format based on source
+        source_label = "You" if source_type == "mic" else "Desktop"
+        source_color = "#4CAF50" if source_type == "mic" else "#2196F3"
+        
+        # Format the transcription text
+        formatted_text = (
+            f"<div style='margin-bottom: 10px;'>"
+            f"<span style='color: {source_color}; font-weight: bold;'>{source_label}:</span> "
+            f"{text}"
+            f"</div>"
+        )
+        
+        # Add to the transcription text area
+        self.transcription_text.append(formatted_text)
+        
+        # Scroll to the bottom
+        self.transcription_text.moveCursor(QtGui.QTextCursor.MoveOperation.End)
+        self.transcription_text.ensureCursorVisible()
 
 # ----------------------------------------------------------------
 # Main entry point.

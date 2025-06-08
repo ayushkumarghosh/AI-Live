@@ -12,6 +12,7 @@ from PyQt6 import QtWidgets, QtCore
 from overlay import DraggableOverlay
 import wave
 import concurrent.futures
+from live_transcription import LiveTranscriptionManager
 
 # Audio queue for communication between threads
 audio_queue = queue.Queue()
@@ -23,6 +24,9 @@ overlay = None
 RATE_LIMIT = 2.0  # seconds between requests
 last_request_time = 0
 api_semaphore = threading.Semaphore(1)  # Allow only 1 API call at a time
+
+# Add a global reference to the transcription manager
+transcription_manager = None
 
 def capture_screenshot(max_width=1280, quality=85):
     """Capture a screenshot, resize it, and return it as a base64 encoded string"""
@@ -1538,6 +1542,41 @@ def process_interview_answer(prompt=""):
             overlay.update_response({"user_query": "Interview Question", "response": f"Error: {str(e)}"})
             overlay.set_processing(False)
 
+def initialize_live_transcription():
+    """Initialize and start the live transcription service"""
+    global overlay, transcription_manager
+    
+    # Make sure overlay is initialized
+    if not overlay:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Cannot start transcription without overlay", flush=True)
+        return False
+    
+    # Create the transcription callback function
+    def transcription_callback(text, source_type):
+        """Callback function for transcription updates"""
+        if overlay:
+            # Update the overlay with the transcription
+            QtCore.QMetaObject.invokeMethod(
+                overlay,
+                "update_transcription",
+                QtCore.Qt.ConnectionType.QueuedConnection,
+                QtCore.Q_ARG(str, text),
+                QtCore.Q_ARG(str, source_type)
+            )
+    
+    # Create the transcription manager
+    transcription_manager = LiveTranscriptionManager(transcription_callback)
+    
+    # Start the transcription
+    result = transcription_manager.start_transcription()
+    
+    if result:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Live transcription started", flush=True)
+    else:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Failed to start live transcription", flush=True)
+    
+    return result
+
 def main():
     # Set the graphics rendering backend to OpenGL ES
     # This might improve performance on some systems, especially with integrated graphics
@@ -1551,7 +1590,7 @@ def main():
     global overlay
     overlay = DraggableOverlay()
     overlay.show()
-      # Connect the text_submitted signal to the process_text_input function
+    # Connect the text_submitted signal to the process_text_input function
     overlay.text_submitted.connect(process_text_input)
     
     # Connect the pro_text_submitted signal to the process_pro_text_input function
@@ -1566,6 +1605,9 @@ def main():
     overlay.pro_repeat_analysis_signal.connect(process_pro_repeat_analysis)
     overlay.interview_answer_signal.connect(process_interview_answer)
     overlay.clear_history_signal.connect(stop_processing_and_clear_history)
+    
+    # Initialize live transcription
+    initialize_live_transcription()
     
     # Start the audio recorder in a separate thread
     audio_recorder_thread = threading.Thread(
@@ -1610,6 +1652,20 @@ def stop_processing_and_clear_history():
     if overlay:
         overlay.update_response({"user_query": "", "response": "Ready for new queries."})
         print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ System reset complete", flush=True)
+
+# Add code to clean up transcription manager when application closes
+def quit_application():
+    """Clean up and quit the application"""
+    global transcription_manager
+    
+    # Clean up transcription manager
+    if transcription_manager:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Stopping live transcription...", flush=True)
+        transcription_manager.cleanup()
+        transcription_manager = None
+    
+    # Quit the application
+    QtWidgets.QApplication.quit()
 
 if __name__ == "__main__":
     main()

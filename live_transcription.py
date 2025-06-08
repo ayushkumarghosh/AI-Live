@@ -7,10 +7,14 @@ import numpy as np
 import sounddevice as sd
 import soundcard as sc
 import soundfile as sf
+import warnings
 from gemini_live import AudioStreamer
 import base64
 import io
 import wave
+
+# Filter out SoundcardRuntimeWarning about data discontinuity
+warnings.filterwarnings("ignore", message="data discontinuity in recording", category=sc.mediafoundation.SoundcardRuntimeWarning)
 
 # Audio parameters
 FORMAT = pyaudio.paInt16
@@ -87,30 +91,37 @@ class LiveTranscriptionManager:
                 
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Using microphone: {mic.name}")
             
+            # Use a slightly larger blocksize to reduce discontinuities
+            adjusted_blocksize = CHUNK * 2
+            
             # Record in a loop until mic_capture_running is False
-            with mic.recorder(samplerate=RATE, channels=1, blocksize=CHUNK) as recorder:
+            with mic.recorder(samplerate=RATE, channels=1, blocksize=adjusted_blocksize) as recorder:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting microphone recording")
                 
                 while self.mic_capture_running:
-                    # Record audio block
-                    audio_data = recorder.record(CHUNK)
-                    
-                    # Handle potential multi-dimensional data
-                    if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
-                        audio_data = np.mean(audio_data, axis=1)
-                    
-                    # Make sure it's a flat array
-                    audio_data = audio_data.flatten()
-                    
-                    # Convert to int16 - directly scaling to int16 range
-                    int16_data = np.int16(audio_data * 32767)
-                    
-                    # Convert to raw PCM bytes - this is what Gemini expects
-                    audio_bytes = int16_data.tobytes()
-                    
-                    # Add to mic streamer
-                    if self.mic_streamer and self.mic_streamer.running:
-                        self.mic_streamer.add_audio_chunk(audio_bytes)
+                    try:
+                        # Record audio block with try-except to handle discontinuities
+                        audio_data = recorder.record(CHUNK)
+                        
+                        # Handle potential multi-dimensional data
+                        if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
+                            audio_data = np.mean(audio_data, axis=1)
+                        
+                        # Make sure it's a flat array
+                        audio_data = audio_data.flatten()
+                        
+                        # Convert to int16 - directly scaling to int16 range
+                        int16_data = np.int16(audio_data * 32767)
+                        
+                        # Convert to raw PCM bytes - this is what Gemini expects
+                        audio_bytes = int16_data.tobytes()
+                        
+                        # Add to mic streamer
+                        if self.mic_streamer and self.mic_streamer.running:
+                            self.mic_streamer.add_audio_chunk(audio_bytes)
+                    except Exception as e:
+                        # Skip this block if there's a recording error, but don't terminate the loop
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Skipped mic audio block due to: {e}")
                 
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone audio capture error: {e}")
@@ -164,40 +175,45 @@ class LiveTranscriptionManager:
             
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting desktop audio capture with soundcard loopback")
             
+            # Use a slightly larger blocksize to reduce discontinuities
+            adjusted_blocksize = CHUNK * 2
+            
             # Record in a loop until desktop_capture_running is False
-            with loop_mic.recorder(samplerate=RATE, channels=1, blocksize=CHUNK) as recorder:
+            with loop_mic.recorder(samplerate=RATE, channels=1, blocksize=adjusted_blocksize) as recorder:
                 first_chunk = True
                 
                 # Add additional debug information
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting recorder with samplerate={RATE}, channels=1, blocksize={CHUNK}")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting recorder with samplerate={RATE}, channels=1, blocksize={adjusted_blocksize}")
                 
                 while self.desktop_capture_running:
-                    # Record audio block
-                    audio_data = recorder.record(CHUNK)
-                    
-                    # Debug info for first chunk only
-                    if first_chunk:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Audio data shape: {audio_data.shape}, dtype: {audio_data.dtype}")
-                        first_chunk = False
-                    
-                    # Handle potential multi-dimensional data
-                    if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
-                        audio_data = np.mean(audio_data, axis=1)
-                    
-                    # Make sure it's a flat array
-                    audio_data = audio_data.flatten()
-                    
-                    # Convert to int16 - directly scaling to int16 range
-                    int16_data = np.int16(audio_data * 32767)
-                    
-                    # Convert to raw PCM bytes - this is what Gemini expects (not WAV)
-                    audio_bytes = int16_data.tobytes()
-                    
-                    # Add to desktop streamer - sending raw PCM data
-                    if self.desktop_streamer and self.desktop_streamer.running:
-                        self.desktop_streamer.add_audio_chunk(audio_bytes)
-                    
-                    # No sleep needed - we want to process as quickly as possible
+                    try:
+                        # Record audio block with try-except to handle discontinuities
+                        audio_data = recorder.record(CHUNK)
+                        
+                        # Debug info for first chunk only
+                        if first_chunk:
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] Audio data shape: {audio_data.shape}, dtype: {audio_data.dtype}")
+                            first_chunk = False
+                        
+                        # Handle potential multi-dimensional data
+                        if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
+                            audio_data = np.mean(audio_data, axis=1)
+                        
+                        # Make sure it's a flat array
+                        audio_data = audio_data.flatten()
+                        
+                        # Convert to int16 - directly scaling to int16 range
+                        int16_data = np.int16(audio_data * 32767)
+                        
+                        # Convert to raw PCM bytes - this is what Gemini expects (not WAV)
+                        audio_bytes = int16_data.tobytes()
+                        
+                        # Add to desktop streamer - sending raw PCM data
+                        if self.desktop_streamer and self.desktop_streamer.running:
+                            self.desktop_streamer.add_audio_chunk(audio_bytes)
+                    except Exception as e:
+                        # Skip this block if there's a recording error, but don't terminate the loop
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Skipped desktop audio block due to: {e}")
                 
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture error with soundcard: {e}")

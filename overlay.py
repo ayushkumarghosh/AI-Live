@@ -1680,14 +1680,12 @@ class DraggableOverlay(QtWidgets.QWidget):
     @Slot(str, str)
     def _update_transcription_text(self, text, source_type):
         """Thread-safe method to update the transcription text"""
-        # Format based on source
-        source_label = "You" if source_type == "mic" else "Desktop"
+        # Set color based on source
         source_color = "#4CAF50" if source_type == "mic" else "#2196F3"
         
-        # Format the transcription text
+        # Format the transcription text with just the color, no label
         formatted_text = (
-            f"<div style='margin-bottom: 10px;'>"
-            f"<span style='color: {source_color}; font-weight: bold;'>{source_label}:</span> "
+            f"<div style='margin-bottom: 10px; color: {source_color};'>"
             f"{text}"
             f"</div>"
         )

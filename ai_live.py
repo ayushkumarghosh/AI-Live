@@ -1606,6 +1606,9 @@ def main():
     overlay.interview_answer_signal.connect(process_interview_answer)
     overlay.clear_history_signal.connect(stop_processing_and_clear_history)
     
+    # Connect the process_transcription_signal to process_text_input
+    overlay.process_transcription_signal.connect(process_text_input)
+    
     # Initialize live transcription
     initialize_live_transcription()
     

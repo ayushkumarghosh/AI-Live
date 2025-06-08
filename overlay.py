@@ -178,6 +178,9 @@ class DraggableOverlay(QtWidgets.QWidget):
     
     # New signal for updating transcriptions
     update_transcription_signal = Signal(str, str)
+    
+    # New signal for processing selected transcription
+    process_transcription_signal = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -666,7 +669,38 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.transcription_text.viewport().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.transcription_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.transcription_text.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.WidgetWidth)
+        # Enable text selection capabilities
+        self.transcription_text.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse | 
+            QtCore.Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         transcription_layout.addWidget(self.transcription_text)
+        
+        # Create a layout for transcription action buttons
+        transcription_buttons_layout = QtWidgets.QHBoxLayout()
+        
+        # Process selected transcription button
+        self.process_transcription_button = QtWidgets.QPushButton("💬 Process Selected Text")
+        self.process_transcription_button.setFixedHeight(30)
+        self.process_transcription_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(70, 130, 180, 200);
+                color: white; 
+                border: none;
+                border-radius: 5px;
+                padding: 0 8px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(100, 160, 210, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(60, 120, 170, 200);
+            }
+        """)
+        self.process_transcription_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.process_transcription_button.clicked.connect(self.process_selected_transcription)
+        transcription_buttons_layout.addWidget(self.process_transcription_button)
         
         # Clear transcription button
         self.clear_transcription_button = QtWidgets.QPushButton("🗑️ Clear Transcriptions")
@@ -689,7 +723,9 @@ class DraggableOverlay(QtWidgets.QWidget):
         """)
         self.clear_transcription_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.clear_transcription_button.clicked.connect(self.clear_transcriptions)
-        transcription_layout.addWidget(self.clear_transcription_button)
+        transcription_buttons_layout.addWidget(self.clear_transcription_button)
+        
+        transcription_layout.addLayout(transcription_buttons_layout)
         
         # Add the transcription panel to the split layout
         content_split_layout.addWidget(self.transcription_panel, 1)  # 1/3 of width
@@ -1729,6 +1765,71 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Scroll to the bottom
         self.transcription_text.moveCursor(QtGui.QTextCursor.MoveOperation.End)
         self.transcription_text.ensureCursorVisible()
+
+    def process_selected_transcription(self):
+        """Process the currently selected text from the transcription area"""
+        # Get selected text
+        cursor = self.transcription_text.textCursor()
+        selected_text = cursor.selectedText()
+        
+        # If no text is selected, get the latest transcription
+        if not selected_text:
+            if self.transcription_history:
+                # Get the latest transcription
+                latest = self.transcription_history[-1]
+                selected_text = latest.get("text", "")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] No text selected, using latest transcription", flush=True)
+            else:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] No text selected and no transcription history", flush=True)
+                return
+        
+        # Clean up the text (remove HTML tags)
+        clean_text = self._clean_html_tags(selected_text)
+        
+        if clean_text:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Processing selected transcription: {clean_text[:50]}...", flush=True)
+            
+            # Visual feedback for the button
+            self.process_transcription_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(60, 120, 170, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 14px;
+                }
+            """)
+            
+            # Reset the button style after 500ms
+            QtCore.QTimer.singleShot(500, lambda: self.process_transcription_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(70, 130, 180, 200);
+                    color: white; 
+                    border: none;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: rgba(100, 160, 210, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(60, 120, 170, 200);
+                }
+            """))
+            
+            # Emit the signal to process the text
+            self.process_transcription_signal.emit(clean_text)
+    
+    def _clean_html_tags(self, text):
+        """Remove HTML tags from text"""
+        import re
+        # Define pattern to match HTML tags
+        pattern = re.compile(r'<.*?>')
+        # Replace HTML tags with empty string
+        cleaned_text = re.sub(pattern, '', text)
+        return cleaned_text.strip()
 
 # ----------------------------------------------------------------
 # Main entry point.

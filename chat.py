@@ -47,7 +47,7 @@ def reset_chat_history():
 code_problem_prompt = "Read the transcriptions (if any) along with the screenshots to solve coding problems. If the screenshot or transcriptions contains a coding problem, provide a complete working solution as follows: For a new/first-time question, first briefly explain both the naive approach and the optimized approach (without code), THEN implement both approaches with complete code optimizing for time complexity as much as possible. If the screenshot shows a LeetCode-like interface or any code cell with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point without changing the signature of the function: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Ensure any code is ready to submit with no missing parts. Always be thorough and complete in your response."
 
 # 2. Non-coding problem analysis prompt (regular model)
-general_analysis_prompt = "Read the transcriptions along with the screenshots and answer any questions being asked. Respond as if you are the candidate being interviewed for a software engineering role. Give thorough, professional answers that showcase relevant skills and experience. Be concise but thorough, and maintain a professional tone throughout. Disregard any other sounds from the desktop audio only consider the speech. ALWAYS ANSWER FIRST WITHOUT EXPLAINING YOUR ANSWER THEN EXPLAIN YOUR ANSWER. If you don't know the answer, fabricate a relevant and reasonable answer instead. Never respond that you don't know or can't answer—always provide some answer."
+general_analysis_prompt = "Respond as if you are the candidate being interviewed for a software engineering role. Read the transcriptions along with the screenshots and answer any questions being asked. Give thorough, professional answers that showcase relevant skills and experience. Be concise but thorough, and maintain a professional tone throughout. Disregard any other sounds from the desktop audio only consider the speech. ALWAYS ANSWER FIRST WITHOUT EXPLAINING YOUR ANSWER THEN EXPLAIN YOUR ANSWER. If you don't know the answer, fabricate a relevant and reasonable answer instead. Never respond that you don't know or can't answer—always provide some answer."
 
 
 # 3. Repeat analysis prompt (regular model) 
@@ -329,8 +329,8 @@ def analyze_with_text_input(text_input: str,
     #     # This looks like formatted transcription data
     #     content_parts.append(f"This is a transcription of a conversation. The 'Interviewer' parts represent desktop audio and 'Me' parts represent microphone input. Please focus on answering the last question in this conversation: {text_input}")
     # else:
-    #     # Regular text input
-    #     content_parts.append(f"{text_input}")
+    # Regular text input
+    content_parts.append(f"{text_input}")
     
     # Add desktop audio if available
     # if desktop_audio_base64:
@@ -846,15 +846,15 @@ def analyze_general_problem_no_thinking(text_input: str,
         content_parts.append(f"Transcription: {text_input}")
     
     # Add desktop audio if available
-    if desktop_audio_base64:
-        content_parts.append("This is the desktop audio output from the user's system. Apply the general analysis instructions to any content found here:")
+    # if desktop_audio_base64:
+    #     content_parts.append("This is the desktop audio output from the user's system. Apply the general analysis instructions to any content found here:")
         
-        desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
-        content_parts.extend(desktop_audio_parts)
+    #     desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
+    #     content_parts.extend(desktop_audio_parts)
     
     # Add images if available
     if images_base64:
-        content_parts.append("These are the screens of the user. Apply the general analysis instructions to provide helpful insights for the content shown:")
+        content_parts.append("User's screens:")
         
         image_parts = prepare_image_parts(images_base64, image_format)
         content_parts.extend(image_parts)
@@ -870,8 +870,9 @@ def analyze_general_problem_no_thinking(text_input: str,
                 model="gemini-2.0-flash",
                 contents=content_parts,
                 config=types.GenerateContentConfig(
+                    system_instruction="You are a helpful assistant, that always answers the question in the first try. First answer the question, then explain your answer.",
                     temperature=0.6,
-                    max_output_tokens=60000,
+                    max_output_tokens=8000,
                     response_mime_type="application/json",
                     response_schema={
                         "type": "object",

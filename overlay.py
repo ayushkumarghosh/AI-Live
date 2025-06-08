@@ -196,6 +196,9 @@ class DraggableOverlay(QtWidgets.QWidget):
 
         # Initialize processing state.
         self.is_processing = False
+        
+        # New flag to control if transcriptions should be passed to analysis
+        self.use_transcriptions = True
 
         # Flags for dragging and resizing.
         self.dragging = False
@@ -278,6 +281,35 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.screenshot_toggle_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.screenshot_toggle_button.toggled.connect(self.toggle_screenshots)
         title_layout.addWidget(self.screenshot_toggle_button)
+        
+        # Add Transcription Toggle button
+        self.transcription_toggle_button = QtWidgets.QPushButton("🗣️ Include Transcripts")
+        self.transcription_toggle_button.setCheckable(True)
+        self.transcription_toggle_button.setChecked(True) # Enabled by default
+        # Set fixed height for the button
+        self.transcription_toggle_button.setFixedHeight(26)
+        self.transcription_toggle_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(100, 150, 180, 200); /* Blueish */
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 5px 10px; /* Match other title bar buttons */
+                font-size: 12px; /* Match other title bar buttons */
+            }
+            QPushButton:checked {
+                background-color: rgba(70, 120, 150, 200); /* Darker Blue */
+            }
+            QPushButton:hover {
+                background-color: rgba(120, 170, 200, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(90, 140, 170, 200);
+            }
+        """)
+        self.transcription_toggle_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.transcription_toggle_button.toggled.connect(self.toggle_transcriptions)
+        title_layout.addWidget(self.transcription_toggle_button)
         
         self.close_button = QtWidgets.QPushButton("✕")
         self.close_button.setFixedSize(24, 24)
@@ -736,6 +768,54 @@ class DraggableOverlay(QtWidgets.QWidget):
                 }
             """)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Screenshots disabled for analysis", flush=True)
+
+    def toggle_transcriptions(self, checked):
+        """Handle transcription toggle button state changes"""
+        self.use_transcriptions = checked
+        if checked:
+            self.transcription_toggle_button.setText("🗣️ Include Transcripts")
+            self.transcription_toggle_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(100, 150, 180, 200); /* Blueish */
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    padding: 5px 10px; /* Match other title bar buttons */
+                    font-size: 12px; /* Match other title bar buttons */
+                }
+                QPushButton:checked {
+                    background-color: rgba(70, 120, 150, 200); /* Darker Blue */
+                }
+                QPushButton:hover {
+                    background-color: rgba(120, 170, 200, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(90, 140, 170, 200);
+                }
+            """)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗣️ Transcriptions will be included in analysis", flush=True)
+        else:
+            self.transcription_toggle_button.setText("🔇 Exclude Transcripts")
+            self.transcription_toggle_button.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(180, 120, 160, 200); /* Purplish */
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    padding: 5px 10px; /* Match other title bar buttons */
+                    font-size: 12px; /* Match other title bar buttons */
+                }
+                QPushButton:checked {
+                     background-color: rgba(150, 90, 130, 200); /* Darker Purple */
+                }
+                QPushButton:hover {
+                    background-color: rgba(200, 140, 180, 200);
+                }
+                QPushButton:pressed {
+                    background-color: rgba(170, 110, 150, 200);
+                }
+            """)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Transcriptions will be excluded from analysis", flush=True)
 
     @Slot(str, str)
     def update_status(self, status: str, color="#4CAF50"):
@@ -1664,6 +1744,11 @@ class DraggableOverlay(QtWidgets.QWidget):
         Get either the selected transcriptions or the last 4 transcriptions.
         Returns a string formatted as interviewer/user conversation.
         """
+        # If transcriptions are disabled, return empty string
+        if not self.use_transcriptions:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Transcriptions excluded from analysis by toggle", flush=True)
+            return ""
+            
         # Check if there's any selected text
         cursor = self.transcription_text.textCursor()
         selected_text = cursor.selectedText()

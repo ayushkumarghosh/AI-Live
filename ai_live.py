@@ -1,6 +1,6 @@
 import queue
 from datetime import datetime
-from speech_capture import record_speech
+# Removed import: from speech_capture import record_speech
 from chat import analyze_with_audio_and_image, analyze_with_text_input
 import base64
 import io
@@ -27,6 +27,27 @@ api_semaphore = threading.Semaphore(1)  # Allow only 1 API call at a time
 
 # Add a global reference to the transcription manager
 transcription_manager = None
+
+# Stub implementation for record_speech (previously imported from speech_capture)
+def record_speech(audio_queue=None):
+    """
+    Stub implementation for record_speech
+    Since speech_capture.py was removed, this function does nothing but logs a message.
+    """
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Speech recording functionality has been removed", flush=True)
+    
+    # This function will run in a thread, so we need to keep it alive
+    while True:
+        time.sleep(10)  # Sleep to avoid high CPU usage
+        
+# Stub implementation for get_desktop_speech_segments (previously imported from speech_capture)
+def get_desktop_speech_segments():
+    """
+    Stub implementation for get_desktop_speech_segments
+    Since speech_capture.py was removed, this function returns an empty string.
+    """
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Desktop audio capture functionality has been removed", flush=True)
+    return ""
 
 def capture_screenshot(max_width=1280, quality=85):
     """Capture a screenshot, resize it, and return it as a base64 encoded string"""
@@ -538,8 +559,8 @@ def process_text_input(text_input):
         
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Text input received: {text_input}", flush=True)
         
-        # Get desktop audio from speech_capture
-        from speech_capture import get_desktop_speech_segments
+        # Get desktop audio using our local stub function
+        # Removed: from speech_capture import get_desktop_speech_segments
         
         # Check if desktop audio should be included
         include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
@@ -704,8 +725,8 @@ def process_pro_text_input(text_input):
         
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Pro analysis request received: {text_input}", flush=True)
         
-        # Get desktop audio from speech_capture
-        from speech_capture import get_desktop_speech_segments
+        # Get desktop audio using our local stub function
+        # Removed: from speech_capture import get_desktop_speech_segments
         
         # Check if desktop audio should be included
         include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
@@ -872,7 +893,6 @@ def process_code_analysis(prompt):
                 # Get desktop audio if enabled
                 desktop_audio = ""
                 if overlay and overlay.desktop_audio_button.isChecked():
-                    from speech_capture import get_desktop_speech_segments
                     desktop_audio = get_desktop_speech_segments()
                     if desktop_audio:
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for code analysis", flush=True)
@@ -977,7 +997,6 @@ def process_general_analysis(prompt):
                 # Get desktop audio if enabled
                 desktop_audio = ""
                 if overlay and overlay.desktop_audio_button.isChecked():
-                    from speech_capture import get_desktop_speech_segments
                     desktop_audio = get_desktop_speech_segments()
                     if desktop_audio:
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for general analysis", flush=True)
@@ -1082,7 +1101,6 @@ def process_repeat_analysis(prompt):
                 # Get desktop audio if enabled
                 desktop_audio = ""
                 if overlay and overlay.desktop_audio_button.isChecked():
-                    from speech_capture import get_desktop_speech_segments
                     desktop_audio = get_desktop_speech_segments()
                     if desktop_audio:
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for repeat analysis", flush=True)
@@ -1187,7 +1205,6 @@ def process_pro_code_analysis(prompt):
                 # Get desktop audio if enabled
                 desktop_audio = ""
                 if overlay and overlay.desktop_audio_button.isChecked():
-                    from speech_capture import get_desktop_speech_segments
                     desktop_audio = get_desktop_speech_segments()
                     if desktop_audio:
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for Pro code analysis", flush=True)
@@ -1292,7 +1309,6 @@ def process_pro_repeat_analysis(prompt):
                 # Get desktop audio if enabled
                 desktop_audio = ""
                 if overlay and overlay.desktop_audio_button.isChecked():
-                    from speech_capture import get_desktop_speech_segments
                     desktop_audio = get_desktop_speech_segments()
                     if desktop_audio:
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for Pro repeat analysis", flush=True)
@@ -1409,7 +1425,6 @@ def process_general_analysis_no_thinking(prompt):
             desktop_audio_base64 = ""
             if overlay and overlay.desktop_audio_button.isChecked():
                 # Desktop audio processing would go here if available
-                from speech_capture import get_desktop_speech_segments
                 desktop_audio_base64 = get_desktop_speech_segments() 
                 if desktop_audio_base64:
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for no-thinking analysis", flush=True)
@@ -1478,7 +1493,6 @@ def process_interview_answer(prompt=""):
                 # Get desktop audio
                 desktop_audio = ""
                 if overlay and overlay.desktop_audio_button.isChecked():
-                    from speech_capture import get_desktop_speech_segments
                     desktop_audio = get_desktop_speech_segments()
                     if desktop_audio:
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for interview answer", flush=True)

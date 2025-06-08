@@ -225,66 +225,39 @@ class DraggableOverlay(QtWidgets.QWidget):
         title_layout.addWidget(self.status_label)
         title_layout.addStretch(1)
         
-        # Add desktop audio toggle button
-        self.desktop_audio_button = QtWidgets.QPushButton("🔊 Desktop Audio")
-        self.desktop_audio_button.setCheckable(True)
-        self.desktop_audio_button.setChecked(True)  # Enabled by default
-        self.desktop_audio_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(70, 130, 180, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 5px 10px;
-                font-size: 12px;
-            }
-            QPushButton:checked {
-                background-color: rgba(50, 100, 150, 200);
-            }
-            QPushButton:hover {
-                background-color: rgba(100, 160, 210, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(60, 120, 170, 200);
-            }
-        """)
-        self.desktop_audio_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.desktop_audio_button.toggled.connect(self.toggle_desktop_audio)
-        title_layout.addWidget(self.desktop_audio_button)
+        # Desktop audio button removed
         
-        # Add microphone toggle button
-        self.mic_button = QtWidgets.QPushButton("🎤 Microphone")
-        self.mic_button.setCheckable(True)
-        self.mic_button.setChecked(True)  # Enabled by default
-        self.mic_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(70, 180, 130, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 5px 10px;
-                font-size: 12px;
-            }
-            QPushButton:checked {
-                background-color: rgba(50, 150, 100, 200);
-            }
-            QPushButton:hover {
-                background-color: rgba(100, 210, 160, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(60, 170, 120, 200);
-            }
-        """)
-        self.mic_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.mic_button.toggled.connect(self.toggle_microphone)
-        title_layout.addWidget(self.mic_button)
+        # Microphone button removed
+        
+        # Add properties for desktop_audio_button and mic_button even though they don't exist in UI
+        # This is for backward compatibility with existing code
+        class DummyButton:
+            def __init__(self, checked=True):
+                self._checked = checked
+                
+            def isChecked(self):
+                return self._checked
+                
+            def sizeHint(self):
+                # Return a dummy size hint
+                class SizeHint:
+                    def __init__(self):
+                        self.height = 26
+                        self.width = 100
+                    def height(self):
+                        return self.height
+                return SizeHint()
+        
+        # Create dummy buttons that will be used by code that depends on these objects
+        self.desktop_audio_button = DummyButton(checked=True)
+        self.mic_button = DummyButton(checked=True)
         
         # Add Screenshot Toggle button (Moved to Title Bar)
         self.screenshot_toggle_button = QtWidgets.QPushButton("🖼️ Screenshots On")
         self.screenshot_toggle_button.setCheckable(True)
         self.screenshot_toggle_button.setChecked(True) # Enabled by default
-        # Make height consistent with other title bar buttons
-        self.screenshot_toggle_button.setFixedHeight(self.desktop_audio_button.sizeHint().height())
+        # Set fixed height for the button
+        self.screenshot_toggle_button.setFixedHeight(26)
         self.screenshot_toggle_button.setStyleSheet("""
             QPushButton {
                 background-color: rgba(100, 180, 100, 200); /* Greenish */
@@ -754,59 +727,19 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.is_processing = processing_state
 
     def toggle_desktop_audio(self, checked):
-        """Handle desktop audio toggle button state changes"""
-        if checked:
-            self.desktop_audio_button.setText("🔊 Desktop Audio")
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio enabled", flush=True)
-        else:
-            self.desktop_audio_button.setText("🔇 Desktop Audio")
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Desktop audio disabled", flush=True)
+        """Stub implementation for desktop audio toggle (button has been removed)"""
+        # Desktop audio is always enabled now
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio toggle called (button removed)", flush=True)
 
     def toggle_microphone(self, checked):
-        """Handle microphone toggle button state changes"""
+        """Stub implementation for microphone toggle (button has been removed)"""
+        # Microphone is always enabled now
         if checked:
-            self.mic_button.setText("🎤 Microphone")
-            self.mic_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(70, 180, 130, 200);
-                    color: white;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 5px 10px;
-                    font-size: 12px;
-                }
-                QPushButton:checked {
-                    background-color: rgba(50, 150, 100, 200);
-                }
-                QPushButton:hover {
-                    background-color: rgba(100, 210, 160, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(60, 170, 120, 200);
-                }
-            """)
             self.update_status("Listening...", "#4CAF50")
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 Microphone enabled", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone toggle called (button removed)", flush=True)
         else:
-            self.mic_button.setText("🔴 Mic Off")
-            self.mic_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(200, 60, 60, 200);
-                    color: white;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 5px 10px;
-                    font-size: 12px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(230, 80, 80, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(180, 40, 40, 200);
-                }
-            """)
             self.update_status("Microphone Off", "#FF5050")
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤫 Microphone disabled", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone toggle called (button removed)", flush=True)
 
     def toggle_screenshots(self, checked):
         """Handle screenshot toggle button state changes"""

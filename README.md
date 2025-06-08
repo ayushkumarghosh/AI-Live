@@ -22,7 +22,7 @@ The system processes your spoken questions, captures your screen, and provides A
 
 The system consists of three main components:
 
-1. **Speech Capture** (`speech_capture.py`): Records and processes audio input using PyAudio and Silero VAD
+1. **Audio Handling** (integrated in `ai_live.py`): Handles audio processing with stub implementations
 2. **API Integration** (`pollinations.py`): Handles communication with the Pollinations AI API for transcription and analysis
 3. **Main Application** (`ai_live.py`): Orchestrates the system using asyncio for concurrent processing
 

@@ -5,6 +5,8 @@ from datetime import datetime
 import pyaudio
 import numpy as np
 import sounddevice as sd
+import soundcard as sc
+import soundfile as sf
 from gemini_live import AudioStreamer
 import base64
 import io
@@ -13,7 +15,7 @@ import wave
 # Audio parameters
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
-RATE = 48000
+RATE = 48000  # Using 48kHz to match gemini_live.py
 CHUNK = 1024
 
 class LiveTranscriptionManager:
@@ -85,58 +87,69 @@ class LiveTranscriptionManager:
         return False
         
     def capture_desktop_audio(self):
-        """Capture desktop audio using sounddevice and feed it to the desktop streamer"""
+        """Capture desktop audio using soundcard with loopback capability and feed it to the desktop streamer"""
         try:
-            # Try to find Stereo Mix device
-            stereo_mix_index = None
-            devices = sd.query_devices()
+            # Get all loopback-capable microphones
+            loopback_mics = sc.all_microphones(include_loopback=True)
             
-            for i, device in enumerate(devices):
-                if "stereo mix" in device['name'].lower() and device['max_input_channels'] > 0:
-                    stereo_mix_index = i
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Found Stereo Mix device: {device['name']} (index {i})")
-                    break
-                    
-            if stereo_mix_index is None:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] No Stereo Mix device found, desktop transcription disabled")
+            if not loopback_mics:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] No loopback microphones found. Falling back to PyAudio.")
+                self.try_pyaudio_fallback()
                 return
                 
-            # Define callback function for the sounddevice stream
-            def audio_callback(indata, frames, time_info, status):
-                if status:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Status: {status}")
-                
-                # Convert stereo to mono if needed by averaging channels
-                if indata.shape[1] > 1:
-                    mono_data = np.mean(indata, axis=1)
-                else:
-                    mono_data = indata[:, 0]
-                    
-                # Scale float32 (-1.0 to 1.0) to int16 values
-                int16_data = (mono_data * 32767).astype(np.int16)
-                
-                # Convert to bytes
-                audio_bytes = int16_data.tobytes()
-                
-                # Add to desktop streamer
-                if self.desktop_streamer and self.desktop_streamer.running:
-                    self.desktop_streamer.add_audio_chunk(audio_bytes)
+            # Find the loopback mic for the default speaker
+            default_spk = sc.default_speaker()
+            loop_mic = next(
+                (m for m in loopback_mics if default_spk.name in m.name),
+                None
+            )
             
-            # Start capturing audio from Stereo Mix
-            with sd.InputStream(
-                device=int(stereo_mix_index), 
-                channels=min(2, devices[stereo_mix_index]['max_input_channels']),
-                samplerate=RATE,
-                callback=audio_callback,
-                blocksize=CHUNK,
-                dtype='float32'
-            ):
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture started with Stereo Mix")
+            # If no associated loopback mic found, fall back to the first one
+            if loop_mic is None:
+                loop_mic = loopback_mics[0]
+                
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Using loopback mic: {loop_mic.name}")
+            
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting desktop audio capture with soundcard loopback")
+            
+            # Record in a loop until desktop_capture_running is False
+            with loop_mic.recorder(samplerate=RATE, channels=1, blocksize=CHUNK) as recorder:
+                first_chunk = True
+                
+                # Add additional debug information
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting recorder with samplerate={RATE}, channels=1, blocksize={CHUNK}")
+                
                 while self.desktop_capture_running:
-                    time.sleep(0.1)  # Sleep to prevent high CPU usage
+                    # Record audio block
+                    audio_data = recorder.record(CHUNK)
                     
+                    # Debug info for first chunk only
+                    if first_chunk:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Audio data shape: {audio_data.shape}, dtype: {audio_data.dtype}")
+                        first_chunk = False
+                    
+                    # Handle potential multi-dimensional data
+                    if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
+                        audio_data = np.mean(audio_data, axis=1)
+                    
+                    # Make sure it's a flat array
+                    audio_data = audio_data.flatten()
+                    
+                    # Convert to int16 - directly scaling to int16 range
+                    int16_data = np.int16(audio_data * 32767)
+                    
+                    # Convert to raw PCM bytes - this is what Gemini expects (not WAV)
+                    audio_bytes = int16_data.tobytes()
+                    
+                    # Add to desktop streamer - sending raw PCM data
+                    if self.desktop_streamer and self.desktop_streamer.running:
+                        self.desktop_streamer.add_audio_chunk(audio_bytes)
+                    
+                    # Sleep briefly to prevent high CPU usage
+                    time.sleep(0.001)
+                
         except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture error: {e}")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture error with soundcard: {e}")
             self.try_pyaudio_fallback()
             
     def try_pyaudio_fallback(self):
@@ -179,7 +192,8 @@ class LiveTranscriptionManager:
             # Continuous capture loop
             while self.desktop_capture_running:
                 try:
-                    audio_chunk = stream.read(CHUNK)
+                    # Read raw PCM data directly - this is what Gemini expects
+                    audio_chunk = stream.read(CHUNK, exception_on_overflow=False)
                     
                     # Convert to mono if stereo
                     if p.get_device_info_by_index(stereo_mix_index).get('maxInputChannels') > 1:
@@ -188,12 +202,12 @@ class LiveTranscriptionManager:
                         mono_array = np.mean(audio_array, axis=1, dtype=np.int16)
                         audio_chunk = mono_array.tobytes()
                     
-                    # Add to desktop streamer
+                    # Add raw PCM data to desktop streamer - no need for WAV conversion
                     if self.desktop_streamer and self.desktop_streamer.running:
                         self.desktop_streamer.add_audio_chunk(audio_chunk)
                     
-                    # Avoid high CPU usage
-                    time.sleep(0.001)
+                    # # Avoid high CPU usage
+                    # time.sleep(0.001)
                     
                 except Exception as e:
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] Error reading audio: {e}")

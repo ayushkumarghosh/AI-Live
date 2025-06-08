@@ -10,6 +10,7 @@ import sounddevice as sd
 import threading
 import platform
 import collections
+import soundcard as sc
 
 # Audio settings
 RATE = 16000
@@ -239,46 +240,53 @@ def record_speech(audio_queue=None):
 
 def capture_desktop_audio_with_sounddevice():
     """
-    Capture desktop audio using sounddevice with loopback capability.
-    Also performs speech detection on desktop audio.
+    Capture desktop audio using soundcard with loopback capability.
+    This approach is more reliable than searching for Stereo Mix.
     """
-    global desktop_audio_buffer, desktop_capture_running, desktop_speech_segments
+    global desktop_audio_buffer, desktop_capture_running, desktop_continuous_buffer
     
     try:
-        # Try using the Stereo Mix device directly since it's available in your system
-        stereo_mix_index = None
+        # Get all loopback-capable microphones
+        loopback_mics = sc.all_microphones(include_loopback=True)
         
-        # Look for Stereo Mix device
-        devices = sd.query_devices()
-        for i, device in enumerate(devices):
-            if "stereo mix" in device['name'].lower() and device['max_input_channels'] > 0:
-                stereo_mix_index = i
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Found Stereo Mix device: {device['name']} (index {i})")
-                break
-        
-        if stereo_mix_index is not None:
-            # Initialize buffer for storing audio data
-            max_buffer_samples = int(MAX_DESKTOP_BUFFER_DURATION * RATE)
-            buffer = np.zeros(max_buffer_samples, dtype=np.int16)
-            buffer_position = 0
+        if not loopback_mics:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] No loopback microphones found. Falling back to PyAudio.")
+            try_pyaudio_fallback()
+            return
             
-            # Callback function for audio input
-            def audio_callback(indata, frames, time_info, status):
-                nonlocal buffer_position
+        # Find the loopback mic for the default speaker
+        default_spk = sc.default_speaker()
+        loop_mic = next(
+            (m for m in loopback_mics if default_spk.name in m.name),
+            None
+        )
+        
+        # If no associated loopback mic found, fall back to the first one
+        if loop_mic is None:
+            loop_mic = loopback_mics[0]
+            
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Using loopback mic: {loop_mic.name}")
+        
+        # Initialize buffer for storing audio data
+        max_buffer_samples = int(MAX_DESKTOP_BUFFER_DURATION * RATE)
+        buffer = np.zeros(max_buffer_samples, dtype=np.int16)
+        buffer_position = 0
+        
+        # Initialize desktop_audio_buffer as numpy array if it's not already
+        global desktop_audio_buffer
+        if isinstance(desktop_audio_buffer, list):
+            desktop_audio_buffer = np.zeros(max_buffer_samples, dtype=np.int16)
+        
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting desktop audio capture with soundcard loopback")
+        
+        # Record in a loop until desktop_capture_running is False
+        with loop_mic.recorder(samplerate=RATE, channels=1, blocksize=CHUNK) as recorder:
+            while desktop_capture_running:
+                # Record audio block
+                audio_data = recorder.record(CHUNK)
                 
-                if status:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Status: {status}")
-                
-                # Convert stereo to mono if needed by averaging channels
-                if indata.shape[1] > 1:
-                    mono_data = np.mean(indata, axis=1)
-                else:
-                    mono_data = indata[:, 0]
-                    
-                # Scale float32 (-1.0 to 1.0) to int16 values
-                int16_data = (mono_data * 32767).astype(np.int16)
-                
-                # No longer detect speech in desktop audio - just continuously capture
+                # Convert to int16
+                int16_data = (audio_data * 32767).astype(np.int16)
                 
                 # Calculate how many samples can fit in the remaining buffer
                 samples_to_copy = min(len(int16_data), max_buffer_samples - buffer_position)
@@ -293,38 +301,23 @@ def capture_desktop_audio_with_sounddevice():
                     buffer_position = 0
                 
                 # Store the audio in the global buffer
-                global desktop_audio_buffer, desktop_continuous_buffer
                 desktop_audio_buffer = buffer.copy()  # Store the entire buffer
                 
                 # Add to continuous buffer
                 desktop_continuous_buffer.append(int16_data.tobytes())
-            
-            # Start capturing audio from Stereo Mix
-            with sd.InputStream(
-                device=int(stereo_mix_index),  # Cast to int to ensure it's not a string/float
-                channels=min(2, devices[stereo_mix_index]['max_input_channels']),
-                samplerate=RATE,
-                callback=audio_callback,
-                blocksize=CHUNK,
-                dtype='float32'
-            ):
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture started with Stereo Mix")
-                while desktop_capture_running:
-                    time.sleep(0.1)  # Sleep to prevent high CPU usage
-        else:
-            # No Stereo Mix available, try using PyAudio as a fallback
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] No Stereo Mix found, trying PyAudio fallback...")
-            try_pyaudio_fallback()
-    
+                
+                # Sleep briefly to prevent high CPU usage
+                time.sleep(0.001)
+                
     except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture error: {e}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture error with soundcard: {e}")
         try_pyaudio_fallback()
 
 # Function no longer needed as we don't save speech segments
 
 def try_pyaudio_fallback():
     """Try capturing desktop audio using PyAudio as a fallback"""
-    global desktop_audio_buffer, desktop_capture_running, desktop_speech_segments
+    global desktop_audio_buffer, desktop_capture_running, desktop_continuous_buffer
     
     try:
         p = pyaudio.PyAudio()
@@ -347,6 +340,7 @@ def try_pyaudio_fallback():
         
         if stereo_mix_index is None:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] No suitable recording device found. Desktop audio capture disabled.")
+            desktop_audio_buffer = [] if isinstance(desktop_audio_buffer, list) else np.array([])
             return
         
         # Open Stereo Mix stream
@@ -363,8 +357,7 @@ def try_pyaudio_fallback():
         
         # Initialize buffer
         max_frames = int(MAX_DESKTOP_BUFFER_DURATION * RATE / CHUNK)
-        
-        # No longer need to track speech state for desktop audio
+        desktop_audio_buffer = []
         
         # Continuous capture loop
         while desktop_capture_running:
@@ -386,10 +379,7 @@ def try_pyaudio_fallback():
                     desktop_audio_buffer = desktop_audio_buffer[-max_frames:]
                     
                 # Add to continuous buffer (always keeps the last 30 seconds)
-                global desktop_continuous_buffer
                 desktop_continuous_buffer.append(audio_chunk)
-                
-                # No longer need to process for speech detection - just capture continuously
                 
                 # Avoid high CPU usage
                 time.sleep(0.001)
@@ -406,7 +396,7 @@ def try_pyaudio_fallback():
     except Exception as e:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] PyAudio fallback failed: {e}")
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture disabled.")
-        desktop_audio_buffer = []
+        desktop_audio_buffer = [] if isinstance(desktop_audio_buffer, list) else np.array([])
 
 def get_desktop_speech_segments():
     """Get the last 30 seconds of continuous desktop audio as a single base64 WAV"""
@@ -464,7 +454,7 @@ def get_desktop_audio_buffer(p):
         wf.setsampwidth(2)  # 16-bit audio (int16)
         wf.setframerate(RATE)
         
-        # Handle both list of chunks (PyAudio) and numpy array (sounddevice)
+        # Handle both list of chunks (PyAudio) and numpy array (soundcard)
         if isinstance(desktop_audio_buffer, list):
             audio_data = b''.join(desktop_audio_buffer)
             wf.writeframes(audio_data)

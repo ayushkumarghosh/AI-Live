@@ -3,22 +3,22 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 import os 
-import pyaudio
 import time
 import queue
 import threading
 from datetime import datetime
+import soundcard as sc
+import numpy as np
 
 api_key = os.getenv("GEMINI_API")
 
-# Audio parameters
-FORMAT = pyaudio.paInt16
+# Audio parameters (no longer using pyaudio constants)
+SAMPLE_RATE = 48000
 CHANNELS = 1
-RATE = 48000  # Changed to match speech_capture.py
-CHUNK = 1024   # Changed to match speech_capture.py
+CHUNK_SIZE = 1024
 
 class AudioStreamer:
-    def __init__(self, transcription_callback=None, sample_rate=RATE, chunk_size=CHUNK, source_type="mic"):
+    def __init__(self, transcription_callback=None, sample_rate=SAMPLE_RATE, chunk_size=CHUNK_SIZE, source_type="mic"):
         """
         Initialize the AudioStreamer with optional callback function
         
@@ -28,7 +28,6 @@ class AudioStreamer:
             chunk_size: Audio chunk size (default 1024 samples)
             source_type: Type of audio source ('mic' or 'desktop')
         """
-        self.p = pyaudio.PyAudio()
         self.stream = None
         self.audio_queue = None
         self.transcription_callback = transcription_callback
@@ -39,6 +38,7 @@ class AudioStreamer:
         self.session = None
         self.tasks = []
         self.source_type = source_type
+        self.recorder = None
         
         # Initialize genai client
         if api_key:
@@ -59,42 +59,123 @@ class AudioStreamer:
         }
         
     async def start_mic_stream(self, device_index=None):
-        """Initialize and start the microphone stream"""
-        # Open microphone stream - we'll support both passing a stream or creating one
-        if self.stream is None:
-            self.stream = self.p.open(
-                format=FORMAT,
-                channels=CHANNELS,
-                rate=self.sample_rate,
-                input=True,
-                input_device_index=device_index,
-                frames_per_buffer=self.chunk_size
-            )
+        """Initialize and start the microphone stream using soundcard"""
+        try:
+            if self.source_type == "desktop":
+                # For desktop audio, use loopback microphones
+                loopback_mics = sc.all_microphones(include_loopback=True)
+                
+                if not loopback_mics:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ No loopback microphones found", flush=True)
+                    return
+                
+                # Find the loopback mic for the default speaker
+                default_spk = sc.default_speaker()
+                loop_mic = next(
+                    (m for m in loopback_mics if default_spk.name in m.name),
+                    None
+                )
+                
+                # If no associated loopback mic found, fall back to the first one
+                if loop_mic is None:
+                    loop_mic = loopback_mics[0]
+                
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Using desktop audio loopback: {loop_mic.name}", flush=True)
+                
+                # Create recorder for desktop audio
+                self.recorder = loop_mic.recorder(samplerate=self.sample_rate, channels=CHANNELS, blocksize=self.chunk_size)
+            else:
+                # For microphone audio, use normal microphones
+                # Get the default microphone or a specific one if device_index is provided
+                if device_index is not None:
+                    # Get all microphones
+                    mics = sc.all_microphones()
+                    if 0 <= device_index < len(mics):
+                        mic = mics[device_index]
+                    else:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Invalid device index, using default microphone", flush=True)
+                        mic = sc.default_microphone()
+                else:
+                    mic = sc.default_microphone()
+                    
+                if mic is None:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ No microphone found", flush=True)
+                    return
+                    
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 Using microphone: {mic.name}", flush=True)
+                
+                # Create recorder for microphone
+                self.recorder = mic.recorder(samplerate=self.sample_rate, channels=CHANNELS, blocksize=self.chunk_size)
             
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 {self.source_type.capitalize()} stream connected to Gemini", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 {self.source_type.capitalize()} stream connected to Gemini", flush=True)
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Error initializing {self.source_type} audio: {e}", flush=True)
         
     async def capture_audio(self, external_stream=None):
         """Continuously capture audio from microphone and put into queue"""
-        stream_to_use = external_stream if external_stream else self.stream
-        
-        while self.running:
+        if external_stream:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Using external audio stream", flush=True)
+            while self.running:
+                try:
+                    # Read from external stream
+                    data = await asyncio.to_thread(
+                        external_stream.read, 
+                        self.chunk_size, 
+                        exception_on_overflow=False
+                    )
+                    
+                    # Put audio data in queue
+                    if self.audio_queue:
+                        await self.audio_queue.put(data)
+                    
+                    # Small delay to prevent overwhelming the queue
+                    await asyncio.sleep(0.01)
+                except Exception as e:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Error capturing {self.source_type} audio: {e}", flush=True)
+                    await asyncio.sleep(0.1)
+        else:
+            # Use the soundcard recorder
+            if not self.recorder:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ No recorder available for {self.source_type}", flush=True)
+                return
+                
             try:
-                # Read audio chunk from microphone
-                data = await asyncio.to_thread(
-                    stream_to_use.read, 
-                    self.chunk_size, 
-                    exception_on_overflow=False
-                )
-                
-                # Put audio data in queue
-                if self.audio_queue:
-                    await self.audio_queue.put(data)
-                
-                # Small delay to prevent overwhelming the queue
-                await asyncio.sleep(0.01)
+                # Start the recorder
+                with self.recorder as rec:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 Started {self.source_type} recording with soundcard", flush=True)
+                    
+                    while self.running:
+                        try:
+                            # Record audio chunk
+                            audio_data = await asyncio.to_thread(rec.record, self.chunk_size)
+                            
+                            # Handle potential multi-dimensional data (especially for desktop audio)
+                            if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
+                                # If stereo, convert to mono by averaging channels
+                                audio_data = np.mean(audio_data, axis=1)
+                            
+                            # Make sure it's a flat array
+                            audio_data = audio_data.flatten()
+                            
+                            # Convert float32 audio data to int16 PCM for Gemini
+                            # Scale to int16 range (-32768 to 32767)
+                            int16_data = np.int16(audio_data * 32767)
+                            
+                            # Convert to bytes
+                            audio_bytes = int16_data.tobytes()
+                            
+                            # Put audio data in queue
+                            if self.audio_queue:
+                                await self.audio_queue.put(audio_bytes)
+                            
+                            # Small delay to prevent overwhelming the queue
+                            await asyncio.sleep(0.01)
+                            
+                        except Exception as e:
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error recording {self.source_type} audio: {e}", flush=True)
+                            await asyncio.sleep(0.1)
             except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error capturing {self.source_type} audio: {e}", flush=True)
-                await asyncio.sleep(0.1)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error with {self.source_type} recorder: {e}", flush=True)
             
     async def send_audio_to_gemini(self):
         """Send audio data from queue to Gemini"""
@@ -159,7 +240,7 @@ class AudioStreamer:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Gemini {self.source_type} transcription session started", flush=True)
                 
                 # Start microphone stream if needed
-                if not external_stream and not self.stream:
+                if not external_stream and not self.recorder:
                     await self.start_mic_stream()
                 
                 # Create tasks
@@ -214,27 +295,47 @@ class AudioStreamer:
     def cleanup(self):
         """Clean up resources"""
         self.stop()
-        if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
-        self.p.terminate()
+        self.recorder = None
 
 async def main():
     # This function serves as a standalone example when running this file directly
-    audio_streamer = AudioStreamer(
-        transcription_callback=lambda text, source_type: print(f"Callback received from {source_type}: {text}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting Gemini Live Audio Transcription Demo", flush=True)
+    
+    # Create both mic and desktop streamers
+    mic_streamer = AudioStreamer(
+        transcription_callback=lambda text, source_type: print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 Mic: {text}"),
+        source_type="mic"
+    )
+    
+    desktop_streamer = AudioStreamer(
+        transcription_callback=lambda text, source_type: print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop: {text}"),
+        source_type="desktop"
     )
     
     try:
-        await audio_streamer.start_mic_stream()
-        await audio_streamer.run()
+        # Start both streams
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting microphone transcription...", flush=True)
+        await mic_streamer.start_mic_stream()
+        
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting desktop audio transcription...", flush=True)
+        await desktop_streamer.start_mic_stream()
+        
+        # Run them both asynchronously
+        mic_task = asyncio.create_task(mic_streamer.run())
+        desktop_task = asyncio.create_task(desktop_streamer.run())
+        
+        # Wait for both to complete (or until keyboard interrupt)
+        await asyncio.gather(mic_task, desktop_task)
     
     except KeyboardInterrupt:
-        print("\nStopping microphone stream...")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Stopping audio streams...", flush=True)
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error: {e}", flush=True)
     finally:
-        audio_streamer.cleanup()
+        # Clean up both streamers
+        mic_streamer.cleanup()
+        desktop_streamer.cleanup()
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Audio transcription stopped", flush=True)
 
 if __name__ == "__main__":
     asyncio.run(main())

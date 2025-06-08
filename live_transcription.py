@@ -32,8 +32,12 @@ class LiveTranscriptionManager:
         self.mic_streamer = None
         self.desktop_streamer = None
         
-        # Create flag to control desktop audio capture
+        # Create flags to control audio capture
+        self.mic_capture_running = False
         self.desktop_capture_running = False
+        
+        # Create audio queues
+        self.mic_audio_queue = queue.Queue()
         self.desktop_audio_queue = queue.Queue()
         
     def start_transcription(self):
@@ -51,6 +55,7 @@ class LiveTranscriptionManager:
     def start_mic_transcription(self):
         """Start microphone transcription"""
         if self.mic_streamer is None:
+            # Create mic audio streamer
             self.mic_streamer = AudioStreamer(
                 transcription_callback=self.transcription_callback,
                 sample_rate=RATE,
@@ -58,10 +63,58 @@ class LiveTranscriptionManager:
                 source_type="mic"
             )
             
+            # Start microphone capture in a separate thread
+            self.mic_capture_running = True
+            mic_thread = threading.Thread(
+                target=self.capture_mic_audio,
+                daemon=True
+            )
+            mic_thread.start()
+            
             # Start the mic streamer
             return self.mic_streamer.start()
         return False
         
+    def capture_mic_audio(self):
+        """Capture microphone audio and feed it to the mic streamer"""
+        try:
+            # Get the default microphone
+            mic = sc.default_microphone()
+            
+            if mic is None:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] No microphone found. Mic transcription disabled.")
+                return
+                
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Using microphone: {mic.name}")
+            
+            # Record in a loop until mic_capture_running is False
+            with mic.recorder(samplerate=RATE, channels=1, blocksize=CHUNK) as recorder:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting microphone recording")
+                
+                while self.mic_capture_running:
+                    # Record audio block
+                    audio_data = recorder.record(CHUNK)
+                    
+                    # Handle potential multi-dimensional data
+                    if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
+                        audio_data = np.mean(audio_data, axis=1)
+                    
+                    # Make sure it's a flat array
+                    audio_data = audio_data.flatten()
+                    
+                    # Convert to int16 - directly scaling to int16 range
+                    int16_data = np.int16(audio_data * 32767)
+                    
+                    # Convert to raw PCM bytes - this is what Gemini expects
+                    audio_bytes = int16_data.tobytes()
+                    
+                    # Add to mic streamer
+                    if self.mic_streamer and self.mic_streamer.running:
+                        self.mic_streamer.add_audio_chunk(audio_bytes)
+                
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone audio capture error: {e}")
+            
     def start_desktop_transcription(self):
         """Start desktop audio capture and transcription"""
         if self.desktop_streamer is None:
@@ -81,8 +134,7 @@ class LiveTranscriptionManager:
             )
             desktop_thread.start()
             
-            # Start the desktop streamer without creating a mic stream
-            # We'll feed it audio directly via add_audio_chunk
+            # Start the desktop streamer
             return self.desktop_streamer.start()
         return False
         
@@ -145,8 +197,7 @@ class LiveTranscriptionManager:
                     if self.desktop_streamer and self.desktop_streamer.running:
                         self.desktop_streamer.add_audio_chunk(audio_bytes)
                     
-                    # Sleep briefly to prevent high CPU usage
-                    time.sleep(0.001)
+                    # No sleep needed - we want to process as quickly as possible
                 
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture error with soundcard: {e}")
@@ -206,12 +257,9 @@ class LiveTranscriptionManager:
                     if self.desktop_streamer and self.desktop_streamer.running:
                         self.desktop_streamer.add_audio_chunk(audio_chunk)
                     
-                    # # Avoid high CPU usage
-                    # time.sleep(0.001)
-                    
                 except Exception as e:
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] Error reading audio: {e}")
-                    time.sleep(0.1)
+                    # No sleep needed here either to improve responsiveness
             
             # Clean up
             stream.stop_stream()
@@ -226,7 +274,8 @@ class LiveTranscriptionManager:
         """Stop all transcription services"""
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Stopping all transcription services", flush=True)
         
-        # Stop desktop audio capture
+        # Stop audio capture
+        self.mic_capture_running = False
         self.desktop_capture_running = False
         
         # Stop streamers
@@ -247,3 +296,5 @@ class LiveTranscriptionManager:
         if self.desktop_streamer:
             self.desktop_streamer.cleanup()
             self.desktop_streamer = None 
+        
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Live transcription manager cleaned up", flush=True) 

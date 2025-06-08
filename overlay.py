@@ -1669,7 +1669,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         """Clear the transcription history and display"""
         self.transcription_history = []
         self.transcription_text.clear()
-        self.transcription_text.append("<div style='color: #FFA500; text-align: center; margin: 10px 0;'>Transcription history cleared</div>")
+        self.transcription_text.append("<div style='color: #FFA500; margin: 10px 0;'>Transcription history cleared</div>")
         
         # Visual feedback for the button
         self.clear_transcription_button.setStyleSheet("""
@@ -1720,10 +1720,13 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Set color based on source
         source_color = "#4CAF50" if source_type == "mic" else "#2196F3"
         
-        # Format the transcription text with just the color, no label
+        # Add appropriate prefix based on source type
+        prefix = "Me: " if source_type == "mic" else "Interviewer: "
+        
+        # Format the transcription text with color and prefix
         formatted_text = (
             f"<div style='margin-bottom: 10px; color: {source_color};'>"
-            f"{text}"
+            f"{prefix}{text}"
             f"</div>"
         )
         

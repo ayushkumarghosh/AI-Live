@@ -47,7 +47,7 @@ def reset_chat_history():
 code_problem_prompt = "Read the transcriptions (if any) along with the screenshots to solve coding problems. If the screenshot or transcriptions contains a coding problem, provide a complete working solution as follows: For a new/first-time question, first briefly explain both the naive approach and the optimized approach (without code), THEN implement both approaches with complete code optimizing for time complexity as much as possible. If the screenshot shows a LeetCode-like interface or any code cell with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point without changing the signature of the function: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Ensure any code is ready to submit with no missing parts. Always be thorough and complete in your response."
 
 # 2. Non-coding problem analysis prompt (regular model)
-general_analysis_prompt = "Respond as if you are the candidate being interviewed for a software engineering role. Read the transcriptions along with the screenshots and answer any questions being asked. Give thorough, professional answers that showcase relevant skills and experience. Be concise but thorough, and maintain a professional tone throughout. Disregard any other sounds from the desktop audio only consider the speech. ALWAYS ANSWER FIRST WITHOUT EXPLAINING YOUR ANSWER THEN EXPLAIN YOUR ANSWER. If you don't know the answer, fabricate a relevant and reasonable answer instead. Never respond that you don't know or can't answer—always provide some answer."
+general_analysis_prompt = "Respond as if you are the candidate being interviewed for a software engineering role. Read the transcriptions along with the screenshots and answer any questions being asked. Give thorough, professional answers that showcase relevant skills and experience. Be concise but thorough, and maintain a professional tone throughout. ALWAYS ANSWER FIRST WITHOUT EXPLAINING YOUR ANSWER THEN EXPLAIN YOUR ANSWER. If you don't know the answer, fabricate a relevant and reasonable answer instead. Never respond that you don't know or can't answer—always provide some answer."
 
 
 # 3. Repeat analysis prompt (regular model) 
@@ -469,10 +469,7 @@ def analyze_code_problem(text_input: str,
     
     # Prepare content parts
     content_parts = []
-    
-    # Add the specific coding problem prompt as the main instruction
-    content_parts.append(code_problem_prompt)
-    
+        
     # Add the transcription data with simplified format
     if text_input:
         content_parts.append(f"Transcription: {text_input}")
@@ -502,6 +499,7 @@ def analyze_code_problem(text_input: str,
                 model=GEMINI_FLASH_MODEL,
                 contents=content_parts,
                 config=types.GenerateContentConfig(
+                    system_instruction=code_problem_prompt,
                     temperature=0.6,
                     max_output_tokens=60000,
                     response_mime_type="application/json",
@@ -550,10 +548,7 @@ def analyze_general_problem(text_input: str,
     
     # Prepare content parts
     content_parts = []
-    
-    # Add the specific general analysis prompt as the main instruction
-    content_parts.append(general_analysis_prompt)
-    
+        
     # Add the transcription data with simplified format
     if text_input:
         content_parts.append(f"Transcription: {text_input}")
@@ -583,6 +578,7 @@ def analyze_general_problem(text_input: str,
                 model=GEMINI_FLASH_MODEL,
                 contents=content_parts,
                 config=types.GenerateContentConfig(
+                    system_instruction=general_analysis_prompt,
                     temperature=0.6,
                     max_output_tokens=60000,
                     response_mime_type="application/json",
@@ -632,9 +628,6 @@ def analyze_repeat_problem(text_input: str,
     # Prepare content parts
     content_parts = []
     
-    # Add the specific repeat analysis prompt as the main instruction
-    content_parts.append(repeat_analysis_prompt)
-    
     # Add the transcription data with simplified format
     if text_input:
         content_parts.append(f"Transcription: {text_input}")
@@ -664,6 +657,7 @@ def analyze_repeat_problem(text_input: str,
                 model=GEMINI_FLASH_MODEL,
                 contents=content_parts,
                 config=types.GenerateContentConfig(
+                    system_instruction=repeat_analysis_prompt,
                     temperature=0.6,
                     max_output_tokens=60000,
                     response_mime_type="application/json",
@@ -837,10 +831,7 @@ def analyze_general_problem_no_thinking(text_input: str,
     
     # Prepare content parts
     content_parts = []
-    
-    # Add the specific general analysis prompt as the main instruction
-    content_parts.append(general_analysis_prompt)
-    
+        
     # Add the transcription data with simplified format
     if text_input:
         content_parts.append(f"Transcription: {text_input}")
@@ -870,7 +861,7 @@ def analyze_general_problem_no_thinking(text_input: str,
                 model="gemini-2.0-flash",
                 contents=content_parts,
                 config=types.GenerateContentConfig(
-                    system_instruction="You are a helpful assistant, that always answers the question in the first try. First answer the question, then explain your answer.",
+                    system_instruction=general_analysis_prompt,
                     temperature=0.6,
                     max_output_tokens=8000,
                     response_mime_type="application/json",

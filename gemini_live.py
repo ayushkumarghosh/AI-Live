@@ -18,7 +18,7 @@ CHANNELS = 1
 CHUNK_SIZE = 1024
 
 class AudioStreamer:
-    def __init__(self, transcription_callback=None, sample_rate=SAMPLE_RATE, chunk_size=CHUNK_SIZE, source_type="mic"):
+    def __init__(self, transcription_callback=None, sample_rate=SAMPLE_RATE, chunk_size=CHUNK_SIZE, source_type="mic", session_handle=None):
         """
         Initialize the AudioStreamer with optional callback function
         
@@ -27,6 +27,7 @@ class AudioStreamer:
             sample_rate: Audio sample rate (default 48000 Hz)
             chunk_size: Audio chunk size (default 1024 samples)
             source_type: Type of audio source ('mic' or 'desktop')
+            session_handle: Optional handle to resume a previous session
         """
         self.stream = None
         self.audio_queue = None
@@ -38,6 +39,10 @@ class AudioStreamer:
         self.session = None
         self.tasks = []
         self.source_type = source_type
+        self.session_handle = session_handle
+        self._should_reconnect = False
+        self._pending_session_handle = None
+        self._error_retries = 0
         
         # Initialize genai client
         if api_key:
@@ -47,16 +52,6 @@ class AudioStreamer:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ GEMINI_API environment variable not set", flush=True)
             self.client = None
             
-        self.config = {
-            "system_instruction": "You are an expert at transcribing and transliterating user's speech to english. If the user is speaking in a different language, you should transliterate it to english. If the user is speaking in english, you should transcribe it to english.",
-            "response_modalities": ["TEXT"],
-            "context_window_compression": (
-                types.ContextWindowCompressionConfig(
-                    sliding_window=types.SlidingWindow(),
-                )
-            ),
-        }
-        
     async def capture_audio(self, external_stream=None):
         """Continuously capture audio from external source and put into queue"""
         if external_stream:
@@ -114,9 +109,27 @@ class AudioStreamer:
                 transcription = ""
                 if self.session:
                     async for msg in self.session.receive():
+                        # Check for session resumption update
+                        if msg.session_resumption_update:
+                            update = msg.session_resumption_update
+                            if update.resumable and update.new_handle:
+                                # Store pending new handle until go_away
+                                self._pending_session_handle = update.new_handle
+                        # Only reconnect when we get a go_away signal
+                        if msg.go_away is not None:
+                            # Connection will soon be terminated; resume with pending handle
+                            if self._pending_session_handle:
+                                self.session_handle = self._pending_session_handle
+                                self._pending_session_handle = None
+                            self._should_reconnect = True
+                            # Cancel other tasks to reconnect
+                            for t in self.tasks:
+                                if t is not asyncio.current_task():
+                                    t.cancel()
+                            return
+                        # Process text transcription
                         if msg.text:
                             transcription += msg.text
-                            
                 # Call the callback if provided
                 if self.transcription_callback and transcription.strip():
                     # Call in the event loop to avoid blocking
@@ -127,6 +140,19 @@ class AudioStreamer:
             except Exception as e:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Error processing {self.source_type} Gemini response: {e}", flush=True)
                 await asyncio.sleep(0.1)
+                # Attempt to reconnect on error, up to 3 retries
+                self._error_retries += 1
+                if self._error_retries <= 3:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Retrying {self.source_type} session (attempt {self._error_retries}/3)...", flush=True)
+                    self._should_reconnect = True
+                    for t in self.tasks:
+                        if t is not asyncio.current_task():
+                            t.cancel()
+                    return
+                else:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Max retry attempts reached, stopping {self.source_type} session.", flush=True)
+                    self.running = False
+                    return
     
     def add_audio_chunk(self, audio_chunk):
         """Add audio chunk to the queue (can be called from any thread)"""
@@ -134,36 +160,62 @@ class AudioStreamer:
             asyncio.run_coroutine_threadsafe(self.audio_queue.put(audio_chunk), self.loop)
     
     async def run(self, external_stream=None):
-        """Run the transcriber with Gemini"""
+        """Run the transcriber with Gemini, with automatic session resumption."""
         if not self.client:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Cannot start Gemini without API key", flush=True)
             return
-            
-        try:
-            # Create a new queue
-            self.audio_queue = asyncio.Queue(maxsize=100)
-            
-            # Connect to Gemini using async with instead of await
-            async with self.client.aio.live.connect(model=self.model, config=self.config) as session:
-                self.session = session
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Gemini {self.source_type} transcription session started", flush=True)
-                
-                # Create tasks
-                capture_task = asyncio.create_task(self.capture_audio(external_stream))
-                send_task = asyncio.create_task(self.send_audio_to_gemini())
-                process_task = asyncio.create_task(self.process_responses())
-                
-                self.tasks = [capture_task, send_task, process_task]
-                
-                # Wait for tasks
-                await asyncio.gather(*self.tasks)
-        except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in {self.source_type} Gemini transcriber: {e}", flush=True)
-        finally:
-            if self.session:
-                # No need to close the session since it's managed by the async with
+
+        # Create a new queue for audio data
+        self.audio_queue = asyncio.Queue(maxsize=100)
+        # Loop to handle initial and resumed sessions
+        while self.running:
+            # Build config for live connection
+            config = types.LiveConnectConfig(
+                system_instruction="You are an expert at transcribing and transliterating user's speech to english. If the user is speaking in a different language, you should transliterate it to english. If the user is speaking in english, you should transcribe it to english.",
+                response_modalities=["TEXT"],
+                context_window_compression=types.ContextWindowCompressionConfig(
+                    sliding_window=types.SlidingWindow(target_tokens=2000),
+                ),
+                session_resumption=types.SessionResumptionConfig(
+                    handle=self.session_handle
+                ),
+            )
+            if self.session_handle:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Resuming {self.source_type} session with handle: {self.session_handle[:10]}...", flush=True)
+
+            try:
+                async with self.client.aio.live.connect(model=self.model, config=config) as session:
+                    self.session = session
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Gemini {self.source_type} transcription session started", flush=True)
+
+                    # Create tasks
+                    capture_task = asyncio.create_task(self.capture_audio(external_stream))
+                    send_task = asyncio.create_task(self.send_audio_to_gemini())
+                    process_task = asyncio.create_task(self.process_responses())
+                    self.tasks = [capture_task, send_task, process_task]
+
+                    # Wait until tasks complete or are cancelled
+                    await asyncio.gather(*self.tasks)
+            except asyncio.CancelledError:
+                # Expected on session resumption
+                pass
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in {self.source_type} Gemini transcriber: {e}", flush=True)
+            finally:
+                # Cancel any remaining tasks
+                for task in self.tasks:
+                    if not task.done():
+                        task.cancel()
+                # Clean up session
                 self.session = None
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] {self.source_type.capitalize()} Gemini session closed", flush=True)
+
+            # Reconnect if a new handle was received
+            if self._should_reconnect:
+                self._should_reconnect = False
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Reconnecting {self.source_type} with new handle: {self.session_handle[:10]}...", flush=True)
+                continue
+            break
     
     def start(self, external_stream=None):
         """Start the transcriber in a background thread
@@ -207,45 +259,45 @@ class AudioStreamer:
         self.stop()
         print(f"[{datetime.now().strftime('%H:%M:%S')}] {self.source_type.capitalize()} Gemini transcriber cleaned up", flush=True)
 
-async def main():
-    # This function serves as a standalone example when running this file directly
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting Gemini Live Audio Transcription Demo", flush=True)
+# async def main():
+#     # This function serves as a standalone example when running this file directly
+#     print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting Gemini Live Audio Transcription Demo", flush=True)
     
-    # Create both mic and desktop streamers
-    mic_streamer = AudioStreamer(
-        transcription_callback=lambda text, source_type: print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 Mic: {text}"),
-        source_type="mic"
-    )
+#     # Create both mic and desktop streamers
+#     mic_streamer = AudioStreamer(
+#         transcription_callback=lambda text, source_type: print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 Mic: {text}"),
+#         source_type="mic"
+#     )
     
-    desktop_streamer = AudioStreamer(
-        transcription_callback=lambda text, source_type: print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop: {text}"),
-        source_type="desktop"
-    )
+#     desktop_streamer = AudioStreamer(
+#         transcription_callback=lambda text, source_type: print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop: {text}"),
+#         source_type="desktop"
+#     )
     
-    try:
-        # Start both streams
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting microphone transcription...", flush=True)
-        await mic_streamer.start_mic_stream()
+#     try:
+#         # Start both streams
+#         print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting microphone transcription...", flush=True)
+#         await mic_streamer.start_mic_stream()
         
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting desktop audio transcription...", flush=True)
-        await desktop_streamer.start_mic_stream()
+#         print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting desktop audio transcription...", flush=True)
+#         await desktop_streamer.start_mic_stream()
         
-        # Run them both asynchronously
-        mic_task = asyncio.create_task(mic_streamer.run())
-        desktop_task = asyncio.create_task(desktop_streamer.run())
+#         # Run them both asynchronously
+#         mic_task = asyncio.create_task(mic_streamer.run())
+#         desktop_task = asyncio.create_task(desktop_streamer.run())
         
-        # Wait for both to complete (or until keyboard interrupt)
-        await asyncio.gather(mic_task, desktop_task)
+#         # Wait for both to complete (or until keyboard interrupt)
+#         await asyncio.gather(mic_task, desktop_task)
     
-    except KeyboardInterrupt:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Stopping audio streams...", flush=True)
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error: {e}", flush=True)
-    finally:
-        # Clean up both streamers
-        mic_streamer.cleanup()
-        desktop_streamer.cleanup()
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Audio transcription stopped", flush=True)
+#     except KeyboardInterrupt:
+#         print(f"[{datetime.now().strftime('%H:%M:%S')}] Stopping audio streams...", flush=True)
+#     except Exception as e:
+#         print(f"[{datetime.now().strftime('%H:%M:%S')}] Error: {e}", flush=True)
+#     finally:
+#         # Clean up both streamers
+#         mic_streamer.cleanup()
+#         desktop_streamer.cleanup()
+#         print(f"[{datetime.now().strftime('%H:%M:%S')}] Audio transcription stopped", flush=True)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# if __name__ == "__main__":
+#     asyncio.run(main())

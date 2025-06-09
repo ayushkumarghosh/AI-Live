@@ -44,20 +44,20 @@ def reset_chat_history():
 # Separated prompts for different functionalities
 
 # 1. Code problem analysis prompt (regular model)
-code_problem_prompt = "Read the transcriptions (if any) along with the screenshots to solve coding problems. If the screenshot or transcriptions contains a coding problem, provide a complete working solution as follows: For a new/first-time question, first briefly explain both the naive approach and the optimized approach (without code), THEN implement both approaches with complete code optimizing for time complexity as much as possible. If the screenshot shows a LeetCode-like interface or any code cell with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point without changing the signature of the function: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Ensure any code is ready to submit with no missing parts. Always be thorough and complete in your response."
+code_problem_prompt = "Read the transcriptions (if any) along with the screenshots to solve coding problems. If the screenshot or transcriptions contains a coding problem, provide a complete working solution as follows: For a new/first-time question, first briefly explain both the naive approach and the optimized approach (without code), THEN implement both approaches with complete code optimizing for time complexity as much as possible. If the screenshot shows a LeetCode-like interface or any code cell with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point without changing the signature of the function: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Ensure any code is ready to submit with no missing parts. Always be thorough and complete in your response.\n"
 
 # 2. Non-coding problem analysis prompt (regular model)
-general_analysis_prompt = "Respond as if you are the candidate being interviewed for a software engineering role. Read the transcriptions along with the screenshots and answer any questions being asked. Give thorough, professional answers that showcase relevant skills and experience. Be concise but thorough, and maintain a professional tone throughout. ALWAYS ANSWER FIRST WITHOUT EXPLAINING YOUR ANSWER THEN EXPLAIN YOUR ANSWER. If you don't know the answer, fabricate a relevant and reasonable answer instead. Never respond that you don't know or can't answer—always provide some answer."
+general_analysis_prompt = "Respond as if you are the candidate being interviewed for a software engineering role. Read the transcriptions along with the screenshots and answer any questions being asked (always prioritize answering the last question by the interviewer in the transcriptions). Give thorough, professional answers that showcase relevant skills and experience. Be concise but thorough, and maintain a professional tone throughout. ALWAYS ANSWER FIRST WITHOUT EXPLAINING YOUR ANSWER THEN EXPLAIN YOUR ANSWER. If you don't know the answer, fabricate a relevant and reasonable answer instead. Never respond that you don't know or can't answer—always provide some answer.\n"
 
 
 # 3. Repeat analysis prompt (regular model) 
-repeat_analysis_prompt = "Read the transcriptions (if any) along with the screenshots for errors. Briefly explain the improvement first, then focus on implementing the improved optimized solution - don't repeat the naive approach again. If this is a coding problem, provide the enhanced solution with proper explanation. For non-coding content, provide updated or refined analysis based on the new context. Always be thorough and complete in your response."
+repeat_analysis_prompt = "Read the transcriptions (if any) along with the screenshots for errors. Briefly explain the improvement first, then focus on implementing the improved optimized solution - don't repeat the naive approach again. If this is a coding problem, provide the enhanced solution with proper explanation. For non-coding content, provide updated or refined analysis based on the new context. Always be thorough and complete in your response.\n"
 
 # 4. Code problem analysis prompt (pro model)
-code_problem_pro_prompt = "Read the screenshot and transcriptions (if any) and focus on solving any coding problem shown optimizing for time complexity as much as possible. If the screenshot shows a LeetCode-like interface or any code with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point without changing the signature of the function: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Follow these steps: (1) If there's code in the screenshot, understand what it's trying to do and its context, (2) Explain your optimized approach as if explaining to an interviewer - clearly articulate the time and space complexity, trade-offs, and logic behind your solution, (3) Implement the complete optimized solution (for time complexity) with proper edge case handling and clean, well-commented code. Always be thorough and complete solutions."
+code_problem_pro_prompt = "Read the screenshot and transcriptions (if any) and focus on solving any coding problem shown optimizing for time complexity as much as possible. If the screenshot shows a LeetCode-like interface or any code with an existing code snippet, always use both the programming language shown and the code snippet itself as your starting point without changing the signature of the function: directly modify, extend, or complete that code rather than starting from scratch or ignoring it. Follow these steps: (1) If there's code in the screenshot, understand what it's trying to do and its context, (2) Explain your optimized approach as if explaining to an interviewer - clearly articulate the time and space complexity, trade-offs, and logic behind your solution, (3) Implement the complete optimized solution (for time complexity) with proper edge case handling and clean, well-commented code. Always be thorough and complete solutions.\n"
 
-# 5. Repeat analysis prompt (pro model)
-repeat_analysis_pro_prompt = "Read the screenshot and transcriptions (if any) for follow-up questions or improvements to coding problems using the Pro model. Focus if there's any error in the screenshot or transcriptions and implementing enhanced, optimized solutions with advanced algorithms and techniques. Explain the improvements, time and space complexity optimizations, and provide production-ready code with comprehensive error handling. Always be thorough and provide expert-level solutions."
+# 5. Repeat analysis prompt (pro model) 
+repeat_analysis_pro_prompt = "Read the screenshot and transcriptions (if any) for follow-up questions or improvements to coding problems using the Pro model. Focus if there's any error in the screenshot or transcriptions and implementing enhanced, optimized solutions with advanced algorithms and techniques. Explain the improvements, time and space complexity optimizations, and provide production-ready code with comprehensive error handling. Always be thorough and provide expert-level solutions.\n"
 
 # Legacy prompts (kept for backwards compatibility)
 analyze_prompt = code_problem_prompt  # Default to code problem analysis
@@ -410,10 +410,10 @@ def analyze_with_deepseek_model(text_input: str,
     # Build the context message
     context_parts = []
     if text_input.strip():
-        context_parts.append(f"User's text query: {text_input}")
+        context_parts.append(f"User's text query: {text_input}\n")
     
     if image_transcription:
-        context_parts.append(f"Screen content description: {image_transcription}")
+        context_parts.append(f"Screen content description: {image_transcription}\n")
     
     # if audio_transcription:
     #     context_parts.append(f"Desktop audio transcription: {audio_transcription}")
@@ -472,7 +472,7 @@ def analyze_code_problem(text_input: str,
         
     # Add the transcription data with simplified format
     if text_input:
-        content_parts.append(f"Transcription: {text_input}")
+        content_parts.append(f"Transcription: {text_input}\n")
     
     # Add desktop audio if available
     # if desktop_audio_base64:
@@ -483,7 +483,7 @@ def analyze_code_problem(text_input: str,
     
     # Add images if available
     if images_base64:
-        content_parts.append("These are the screens of the user. Apply the coding problem analysis instructions to solve any coding problems shown.")
+        content_parts.append("These are the screens of the user. Apply the coding problem analysis instructions to solve any coding problems shown.\n")
         
         image_parts = prepare_image_parts(images_base64, image_format)
         content_parts.extend(image_parts)
@@ -551,7 +551,7 @@ def analyze_general_problem(text_input: str,
         
     # Add the transcription data with simplified format
     if text_input:
-        content_parts.append(f"Transcription: {text_input}")
+        content_parts.append(f"Transcription: {text_input}\n")
     
     # Add desktop audio if available
     # if desktop_audio_base64:
@@ -562,7 +562,7 @@ def analyze_general_problem(text_input: str,
     
     # Add images if available
     if images_base64:
-        content_parts.append("These are the screens of the user. Apply the general analysis instructions to provide helpful insights for the content shown:")
+        content_parts.append("User's screens:\n")
         
         image_parts = prepare_image_parts(images_base64, image_format)
         content_parts.extend(image_parts)
@@ -586,7 +586,7 @@ def analyze_general_problem(text_input: str,
                         "type": "object",
                         "properties": {
                             "user_query": {"type": "string", "description": "The problem statement"},
-                            "response": {"type": "string", "description": "Your solution to the problem"}
+                            "response": {"type": "string", "description": "Your solution to the problem(s)"}
                         },
                         "required": ["user_query", "response"]
                     }
@@ -630,18 +630,18 @@ def analyze_repeat_problem(text_input: str,
     
     # Add the transcription data with simplified format
     if text_input:
-        content_parts.append(f"Transcription: {text_input}")
+        content_parts.append(f"Transcription: {text_input}\n")
     
     # Add desktop audio if available
-    if desktop_audio_base64:
-        content_parts.append("This is the desktop audio output from the user's system. Apply the repeat analysis instructions to any content found here:")
+    # if desktop_audio_base64:
+    #     content_parts.append("This is the desktop audio output from the user's system. Apply the repeat analysis instructions to any content found here:")
         
-        desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
-        content_parts.extend(desktop_audio_parts)
+    #     desktop_audio_parts = prepare_audio_parts(desktop_audio_base64, "wav", "desktop")
+    #     content_parts.extend(desktop_audio_parts)
     
     # Add images if available
     if images_base64:
-        content_parts.append("These are the screens of the user. Apply the repeat analysis instructions for follow-up questions or improvements.")
+        content_parts.append("User's screens:")
         
         image_parts = prepare_image_parts(images_base64, image_format)
         content_parts.extend(image_parts)
@@ -714,10 +714,10 @@ def analyze_code_problem_pro(text_input: str,
     
     # Add the transcription data if available
     if text_input:
-        context_parts.append(f"Transcription: {text_input}")
+        context_parts.append(f"Transcription: {text_input}\n")
     
     if image_transcription:
-        context_parts.append(f"Screen content description: {image_transcription}")
+        context_parts.append(f"Screen content description: {image_transcription}\n")
     
     # if audio_transcription:
     #     context_parts.append(f"Desktop audio transcription: {audio_transcription}")
@@ -776,10 +776,10 @@ def analyze_repeat_problem_pro(text_input: str,
     
     # Add the transcription data if available
     if text_input:
-        context_parts.append(f"Transcription: {text_input}")
+        context_parts.append(f"Transcription: {text_input}\n")
     
     if image_transcription:
-        context_parts.append(f"Screen content description: {image_transcription}")
+        context_parts.append(f"Screen content description: {image_transcription}\n")
     
     # if audio_transcription:
     #     context_parts.append(f"Desktop audio transcription: {audio_transcription}")
@@ -834,7 +834,7 @@ def analyze_general_problem_no_thinking(text_input: str,
         
     # Add the transcription data with simplified format
     if text_input:
-        content_parts.append(f"Transcription: {text_input}")
+        content_parts.append(f"Transcription: {text_input}\n")
     
     # Add desktop audio if available
     # if desktop_audio_base64:
@@ -845,7 +845,7 @@ def analyze_general_problem_no_thinking(text_input: str,
     
     # Add images if available
     if images_base64:
-        content_parts.append("User's screens:")
+        content_parts.append("User's screens:\n")
         
         image_parts = prepare_image_parts(images_base64, image_format)
         content_parts.extend(image_parts)

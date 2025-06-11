@@ -353,8 +353,8 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.transcription_toggle_button.toggled.connect(self.toggle_transcriptions)
         title_layout.addWidget(self.transcription_toggle_button)
         
-        # Add interviewer suggestion toggle button
-        self.interviewer_suggestion_button = QtWidgets.QPushButton("💡 Show Suggestions")
+        # Add interviewer auto-answer toggle button
+        self.interviewer_suggestion_button = QtWidgets.QPushButton("🤖 Auto-Answer")
         self.interviewer_suggestion_button.setCheckable(True)
         self.interviewer_suggestion_button.setChecked(False) # Disabled by default
         self.interviewer_suggestion_button.setFixedHeight(26)
@@ -932,28 +932,14 @@ class DraggableOverlay(QtWidgets.QWidget):
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Transcriptions will be excluded from analysis", flush=True)
             
     def toggle_interviewer_suggestions(self, checked):
-        """Handle interviewer suggestion toggle button state changes"""
+        """Handle interviewer auto-answer toggle button state changes"""
         self.show_interviewer_suggestions = checked
         if checked:
-            self.interviewer_suggestion_button.setText("💡 Hide Suggestions")
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 💡 Interviewer suggestions will be displayed", flush=True)
-            
-            # If we have existing data, show it immediately
-            if self.last_interviewer_question and self.last_suggested_answer:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Displaying suggestion", flush=True)
-                
-                # Display suggestion using standard format
-                suggestion_response = {
-                    "user_query": self.last_interviewer_question,
-                    "response": self.last_suggested_answer
-                }
-                self.update_response(suggestion_response)
+            self.interviewer_suggestion_button.setText("🚫 No Auto-Answer")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Interviewer questions will be auto-answered", flush=True)
         else:
-            self.interviewer_suggestion_button.setText("💡 Show Suggestions")
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Interviewer suggestions will be hidden", flush=True)
-            
-            # Clear any displayed suggestion from the conversation view
-            self.remove_suggestion_from_display()
+            self.interviewer_suggestion_button.setText("🤖 Auto-Answer")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Interviewer questions will not be auto-answered", flush=True)
 
     @Slot(str, str)
     def update_status(self, status: str, color="#4CAF50"):
@@ -2034,23 +2020,20 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.last_suggested_answer = answer
         
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎙️ Received interviewer Q&A update", flush=True)
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 💡 Suggestion display is {'enabled' if self.show_interviewer_suggestions else 'disabled'}", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Auto-answer is {'enabled' if self.show_interviewer_suggestions else 'disabled'}", flush=True)
         
-        # First time - enable suggestions automatically 
-        # This will trigger toggle_interviewer_suggestions which will display the suggestion
-        if not self.interviewer_suggestion_button.isChecked():
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Auto-enabling suggestion display for first answer", flush=True)
-            self.interviewer_suggestion_button.setChecked(True)
-            # Note: We don't set show_interviewer_suggestions directly here,
-            # as the button's toggled signal will trigger toggle_interviewer_suggestions
-        # For subsequent updates - if suggestions are already enabled, update display directly
-        elif self.show_interviewer_suggestions:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Displaying subsequent suggestion update", flush=True)
+        # Check if auto-answer is enabled or force-enable for first question
+        if self.show_interviewer_suggestions:
+            # If auto-answer is on, display the suggestion
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Auto-answering interviewer question", flush=True)
             suggestion_response = {
                 "user_query": question,
                 "response": answer
             }
             self.update_response(suggestion_response)
+        else:
+            # Auto-answer is disabled, just store the Q&A but don't display
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Not auto-answering (feature disabled)", flush=True)
 
 # ----------------------------------------------------------------
 # Main entry point.

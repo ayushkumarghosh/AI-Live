@@ -937,19 +937,23 @@ class DraggableOverlay(QtWidgets.QWidget):
         if checked:
             self.interviewer_suggestion_button.setText("💡 Hide Suggestions")
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 💡 Interviewer suggestions will be displayed", flush=True)
+            
             # If we have existing data, show it immediately
             if self.last_interviewer_question and self.last_suggested_answer:
-                # Create a response dict and use update_response
-                response_json = {
-                    "user_query": f"Interviewer: {self.last_interviewer_question}",
-                    "response": f"Suggested answer: {self.last_suggested_answer}"
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Displaying suggestion", flush=True)
+                
+                # Display suggestion using standard format
+                suggestion_response = {
+                    "user_query": self.last_interviewer_question,
+                    "response": self.last_suggested_answer
                 }
-                self.update_response(response_json)
+                self.update_response(suggestion_response)
         else:
             self.interviewer_suggestion_button.setText("💡 Show Suggestions")
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Interviewer suggestions will be hidden", flush=True)
-            # We won't remove previous suggestions as they're now part of the conversation history
-            # Just don't add new ones when toggled off
+            
+            # Clear any displayed suggestion from the conversation view
+            self.remove_suggestion_from_display()
 
     @Slot(str, str)
     def update_status(self, status: str, color="#4CAF50"):
@@ -1977,32 +1981,76 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Restore the original size
         self.resize(current_size)
 
-    # Removed unused methods as we now use update_response for displaying suggestions
+# This method is now directly in update_interviewer_qa for better flow control
+        
+    def remove_suggestion_from_display(self):
+        """Remove any interviewer suggestion from the conversation display"""
+        # Since we're now using the standard conversation format,
+        # we need a different approach to remove suggestions
+        
+        # The simplest approach is to rebuild the conversation from history,
+        # excluding the suggestion we added
+        
+        try:
+            # If we've added suggestions to the conversation history, remove them
+            if hasattr(self, 'conversation_history'):
+                # Look for entries that match our last suggestion
+                original_length = len(self.conversation_history)
+                
+                # Remove entries that match our Q&A pair (if any)
+                if self.last_interviewer_question and self.last_suggested_answer:
+                    # Create filtered history
+                    self.conversation_history = [
+                        entry for entry in self.conversation_history 
+                        if not (entry.get("role") == "user" and entry.get("content") == self.last_interviewer_question) and
+                           not (entry.get("role") == "assistant" and entry.get("content") == self.last_suggested_answer)
+                    ]
+                    
+                    # If we removed entries, rebuild the conversation display
+                    if len(self.conversation_history) != original_length:
+                        # Rebuild conversation text
+                        conversation_text = ""
+                        
+                        from datetime import datetime
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Removed suggestion from conversation history", flush=True)
+                        
+                        # Usually rebuild_conversation method would be used here,
+                        # but we'll just tell the update_response method to handle it
+                        self.update_response({"user_query": "", "response": ""})
+            
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error removing suggestion: {e}", flush=True)
 
     @Slot(str, str)
     def update_interviewer_qa(self, question, answer):
         """Update the stored interviewer Q&A and update the display if needed"""
+        # Make sure we have non-empty content
+        if not question or not answer:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Skipping empty interviewer Q&A update", flush=True)
+            return
+            
+        # Update the stored values
         self.last_interviewer_question = question
         self.last_suggested_answer = answer
         
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎙️ Received interviewer Q&A update", flush=True)
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 💡 Suggestion display is {'enabled' if self.show_interviewer_suggestions else 'disabled'}", flush=True)
         
-        # If showing suggestions is enabled, update the display
-        if self.show_interviewer_suggestions:
-            # Create a response dict in the same format expected by update_response
-            response_json = {
-                "user_query": f"Interviewer: {question}",
-                "response": f"Suggested answer: {answer}"
-            }
-            # Use the existing update_response method to handle formatting
-            self.update_response(response_json)
-        
-        # Force enable suggestions button for first answer
+        # First time - enable suggestions automatically 
+        # This will trigger toggle_interviewer_suggestions which will display the suggestion
         if not self.interviewer_suggestion_button.isChecked():
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Auto-enabling suggestion display for first answer", flush=True)
             self.interviewer_suggestion_button.setChecked(True)
-            self.toggle_interviewer_suggestions(True)
+            # Note: We don't set show_interviewer_suggestions directly here,
+            # as the button's toggled signal will trigger toggle_interviewer_suggestions
+        # For subsequent updates - if suggestions are already enabled, update display directly
+        elif self.show_interviewer_suggestions:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Displaying subsequent suggestion update", flush=True)
+            suggestion_response = {
+                "user_query": question,
+                "response": answer
+            }
+            self.update_response(suggestion_response)
 
 # ----------------------------------------------------------------
 # Main entry point.

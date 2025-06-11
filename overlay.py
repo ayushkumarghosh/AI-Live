@@ -903,13 +903,16 @@ class DraggableOverlay(QtWidgets.QWidget):
 
     def _update_conversation_text(self, conversation_text):
         """Thread-safe method to update the conversation text"""
+        # Save current scroll position
+        scrollbar = self.conversation_text.verticalScrollBar()
+        current_position = scrollbar.value()
+        
         # Update the text
         self.conversation_text.setHtml(conversation_text)
         
-        # Always scroll to the bottom
-        self.conversation_text.moveCursor(QtGui.QTextCursor.MoveOperation.End)
-        self.conversation_text.ensureCursorVisible()
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Scrolling to bottom of conversation", flush=True)
+        # Restore the saved scroll position
+        scrollbar.setValue(current_position)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Maintained scroll position at {current_position}", flush=True)
 
     @Slot(dict)
     def update_response(self, response_json: dict):
@@ -1840,10 +1843,10 @@ class DraggableOverlay(QtWidgets.QWidget):
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Using selected transcription text", flush=True)
             return selected_text
         
-        # Otherwise, use the last 4 transcriptions
+        # Otherwise, use the last 7 transcriptions
         if len(self.transcription_history) > 0:
-            # Get last 4 transcriptions (or fewer if not enough available)
-            last_transcriptions = self.transcription_history[-4:] if len(self.transcription_history) >= 4 else self.transcription_history
+            # Get last 7 transcriptions (or fewer if not enough available)
+            last_transcriptions = self.transcription_history[-7:] if len(self.transcription_history) >= 7 else self.transcription_history
             formatted_text = ""
             
             # Format them as interviewer/user conversation

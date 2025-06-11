@@ -1582,6 +1582,48 @@ def initialize_live_transcription():
                 QtCore.Q_ARG(str, text),
                 QtCore.Q_ARG(str, source_type)
             )
+            
+    # Create a periodic function to update the overlay with interviewer Q&A
+    def update_interviewer_qa():
+        """Periodically check for new interviewer Q&A and update the overlay"""
+        last_question = ""
+        last_answer = ""
+        
+        while True:
+            try:
+                if overlay and transcription_manager:
+                    # Get the latest interviewer question and answer from the manager
+                    question = transcription_manager.last_desktop_query
+                    answer = transcription_manager.last_desktop_answer
+                    
+                    # Only update if we have new data to avoid constant updates
+                    if question and answer and (question != last_question or answer != last_answer):
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 New interviewer Q&A detected", flush=True)
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 Question: {question[:50]}...", flush=True)
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Answer: {answer[:50]}...", flush=True)
+                        
+                        # Update the overlay with the Q&A
+                        QtCore.QMetaObject.invokeMethod(
+                            overlay,
+                            "update_interviewer_qa",
+                            QtCore.Qt.ConnectionType.QueuedConnection,
+                            QtCore.Q_ARG(str, question),
+                            QtCore.Q_ARG(str, answer)
+                        )
+                        
+                        # Update last values to avoid duplicate updates
+                        last_question = question
+                        last_answer = answer
+                
+                # Check every second
+                time.sleep(1)
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error updating interviewer Q&A: {e}", flush=True)
+                time.sleep(5)  # Longer delay on error
+                
+    # Start the interviewer Q&A update thread
+    qa_update_thread = threading.Thread(target=update_interviewer_qa, daemon=True)
+    qa_update_thread.start()
     
     # Create the transcription manager
     transcription_manager = LiveTranscriptionManager(transcription_callback)

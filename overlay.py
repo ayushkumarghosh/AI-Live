@@ -200,6 +200,13 @@ class DraggableOverlay(QtWidgets.QWidget):
         
         # New flag to control if transcriptions should be passed to analysis
         self.use_transcriptions = True
+        
+        # New flag to control showing interviewer suggestions
+        self.show_interviewer_suggestions = False
+        
+        # Store the last interviewer question and suggested answer
+        self.last_interviewer_question = ""
+        self.last_suggested_answer = ""
 
         # Flags for dragging and resizing.
         self.dragging = False
@@ -345,6 +352,34 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.transcription_toggle_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.transcription_toggle_button.toggled.connect(self.toggle_transcriptions)
         title_layout.addWidget(self.transcription_toggle_button)
+        
+        # Add interviewer suggestion toggle button
+        self.interviewer_suggestion_button = QtWidgets.QPushButton("💡 Show Suggestions")
+        self.interviewer_suggestion_button.setCheckable(True)
+        self.interviewer_suggestion_button.setChecked(False) # Disabled by default
+        self.interviewer_suggestion_button.setFixedHeight(26)
+        self.interviewer_suggestion_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(180, 130, 180, 200); /* Purple-ish */
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 5px 10px;
+                font-size: 12px;
+            }
+            QPushButton:checked {
+                background-color: rgba(150, 100, 150, 200); /* Darker Purple */
+            }
+            QPushButton:hover {
+                background-color: rgba(200, 150, 200, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(170, 120, 170, 200);
+            }
+        """)
+        self.interviewer_suggestion_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.interviewer_suggestion_button.toggled.connect(self.toggle_interviewer_suggestions)
+        title_layout.addWidget(self.interviewer_suggestion_button)
         
         # Second button is for showing/hiding transcription panel
         self.show_transcription_panel_button = QtWidgets.QPushButton("👁️ Show Transcriptions")
@@ -895,6 +930,26 @@ class DraggableOverlay(QtWidgets.QWidget):
                 }
             """)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Transcriptions will be excluded from analysis", flush=True)
+            
+    def toggle_interviewer_suggestions(self, checked):
+        """Handle interviewer suggestion toggle button state changes"""
+        self.show_interviewer_suggestions = checked
+        if checked:
+            self.interviewer_suggestion_button.setText("💡 Hide Suggestions")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 💡 Interviewer suggestions will be displayed", flush=True)
+            # If we have existing data, show it immediately
+            if self.last_interviewer_question and self.last_suggested_answer:
+                # Create a response dict and use update_response
+                response_json = {
+                    "user_query": f"Interviewer: {self.last_interviewer_question}",
+                    "response": f"Suggested answer: {self.last_suggested_answer}"
+                }
+                self.update_response(response_json)
+        else:
+            self.interviewer_suggestion_button.setText("💡 Show Suggestions")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Interviewer suggestions will be hidden", flush=True)
+            # We won't remove previous suggestions as they're now part of the conversation history
+            # Just don't add new ones when toggled off
 
     @Slot(str, str)
     def update_status(self, status: str, color="#4CAF50"):
@@ -1921,6 +1976,33 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.update()
         # Restore the original size
         self.resize(current_size)
+
+    # Removed unused methods as we now use update_response for displaying suggestions
+
+    @Slot(str, str)
+    def update_interviewer_qa(self, question, answer):
+        """Update the stored interviewer Q&A and update the display if needed"""
+        self.last_interviewer_question = question
+        self.last_suggested_answer = answer
+        
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎙️ Received interviewer Q&A update", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 💡 Suggestion display is {'enabled' if self.show_interviewer_suggestions else 'disabled'}", flush=True)
+        
+        # If showing suggestions is enabled, update the display
+        if self.show_interviewer_suggestions:
+            # Create a response dict in the same format expected by update_response
+            response_json = {
+                "user_query": f"Interviewer: {question}",
+                "response": f"Suggested answer: {answer}"
+            }
+            # Use the existing update_response method to handle formatting
+            self.update_response(response_json)
+        
+        # Force enable suggestions button for first answer
+        if not self.interviewer_suggestion_button.isChecked():
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Auto-enabling suggestion display for first answer", flush=True)
+            self.interviewer_suggestion_button.setChecked(True)
+            self.toggle_interviewer_suggestions(True)
 
 # ----------------------------------------------------------------
 # Main entry point.

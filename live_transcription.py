@@ -36,6 +36,10 @@ class LiveTranscriptionManager:
         self.mic_streamer = None
         self.desktop_streamer = None
         
+        # Store the last desktop transcription and suggested answer
+        self.last_desktop_query = ""
+        self.last_desktop_answer = ""
+        
         # Create flags to control audio capture
         self.mic_capture_running = False
         self.desktop_capture_running = False
@@ -59,9 +63,17 @@ class LiveTranscriptionManager:
     def start_mic_transcription(self):
         """Start microphone transcription"""
         if self.mic_streamer is None:
-            # Create mic audio streamer
+            # Create mic audio streamer with a custom callback to process data
+            def mic_callback(response_data, source_type):
+                # For mic, we only need the transcription text
+                text = response_data.get("transcription", "")
+                if text:
+                    # Call the original callback with just the text
+                    if self.transcription_callback:
+                        self.transcription_callback(text, source_type)
+            
             self.mic_streamer = AudioStreamer(
-                transcription_callback=self.transcription_callback,
+                transcription_callback=mic_callback,
                 sample_rate=RATE,
                 chunk_size=CHUNK,
                 source_type="mic"
@@ -129,9 +141,22 @@ class LiveTranscriptionManager:
     def start_desktop_transcription(self):
         """Start desktop audio capture and transcription"""
         if self.desktop_streamer is None:
-            # Create a desktop audio streamer
+            # Create a desktop audio streamer with a custom callback to process data
+            def desktop_callback(response_data, source_type):
+                # For desktop, we need both transcription and interviewer_answer
+                text = response_data.get("transcription", "")
+                answer = response_data.get("interviewer_answer", "")
+                
+                # Store the values for UI display
+                self.last_desktop_query = text
+                self.last_desktop_answer = answer
+                
+                # Call the original callback with the transcription text
+                if self.transcription_callback and text:
+                    self.transcription_callback(text, source_type)
+            
             self.desktop_streamer = AudioStreamer(
-                transcription_callback=self.transcription_callback,
+                transcription_callback=desktop_callback,
                 sample_rate=RATE,
                 chunk_size=CHUNK,
                 source_type="desktop"

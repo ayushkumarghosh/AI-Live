@@ -1234,7 +1234,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                             else:
                                 # Start a new paragraph if needed
                                 if not in_paragraph:
-                                    html_lines.append('<p style="margin: 0.5em 0; line-height: 1.5;">')
+                                    html_lines.append('<p style="margin: 0 0; line-height: 1.2;">')
                                     in_paragraph = True
                                 html_lines.append(f'{process_inline_markdown(line)}<br>')
                 
@@ -1259,10 +1259,10 @@ class DraggableOverlay(QtWidgets.QWidget):
             content = convert_markdown_to_html(content)
             
             # Add proper spacing and styling
-            content = f"<div style='margin-bottom: 10px; line-height: 1.5;'>{content}</div>"
+            content = f"<div style='margin-bottom: 0px; line-height: 1.2;'>{content}</div>"
             
             conversation_text += (
-                f"<div style='margin-bottom: 15px;'>"
+                f"<div style='margin-bottom: 0px;'>"
                 f"<span style='color: {role_color}; font-weight: bold; font-size: 14px;'>{role_label}:</span> "
                 f"{content}"
                 f"</div>"

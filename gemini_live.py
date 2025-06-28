@@ -47,7 +47,7 @@ class AudioStreamer:
         # Initialize genai client
         if api_key:
             self.client = genai.Client(api_key=api_key)
-            self.model = "gemini-2.0-flash-live-001"
+            self.model = "gemini-live-2.5-flash-preview"
         else:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ GEMINI_API environment variable not set", flush=True)
             self.client = None

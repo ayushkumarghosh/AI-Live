@@ -132,40 +132,27 @@ class AudioStreamer:
                             transcription += msg.text
                 # Call the callback if provided
                 if self.transcription_callback and transcription.strip():
-                    # With JSON response format, we need to parse the transcription
-                    try:
-                        import json
-                        import re
-                        
-                        # Clean up the transcription text to extract just the JSON part
-                        # Remove markdown code block markers if present
-                        cleaned_text = transcription
-                        
-                        # Pattern to match JSON code blocks: ```json {...} ``` or just ```{...}```
-                        json_pattern = r'```(?:json)?\s*({.*?})\s*```'
-                        json_match = re.search(json_pattern, cleaned_text, re.DOTALL)
-                        
-                        if json_match:
-                            # Extract just the JSON content from the code block
-                            cleaned_text = json_match.group(1)
-                            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Extracted JSON from code block", flush=True)
-                        
-                        # Attempt to parse the JSON
-                        response_data = json.loads(cleaned_text)
-                        
-                        # Debug the successful parse
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Successfully parsed JSON response", flush=True)
-                        
-                        # Pass the full response_data to the callback
-                        # Call in the event loop to avoid blocking
-                        self.transcription_callback(response_data, self.source_type)
-                    except json.JSONDecodeError as e:
-                        # Fallback to raw text if not valid JSON
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Invalid JSON response: {e}", flush=True)
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Raw text: {transcription[:100]}...", flush=True)
-                        # Create a simple dict with just the transcription
-                        fallback_data = {"transcription": transcription}
-                        self.transcription_callback(fallback_data, self.source_type)
+                    # With text response format, parse the separator-based format
+                    if self.source_type == "desktop" and "-----" in transcription:
+                        # Split by separator for desktop audio (interview mode)
+                        parts = transcription.split("-----", 1)
+                        if len(parts) == 2:
+                            transcription_text = parts[0].strip()
+                            interviewer_answer = parts[1].strip()
+                            response_data = {
+                                "transcription": transcription_text,
+                                "interviewer_answer": interviewer_answer
+                            }
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Parsed text response with separator", flush=True)
+                        else:
+                            # Fallback if separator format is not correct
+                            response_data = {"transcription": transcription.strip()}
+                    else:
+                        # For mic audio or desktop without separator, just transcription
+                        response_data = {"transcription": transcription.strip()}
+                    
+                    # Pass the response_data to the callback
+                    self.transcription_callback(response_data, self.source_type)
                                 
             except asyncio.CancelledError:
                 break
@@ -207,15 +194,16 @@ class AudioStreamer:
                 system_instruction = """
                 You are an expert at transcribing and transliterating speech to English.
                 
-                Always respond with valid JSON in this format:
-                {
-                  "transcription": "the transcribed text from the audio",
-                  "interviewer_answer": "a suggested answer to the interviewer's question as a software engineer"
-                }
+                Respond with the transcribed text first, then provide a suggested answer that a software engineer might give to the question, separated by '-----'.
                 
-                For the interviewer_answer field, provide a suitable response that a software engineer might give to the question.
+                Format:
+                [transcribed text from the audio]
+                -----
+                [suggested answer to the interviewer's question as a software engineer]
+                
+                For the suggested answer, provide a suitable response that a software engineer might give to the question.
                 If you're not sure about an answer, provide a plausible response that would be appropriate.
-                Both fields are required in every response.
+                Both parts are required in every response.
                 """
             else:
                 system_instruction = """
@@ -223,10 +211,7 @@ class AudioStreamer:
                 If the user is speaking in a different language, transliterate it to English.
                 If the user is speaking in English, transcribe it accurately.
                 
-                Always respond with valid JSON in this format:
-                {
-                  "transcription": "the transcribed text from the audio"
-                }
+                Simply respond with the transcribed text from the audio.
                 """
                 
             config = types.LiveConnectConfig(
@@ -237,9 +222,6 @@ class AudioStreamer:
                 ),
                 session_resumption=types.SessionResumptionConfig(
                     handle=self.session_handle
-                ),
-                generation_config=types.GenerationConfig(
-                    response_mime_type='application/json'
                 ),
             )
             if self.session_handle:

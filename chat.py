@@ -21,9 +21,9 @@ openrouter_api_key = os.getenv("DEEPSEEK")
 # Initialize the new GenAI client
 client = genai.Client(api_key=gemini_api_key)
 
-# Model names
-GEMINI_FLASH_MODEL = "gemini-2.5-flash-preview-05-20"
-DEEPSEEK_MODEL = "tngtech/deepseek-r1t-chimera:free"
+# Model names - configurable via environment variables with defaults
+GEMINI_FLASH_MODEL = os.getenv("GEMINI_FLASH_MODEL", "gemini-2.5-flash-preview-05-20")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "tngtech/deepseek-r1t-chimera:free")
 
 # Chat instances for maintaining conversation history
 chat_flash = None

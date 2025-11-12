@@ -12,10 +12,10 @@ import numpy as np
 
 api_key = os.getenv("GEMINI_API")
 
-# Audio parameters (no longer using pyaudio constants)
-SAMPLE_RATE = 48000
-CHANNELS = 1
-CHUNK_SIZE = 1024
+# Audio parameters - configurable via environment variables with defaults
+SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", "48000"))
+CHANNELS = int(os.getenv("CHANNELS", "1"))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1024"))
 
 class AudioStreamer:
     def __init__(self, transcription_callback=None, sample_rate=SAMPLE_RATE, chunk_size=CHUNK_SIZE, source_type="mic", session_handle=None):
@@ -47,7 +47,7 @@ class AudioStreamer:
         # Initialize genai client
         if api_key:
             self.client = genai.Client(api_key=api_key)
-            self.model = "gemini-live-2.5-flash-preview"
+            self.model = os.getenv("GEMINI_LIVE_MODEL", "gemini-live-2.5-flash-preview")
         else:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ GEMINI_API environment variable not set", flush=True)
             self.client = None

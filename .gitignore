@@ -9,6 +9,12 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+*.build/
+*.dist/
+*.onefile-build/
+*.exe
+*.cmd
+*crash-report*.xml
 develop-eggs/
 dist/
 downloads/

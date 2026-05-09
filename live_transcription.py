@@ -1,26 +1,40 @@
 import threading
 import queue
-import time
 from datetime import datetime
-import pyaudio
 import numpy as np
-import sounddevice as sd
+
+_numpy_fromstring = np.fromstring
+
+
+def _fromstring_compat(data, dtype=float, count=-1, sep="", **kwargs):
+    if sep == "":
+        try:
+            return np.frombuffer(data, dtype=dtype, count=count if count >= 0 else -1).copy()
+        except TypeError:
+            pass
+    return _numpy_fromstring(data, dtype=dtype, count=count, sep=sep, **kwargs)
+
+
+np.fromstring = _fromstring_compat
+
 import soundcard as sc
-import soundfile as sf
 import warnings
 from gemini_live import AudioStreamer
-import base64
-import io
-import wave
+from gemini_live import CHUNK_SIZE as GEMINI_CHUNK_SIZE
+from gemini_live import SAMPLE_RATE as GEMINI_SAMPLE_RATE
+
+try:
+    import pyaudio
+except ImportError:
+    pyaudio = None
 
 # Filter out SoundcardRuntimeWarning about data discontinuity
 warnings.filterwarnings("ignore", message="data discontinuity in recording", category=sc.mediafoundation.SoundcardRuntimeWarning)
 
 # Audio parameters
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-RATE = 48000  # Using 48kHz to match gemini_live.py
-CHUNK = 1024
+FORMAT = pyaudio.paInt16 if pyaudio else None
+RATE = GEMINI_SAMPLE_RATE
+CHUNK = GEMINI_CHUNK_SIZE
 
 class LiveTranscriptionManager:
     def __init__(self, transcription_callback=None):
@@ -109,6 +123,7 @@ class LiveTranscriptionManager:
             # Record in a loop until mic_capture_running is False
             with mic.recorder(samplerate=RATE, channels=1, blocksize=adjusted_blocksize) as recorder:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting microphone recording")
+                consecutive_errors = 0
                 
                 while self.mic_capture_running:
                     try:
@@ -131,9 +146,14 @@ class LiveTranscriptionManager:
                         # Add to mic streamer
                         if self.mic_streamer and self.mic_streamer.running:
                             self.mic_streamer.add_audio_chunk(audio_bytes)
+                        consecutive_errors = 0
                     except Exception as e:
-                        # Skip this block if there's a recording error, but don't terminate the loop
+                        consecutive_errors += 1
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] Skipped mic audio block due to: {e}")
+                        if consecutive_errors >= 5:
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone capture disabled after repeated errors.")
+                            self.mic_capture_running = False
+                            break
                 
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone audio capture error: {e}")
@@ -206,6 +226,7 @@ class LiveTranscriptionManager:
             # Record in a loop until desktop_capture_running is False
             with loop_mic.recorder(samplerate=RATE, channels=1, blocksize=adjusted_blocksize) as recorder:
                 first_chunk = True
+                consecutive_errors = 0
                 
                 # Add additional debug information
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting recorder with samplerate={RATE}, channels=1, blocksize={adjusted_blocksize}")
@@ -236,9 +257,14 @@ class LiveTranscriptionManager:
                         # Add to desktop streamer - sending raw PCM data
                         if self.desktop_streamer and self.desktop_streamer.running:
                             self.desktop_streamer.add_audio_chunk(audio_bytes)
+                        consecutive_errors = 0
                     except Exception as e:
-                        # Skip this block if there's a recording error, but don't terminate the loop
+                        consecutive_errors += 1
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] Skipped desktop audio block due to: {e}")
+                        if consecutive_errors >= 5:
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop loopback capture failed repeatedly. Trying PyAudio fallback.")
+                            self.try_pyaudio_fallback()
+                            return
                 
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture error with soundcard: {e}")
@@ -246,6 +272,11 @@ class LiveTranscriptionManager:
             
     def try_pyaudio_fallback(self):
         """Try capturing desktop audio using PyAudio as a fallback"""
+        if pyaudio is None:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] PyAudio is not installed. Desktop audio fallback disabled.")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture disabled.")
+            return
+
         try:
             p = pyaudio.PyAudio()
             
@@ -338,4 +369,4 @@ class LiveTranscriptionManager:
             self.desktop_streamer.cleanup()
             self.desktop_streamer = None 
         
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Live transcription manager cleaned up", flush=True) 
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Live transcription manager cleaned up", flush=True)

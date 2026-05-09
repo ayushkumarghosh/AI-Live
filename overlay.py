@@ -7,6 +7,19 @@ import re
 import platform
 import os
 
+
+def configure_console_encoding():
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+configure_console_encoding()
+
 # Windows extended style constant for no activation.
 WS_EX_NOACTIVATE = 0x08000000
 
@@ -158,14 +171,10 @@ class InputOverlay(QtWidgets.QWidget):
 # DraggableOverlay: the main overlay window.
 class DraggableOverlay(QtWidgets.QWidget):
     text_submitted = Signal(str)
-    pro_text_submitted = Signal(str)  # New signal for pro model text processing
     
     # New signals for specialized analysis functions
     code_analysis_signal = Signal(str)  # For code problem analysis
-    general_analysis_signal = Signal(str)  # For general problem analysis  
     repeat_analysis_signal = Signal(str)  # For repeat analysis
-    pro_code_analysis_signal = Signal(str)  # For pro code analysis
-    pro_repeat_analysis_signal = Signal(str)  # For pro repeat analysis
     
     update_conversation_signal = Signal(str)  # New signal for thread-safe updates
     clear_history_signal = Signal()  # Signal to stop processing and clear history
@@ -624,80 +633,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         
         conversation_layout.addLayout(analysis_layout)
         
-        # Create a third row for Pro model buttons
-        pro_layout = QtWidgets.QHBoxLayout()
-        
-        # Add Pro Code Analysis button
-        self.pro_code_analyze_button = QtWidgets.QPushButton("🚀 Pro Code Analysis")
-        self.pro_code_analyze_button.setFixedHeight(30)
-        self.pro_code_analyze_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(75, 0, 130, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: rgba(95, 20, 150, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(55, 0, 110, 200);
-            }
-        """)
-        self.pro_code_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.pro_code_analyze_button.clicked.connect(self.execute_pro_code_analyze)
-        pro_layout.addWidget(self.pro_code_analyze_button)
-        
-        # Add General Analysis button
-        self.general_analyze_button = QtWidgets.QPushButton("📝 Pro General Analysis")
-        self.general_analyze_button.setFixedHeight(30)
-        self.general_analyze_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(34, 150, 50, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: rgba(54, 170, 70, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(14, 130, 30, 200);
-            }
-        """)
-        self.general_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.general_analyze_button.clicked.connect(self.execute_general_analyze)
-        pro_layout.addWidget(self.general_analyze_button)
-        
-        # Add Pro Repeat Analysis button
-        self.pro_repeat_analyze_button = QtWidgets.QPushButton("⚡ Pro Repeat Analysis")
-        self.pro_repeat_analyze_button.setFixedHeight(30)
-        self.pro_repeat_analyze_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(139, 0, 139, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: rgba(159, 20, 159, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(119, 0, 119, 200);
-            }
-        """)
-        self.pro_repeat_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.pro_repeat_analyze_button.clicked.connect(self.execute_pro_repeat_analyze)
-        pro_layout.addWidget(self.pro_repeat_analyze_button)
-        
-        conversation_layout.addLayout(pro_layout)
-        
         # Fourth row for utility buttons removed
         
         # Add the conversation panel to the split layout
@@ -964,9 +899,13 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Expecting response_json to include "user_query" and "response".
         user_query = response_json.get("user_query", "")
         ai_response = response_json.get("response", "")
+        if not user_query and not ai_response:
+            return
         # Append entries to conversation history.
-        self.conversation_history.append({"role": "user", "content": user_query})
-        self.conversation_history.append({"role": "assistant", "content": ai_response})
+        if user_query:
+            self.conversation_history.append({"role": "user", "content": user_query})
+        if ai_response:
+            self.conversation_history.append({"role": "assistant", "content": ai_response})
         # Rebuild conversation text.
         conversation_text = ""
         
@@ -1270,6 +1209,17 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Use signal to update the UI thread-safely
         self.update_conversation_signal.emit(conversation_text)
 
+    @Slot(str)
+    def clear_conversation_display(self, message: str = ""):
+        """Clear conversation history without adding synthetic chat turns."""
+        self.conversation_history = []
+        if message:
+            self.conversation_text.setHtml(
+                f"<div style='color: #FFA500; text-align: center; margin: 10px 0;'>{message}</div>"
+            )
+        else:
+            self.conversation_text.clear()
+
     # ---------------- Resize Handles ----------------
     def create_resize_handles(self):
         self.handles = []
@@ -1487,55 +1437,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing code analysis: {e}", flush=True)
 
-    def execute_general_analyze(self):
-        try:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Executing general analysis with specialized prompt", flush=True)
-            
-            # Get transcriptions to use for the analysis
-            transcriptions = self.get_transcriptions()
-            
-            # Send the transcriptions directly, no need to append the prompt
-            # since the analyze_general_problem function already handles this
-            if transcriptions:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Including transcriptions in general analysis", flush=True)
-                self.general_analysis_signal.emit(transcriptions)
-            else:
-                # Emit an empty string if no transcriptions
-                self.general_analysis_signal.emit("")
-            
-            # Visual feedback
-            self.general_analyze_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(14, 130, 30, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-            """)
-            
-            # Reset the button style after 500ms
-            QtCore.QTimer.singleShot(500, lambda: self.general_analyze_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(34, 150, 50, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(54, 170, 70, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(14, 130, 30, 200);
-                }
-            """))
-            
-        except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing general analysis: {e}", flush=True)
-
     def execute_repeat_analyze(self):
         try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Executing repeat analysis with specialized prompt", flush=True)
@@ -1585,118 +1486,16 @@ class DraggableOverlay(QtWidgets.QWidget):
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing repeat analysis: {e}", flush=True)
 
-    def execute_pro_code_analyze(self):
-        try:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Executing Pro code analysis with specialized prompt", flush=True)
-            
-            # Get transcriptions to use for the analysis
-            transcriptions = self.get_transcriptions()
-            
-            # Send the transcriptions directly, no need to append the prompt
-            # since the analyze_code_problem_pro function already handles this
-            if transcriptions:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Including transcriptions in Pro code analysis", flush=True)
-                self.pro_code_analysis_signal.emit(transcriptions)
-            else:
-                # Emit an empty string if no transcriptions
-                self.pro_code_analysis_signal.emit("")
-            
-            # Visual feedback
-            self.pro_code_analyze_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(55, 0, 110, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-            """)
-            
-            # Reset the button style after 500ms
-            QtCore.QTimer.singleShot(500, lambda: self.pro_code_analyze_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(75, 0, 130, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(95, 20, 150, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(55, 0, 110, 200);
-                }
-            """))
-            
-        except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing Pro code analysis: {e}", flush=True)
-
-    def execute_pro_repeat_analyze(self):
-        try:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚡ Executing Pro repeat analysis with specialized prompt", flush=True)
-            
-            # Get transcriptions to use for the analysis
-            transcriptions = self.get_transcriptions()
-            
-            # Send the transcriptions directly, no need to append the prompt
-            # since the analyze_repeat_problem_pro function already handles this
-            if transcriptions:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Including transcriptions in Pro repeat analysis", flush=True)
-                self.pro_repeat_analysis_signal.emit(transcriptions)
-            else:
-                # Emit an empty string if no transcriptions
-                self.pro_repeat_analysis_signal.emit("")
-            
-            # Visual feedback
-            self.pro_repeat_analyze_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(119, 0, 119, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-            """)
-            
-            # Reset the button style after 500ms
-            QtCore.QTimer.singleShot(500, lambda: self.pro_repeat_analyze_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(139, 0, 139, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(159, 20, 159, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(119, 0, 119, 200);
-                }
-            """))
-            
-        except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing Pro repeat analysis: {e}", flush=True)
-
     def clear_history(self):
         try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Clearing conversation history", flush=True)
             
             # Clear local conversation history
-            self.conversation_history = []
-            self.conversation_text.clear()
+            self.clear_conversation_display("Conversation history cleared")
             
             # Clear the chat models' history
             from chat import clear_chat_history
             clear_chat_history()
-            
-            # Show confirmation message
-            self.conversation_text.append("<div style='color: #FFA500; text-align: center; margin: 10px 0;'>Conversation history cleared</div>")
             
             # Visual feedback for the button
             self.clear_button.setStyleSheet("""
@@ -2000,9 +1799,17 @@ class DraggableOverlay(QtWidgets.QWidget):
                         from datetime import datetime
                         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Removed suggestion from conversation history", flush=True)
                         
-                        # Usually rebuild_conversation method would be used here,
-                        # but we'll just tell the update_response method to handle it
-                        self.update_response({"user_query": "", "response": ""})
+                        conversation_text = ""
+                        for entry in self.conversation_history:
+                            role_label = "You" if entry["role"] == "user" else "AI"
+                            role_color = "#4CAF50" if entry["role"] == "user" else "#2196F3"
+                            conversation_text += (
+                                f"<div style='margin-bottom: 0px;'>"
+                                f"<span style='color: {role_color}; font-weight: bold; font-size: 14px;'>{role_label}:</span> "
+                                f"<div style='margin-bottom: 0px; line-height: 1.2;'>{entry['content']}</div>"
+                                f"</div>"
+                            )
+                        self.update_conversation_signal.emit(conversation_text)
             
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error removing suggestion: {e}", flush=True)

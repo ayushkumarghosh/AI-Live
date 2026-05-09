@@ -1,21 +1,51 @@
 import asyncio
-from pathlib import Path
+import sys
 from google import genai
 from google.genai import types
 import os 
-import time
-import queue
 import threading
 from datetime import datetime
-import soundcard as sc
-import numpy as np
+from env_loader import load_env_file
+
+load_env_file()
 
 api_key = os.getenv("GEMINI_API")
+LIVE_MODEL_DEFAULT = "gemini-3.1-flash-live-preview"
+STALE_LIVE_MODELS = {"gemini-live-2.5-flash-preview"}
+
+def configure_console_encoding():
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+def parse_int_env(name, default):
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError("must be positive")
+        return parsed
+    except ValueError:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Invalid {name}={value!r}; using {default}", flush=True)
+        return default
+
+
+configure_console_encoding()
 
 # Audio parameters - configurable via environment variables with defaults
-SAMPLE_RATE = int(os.getenv("SAMPLE_RATE", "48000"))
-CHANNELS = int(os.getenv("CHANNELS", "1"))
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1024"))
+SAMPLE_RATE = parse_int_env("SAMPLE_RATE", 16000)
+if SAMPLE_RATE != 16000:
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Gemini Live expects 16000 Hz PCM input; using 16000 instead of {SAMPLE_RATE}", flush=True)
+    SAMPLE_RATE = 16000
+CHANNELS = parse_int_env("CHANNELS", 1)
+CHUNK_SIZE = parse_int_env("CHUNK_SIZE", 1024)
 
 class AudioStreamer:
     def __init__(self, transcription_callback=None, sample_rate=SAMPLE_RATE, chunk_size=CHUNK_SIZE, source_type="mic", session_handle=None):
@@ -47,9 +77,16 @@ class AudioStreamer:
         # Initialize genai client
         if api_key:
             self.client = genai.Client(api_key=api_key)
-            self.model = os.getenv("GEMINI_LIVE_MODEL", "gemini-live-2.5-flash-preview")
+            configured_model = os.getenv("GEMINI_LIVE_MODEL", LIVE_MODEL_DEFAULT)
+            if configured_model in STALE_LIVE_MODELS:
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] Ignoring stale GEMINI_LIVE_MODEL={configured_model}; using {LIVE_MODEL_DEFAULT}",
+                    flush=True,
+                )
+                configured_model = LIVE_MODEL_DEFAULT
+            self.model = configured_model
         else:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ GEMINI_API environment variable not set", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] GEMINI_API environment variable not set", flush=True)
             self.client = None
             
     async def capture_audio(self, external_stream=None):
@@ -127,9 +164,15 @@ class AudioStreamer:
                                 if t is not asyncio.current_task():
                                     t.cancel()
                             return
-                        # Process text transcription
-                        if msg.text:
-                            transcription += msg.text
+                        server_content = getattr(msg, "server_content", None)
+                        if server_content and server_content.input_transcription:
+                            transcription += server_content.input_transcription.text or ""
+                        if server_content and server_content.output_transcription:
+                            transcription += server_content.output_transcription.text or ""
+                        if server_content and server_content.model_turn:
+                            for part in server_content.model_turn.parts or []:
+                                if getattr(part, "text", None):
+                                    transcription += part.text
                 # Call the callback if provided
                 if self.transcription_callback and transcription.strip():
                     # With text response format, parse the separator-based format
@@ -143,7 +186,7 @@ class AudioStreamer:
                                 "transcription": transcription_text,
                                 "interviewer_answer": interviewer_answer
                             }
-                            print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Parsed text response with separator", flush=True)
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] Parsed text response with separator", flush=True)
                         else:
                             # Fallback if separator format is not correct
                             response_data = {"transcription": transcription.strip()}
@@ -162,26 +205,37 @@ class AudioStreamer:
                 # Attempt to reconnect on error, up to 3 retries
                 self._error_retries += 1
                 if self._error_retries <= 3:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Retrying {self.source_type} session (attempt {self._error_retries}/3)...", flush=True)
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Retrying {self.source_type} session (attempt {self._error_retries}/3)...", flush=True)
                     self._should_reconnect = True
                     for t in self.tasks:
                         if t is not asyncio.current_task():
                             t.cancel()
                     return
                 else:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Max retry attempts reached, stopping {self.source_type} session.", flush=True)
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Max retry attempts reached, stopping {self.source_type} session.", flush=True)
                     self.running = False
                     return
     
     def add_audio_chunk(self, audio_chunk):
         """Add audio chunk to the queue (can be called from any thread)"""
-        if self.loop and self.running and self.audio_queue:
-            asyncio.run_coroutine_threadsafe(self.audio_queue.put(audio_chunk), self.loop)
+        if not (self.loop and self.running and self.audio_queue) or self.loop.is_closed():
+            return
+
+        def enqueue():
+            try:
+                self.audio_queue.put_nowait(audio_chunk)
+            except asyncio.QueueFull:
+                pass
+
+        try:
+            self.loop.call_soon_threadsafe(enqueue)
+        except RuntimeError:
+            pass
     
     async def run(self, external_stream=None):
         """Run the transcriber with Gemini, with automatic session resumption."""
         if not self.client:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Cannot start Gemini without API key", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Cannot start Gemini without API key", flush=True)
             return
 
         # Create a new queue for audio data
@@ -216,21 +270,17 @@ class AudioStreamer:
                 
             config = types.LiveConnectConfig(
                 system_instruction=system_instruction,
-                response_modalities=["TEXT"],
-                context_window_compression=types.ContextWindowCompressionConfig(
-                    sliding_window=types.SlidingWindow(target_tokens=2000),
-                ),
-                session_resumption=types.SessionResumptionConfig(
-                    handle=self.session_handle
-                ),
+                response_modalities=["AUDIO"],
+                input_audio_transcription=types.AudioTranscriptionConfig(),
+                output_audio_transcription=types.AudioTranscriptionConfig(),
             )
             if self.session_handle:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Resuming {self.source_type} session with handle: {self.session_handle[:10]}...", flush=True)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Resuming {self.source_type} session with handle: {self.session_handle[:10]}...", flush=True)
 
             try:
                 async with self.client.aio.live.connect(model=self.model, config=config) as session:
                     self.session = session
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Gemini {self.source_type} transcription session started", flush=True)
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Gemini {self.source_type} transcription session started", flush=True)
 
                     # Create tasks
                     capture_task = asyncio.create_task(self.capture_audio(external_stream))
@@ -257,7 +307,7 @@ class AudioStreamer:
             # Reconnect if a new handle was received
             if self._should_reconnect:
                 self._should_reconnect = False
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Reconnecting {self.source_type} with new handle: {self.session_handle[:10]}...", flush=True)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Reconnecting {self.source_type} with new handle: {self.session_handle[:10]}...", flush=True)
                 continue
             break
     
@@ -269,7 +319,7 @@ class AudioStreamer:
         from LiveTranscriptionManager in live_transcription.py.
         """
         if not api_key:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Cannot start Gemini without API key. Set GEMINI_API environment variable.", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Cannot start Gemini without API key. Set GEMINI_API environment variable.", flush=True)
             return False
             
         def run_async_loop():
@@ -280,7 +330,7 @@ class AudioStreamer:
             
         thread = threading.Thread(target=run_async_loop, daemon=True)
         thread.start()
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Gemini {self.source_type} transcriber started", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Gemini {self.source_type} transcriber started", flush=True)
         return True
     
     def stop(self):

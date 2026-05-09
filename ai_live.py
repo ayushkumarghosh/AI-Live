@@ -1,1641 +1,326 @@
-import queue
-from datetime import datetime
-# Removed import: from speech_capture import record_speech
-from chat import analyze_with_audio_and_image, analyze_with_text_input
 import base64
 import io
-from PIL import ImageGrab
 import sys
 import threading
 import time
-from PyQt6 import QtWidgets, QtCore
-from overlay import DraggableOverlay
-import wave
-import concurrent.futures
+from contextlib import contextmanager
+from datetime import datetime
+from typing import Callable, List
+
+from PIL import ImageGrab
+from PyQt6 import QtCore, QtWidgets
+
+from chat import (
+    analyze_code_problem,
+    analyze_general_problem_no_thinking,
+    analyze_repeat_problem,
+    analyze_with_text_input,
+    clear_chat_history,
+)
 from live_transcription import LiveTranscriptionManager
+from overlay import DraggableOverlay
 
-# Audio queue for communication between threads
-audio_queue = queue.Queue()
 
-# Global reference to the overlay
+def configure_console_encoding():
+    """Keep Windows console logging from crashing on non-ASCII UI/status text."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+configure_console_encoding()
+
+
 overlay = None
-
-# Rate limiting settings - 30 RPM = 1 request per 2 seconds to be safe
-RATE_LIMIT = 2.0  # seconds between requests
-last_request_time = 0
-api_semaphore = threading.Semaphore(1)  # Allow only 1 API call at a time
-
-# Add a global reference to the transcription manager
 transcription_manager = None
 
-# Stub implementation for record_speech (previously imported from speech_capture)
-def record_speech(audio_queue=None):
-    """
-    Stub implementation for record_speech
-    Since speech_capture.py was removed, this function does nothing but logs a message.
-    """
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Speech recording functionality has been removed", flush=True)
-    
-    # This function will run in a thread, so we need to keep it alive
-    while True:
-        time.sleep(10)  # Sleep to avoid high CPU usage
-        
-# Stub implementation for get_desktop_speech_segments (previously imported from speech_capture)
-def get_desktop_speech_segments():
-    """
-    Stub implementation for get_desktop_speech_segments
-    Since speech_capture.py was removed, this function returns an empty string.
-    """
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Desktop audio capture functionality has been removed", flush=True)
-    return ""
+RATE_LIMIT = 2.0
+last_request_time = 0.0
+api_semaphore = threading.Semaphore(1)
+
+
+def timestamp():
+    return f"[{datetime.now().strftime('%H:%M:%S')}]"
+
 
 def capture_screenshot(max_width=1280, quality=85):
-    """Capture a screenshot, resize it, and return it as a base64 encoded string"""
+    """Capture a compressed screenshot and return it as base64 JPEG."""
     screenshot = ImageGrab.grab()
-    
-    # Resize the image to reduce size while maintaining aspect ratio
     orig_width, orig_height = screenshot.size
+
     if orig_width > max_width:
         ratio = max_width / float(orig_width)
-        new_height = int(orig_height * ratio)
-        screenshot = screenshot.resize((max_width, new_height), resample=1)
-    
-    # Save with compression to reduce size
+        screenshot = screenshot.resize((max_width, int(orig_height * ratio)), resample=1)
+
     img_bytes = io.BytesIO()
-    screenshot.save(img_bytes, format='JPEG', quality=quality, optimize=True)
+    screenshot.save(img_bytes, format="JPEG", quality=quality, optimize=True)
     img_bytes.seek(0)
-    
-    return base64.b64encode(img_bytes.getvalue()).decode('utf-8')
+    return base64.b64encode(img_bytes.getvalue()).decode("utf-8")
 
-def audio_recorder():
-    """Run recording and put data into the queue"""
-    # Create a queue for the audio recorder
-    recorder_queue = queue.Queue()
-    
-    # Start recording in a separate thread
-    recording_thread = threading.Thread(
-        target=record_speech,
-        args=(recorder_queue,),
-        daemon=True
+
+def _run_on_ui(method_name: str, *args):
+    if not overlay:
+        return
+
+    qt_args = []
+    for value in args:
+        if isinstance(value, dict):
+            qt_args.append(QtCore.Q_ARG(dict, value))
+        elif isinstance(value, bool):
+            qt_args.append(QtCore.Q_ARG(bool, value))
+        else:
+            qt_args.append(QtCore.Q_ARG(str, str(value)))
+
+    QtCore.QMetaObject.invokeMethod(
+        overlay,
+        method_name,
+        QtCore.Qt.ConnectionType.QueuedConnection,
+        *qt_args,
     )
-    recording_thread.start()
-    
-    global overlay
-    
-    while True:
-        # Get audio data from recorder queue
-        audio_data = recorder_queue.get()
-        if audio_data is not None:
-            # Put data into the processing queue
-            audio_queue.put(audio_data)
-        recorder_queue.task_done()
 
-def process_audio_data():
-    """Process audio segments in a dedicated thread"""
-    global overlay
-    
-    print("\n" + "=" * 50, flush=True)
-    print("🎙️  AI LIVE SYSTEM STARTED 🎙️", flush=True)
-    print("=" * 50 + "\n", flush=True)
-    
-    # Keep track of processed audio hashes to prevent duplicates
-    processed_hashes = set()
 
-    # Flag to track if we're currently processing
-    is_processing = False
+def _mark_processing(session_id: str, status: str, color: str):
+    if not overlay:
+        return
 
-    # Track previous mic state to detect changes
-    prev_mic_enabled = True
+    overlay.current_session_id = session_id
+    overlay.set_processing(True)
+    overlay.update_status(status, color)
 
-    # Create a fingerprint of the audio data for better deduplication
-    def get_audio_fingerprint(audio_data):
-        if not audio_data or "mic_audio" not in audio_data:
-            return None
-        
-        mic_audio = audio_data.get("mic_audio", "")
-        if len(mic_audio) < 100:
-            return None
-            
-        # Use a more robust fingerprint based on multiple segments of the audio
-        if len(mic_audio) > 6000:
-            # Take samples from beginning, middle and end for a more robust fingerprint
-            fingerprint = hash(mic_audio[:2000] + mic_audio[len(mic_audio)//2-1000:len(mic_audio)//2+1000] + mic_audio[-2000:])
-        else:
-            fingerprint = hash(mic_audio)
-        
-        return fingerprint
 
-    # Function to merge multiple audio data objects into one
-    def merge_audio_data(audio_data_list):
-        """Merge multiple audio data objects into a single one"""
-        if not audio_data_list:
-            return None
-        
-        if len(audio_data_list) == 1:
-            return audio_data_list[0]
-        
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Merging {len(audio_data_list)} audio inputs together", flush=True)
-        
-        # Extract all microphone audio segments
-        all_mic_segments = []
-        # Use the desktop audio from the latest sample
-        desktop_audio = audio_data_list[-1].get("desktop_audio", "")
-        
-        for data in audio_data_list:
-            mic_audio = data.get("mic_audio", "")
-            if mic_audio and len(mic_audio) > 100:
-                try:
-                    # Validate base64 data
-                    audio_bytes = base64.b64decode(mic_audio)
-                    all_mic_segments.append(audio_bytes)
-                except Exception as e:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Error decoding audio: {e}", flush=True)
-        
-        if not all_mic_segments:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] No valid audio segments to merge", flush=True)
-            return audio_data_list[-1]  # Return the last one as fallback
-        
-        # Merge all mic segments into one WAV file
+def _is_current_session(session_id: str) -> bool:
+    return bool(overlay and getattr(overlay, "current_session_id", None) == session_id)
+
+
+def _collect_screenshots() -> List[str]:
+    screenshots = []
+    if not overlay or not overlay.screenshot_toggle_button.isChecked():
+        print(f"{timestamp()} Screenshots disabled for this request", flush=True)
+        return screenshots
+
+    from overlay import screenshot_queue
+
+    while not screenshot_queue.empty():
         try:
-            # Create a new WAV file in memory
-            combined_wav = io.BytesIO()
-            
-            # Read the first WAV file to get format information
-            with wave.open(io.BytesIO(all_mic_segments[0]), 'rb') as first_wav:
-                channels = first_wav.getnchannels()
-                sample_width = first_wav.getsampwidth()
-                framerate = first_wav.getframerate()
-            
-            # Create the output WAV file with the same format
-            with wave.open(combined_wav, 'wb') as wf:
-                wf.setnchannels(channels)
-                wf.setsampwidth(sample_width)
-                wf.setframerate(framerate)
-                
-                # Write all segments to the WAV file
-                for segment_data in all_mic_segments:
-                    # Extract audio frames from the WAV file
-                    with wave.open(io.BytesIO(segment_data), 'rb') as segment_wav:
-                        wf.writeframes(segment_wav.readframes(segment_wav.getnframes()))
-            
-            # Get the merged WAV as base64
-            combined_wav.seek(0)
-            merged_mic_audio = base64.b64encode(combined_wav.read()).decode('utf-8')
-            
-            # Create the merged audio data object
-            merged_data = {
-                "mic_audio": merged_mic_audio,
-                "desktop_audio": desktop_audio,
-                "timestamp": time.time()
-            }
-            
-            return merged_data
-        
-        except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error merging audio segments: {e}", flush=True)
-            return audio_data_list[-1]  # Return the last one as fallback
-
-    # Function to drain the queue and get all current audio data
-    def drain_audio_queue():
-        """Get all currently available audio data from the queue"""
-        audio_list = []
-        
-        # Get the first item (we already got it in the main loop)
-        first_audio = audio_queue.get()
-        audio_list.append(first_audio)
-        audio_queue.task_done()
-        
-        # Drain remaining items from the queue
-        try:
-            while True:
-                # Use get_nowait to avoid blocking
-                audio_data = audio_queue.get_nowait()
-                audio_list.append(audio_data)
-                audio_queue.task_done()
-        except queue.Empty:
-            # Queue is empty, we've gotten all items
-            pass
-            
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Drained {len(audio_list)} items from audio queue", flush=True)
-        return audio_list
-
-    while True:
-        try:
-            # Check if microphone is enabled and update status if needed
-            mic_enabled = True
-            if overlay:
-                mic_enabled = overlay.mic_button.isChecked()
-                if mic_enabled != prev_mic_enabled:
-                    if mic_enabled:
-                        overlay.update_status("Listening...", "#4CAF50")
-                    else:
-                        overlay.update_status("Microphone Off", "#FFA500")  # Orange color for disabled state
-                    prev_mic_enabled = mic_enabled
-
-            # Wait for audio data
-            # We'll wait here until at least one audio item is available
-            audio_data = audio_queue.get()
-            
-            # Skip processing if microphone is disabled
-            if not mic_enabled:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤫 Microphone disabled, skipping audio processing", flush=True)
-                audio_queue.task_done()
-                continue
-            
-            sys.stdout.flush()
-            
-            try:
-                # Check if we're currently processing
-                if is_processing:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing, putting back in queue and skipping", flush=True)
-                    # Put the item back in the queue and continue
-                    audio_queue.put(audio_data)
-                    continue
-                
-                # Set processing flag
-                is_processing = True
-                if overlay:
-                    overlay.set_processing(True)
-                
-                # Drain all current items from the queue including the one we just got
-                # Put the first audio back in the queue first
-                audio_queue.put(audio_data)
-                all_audio_data = drain_audio_queue()
-                
-                # Filter out duplicates and already processed audio
-                filtered_audio = []
-                for data in all_audio_data:
-                    # Get audio fingerprint
-                    fingerprint = get_audio_fingerprint(data)
-                    
-                    # Skip invalid audio
-                    if fingerprint is None:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Invalid audio data skipped", flush=True)
-                        continue
-                        
-                    # Skip already processed audio
-                    if fingerprint in processed_hashes:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Duplicate audio fingerprint skipped", flush=True)
-                        continue
-                    
-                    # Add to filtered list and mark as processed
-                    filtered_audio.append(data)
-                    processed_hashes.add(fingerprint)
-                
-                # Limit the size of the processed_hashes set to prevent memory growth
-                if len(processed_hashes) > 100:
-                    processed_hashes = set(list(processed_hashes)[-50:])
-                
-                # Skip if no valid audio to process
-                if not filtered_audio:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ No valid audio to process after filtering", flush=True)
-                    is_processing = False
-                    if overlay:
-                        overlay.set_processing(False)
-                    continue
-                
-                # Capture screenshot
-                screenshot_base64 = capture_screenshot()
-                
-                # Check if we have multiple audio segments to merge
-                if len(filtered_audio) > 1:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎙️ Processing {len(filtered_audio)} audio segments together", flush=True)
-                    # Reverse the order of audio segments to ensure chronological order (earliest first)
-                    filtered_audio.reverse()
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Audio segments reversed for chronological order", flush=True)
-                    # Merge audio segments
-                    merged_audio = merge_audio_data(filtered_audio)
-                    processing_audio = merged_audio
-                else:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎙️ Processing single audio segment", flush=True)
-                    processing_audio = filtered_audio[0]
-                
-                # Process audio input - this is now asynchronous and will update UI from its thread
-                # When the asynchronous call completes, it will set overlay.is_processing to False
-                # We don't need to set is_processing to False here anymore
-                analyze_with_streaming(processing_audio, screenshot_base64)
-                
-                # Note: we don't reset the processing state here anymore as it's done in the async thread
-                # Instead, we rely on a callback to set is_processing back to False when processing is complete
-                # We need to create a way to listen for when the API call is complete
-                def check_processing_status():
-                    """Check if the overlay is done processing and update our local flag"""
-                    nonlocal is_processing
-                    # Give time for the thread to start
-                    time.sleep(0.5)
-                    
-                    # Wait until the overlay is no longer processing
-                    while overlay and overlay.is_processing:
-                        time.sleep(0.5)
-                    
-                    # Once overlay is done, update our local state
-                    is_processing = False
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Processing complete, ready for next input", flush=True)
-                
-                # Start a thread to monitor when processing is complete
-                status_thread = threading.Thread(target=check_processing_status, daemon=True)
-                status_thread.start()
-            
-            except Exception as e:
-                print(f"Error processing audio: {e}", flush=True)
-                if overlay:
-                    overlay.update_status("Error", "#FF0000")
-                    overlay.set_processing(False)
-                is_processing = False
-            
-        except Exception as e:
-            print(f"Error in process_task: {e}", flush=True)
-            is_processing = False
-            time.sleep(0.1)  # Prevent tight loop on error
-
-def analyze_with_streaming(audio_data, screenshot_base64):
-    """Analyze audio and image and return complete response"""
-    global overlay
-    
-    # Generate a session ID for this analysis
-    session_id = f"session_{datetime.now().strftime('%H%M%S')}_{hash(str(audio_data))}"
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🆔 Processing session {session_id}", flush=True)
-    
-    try:
-        sys.stdout.flush()
-        
-        # Extract microphone and desktop audio
-        mic_audio = audio_data.get("mic_audio", "")
-        
-        # Check if desktop audio should be included
-        include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
-        desktop_audio = audio_data.get("desktop_audio", "") if include_desktop_audio else ""
-        
-        # Collect all queued screenshots, considering the toggle state
-        screenshots = []
-        if overlay and overlay.screenshot_toggle_button.isChecked():
-            from overlay import screenshot_queue
-            while not screenshot_queue.empty():
-                try:
-                    screenshot = screenshot_queue.get_nowait()
-                    screenshots.append(screenshot)
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot for analysis", flush=True)
-                except queue.Empty:
-                    break
-            
-            # If no queued screenshots, use the current one passed to the function
-            if not screenshots:
-                screenshots = [screenshot_base64]
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using current screenshot for analysis", flush=True)
-        else:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Screenshots disabled, not sending image data", flush=True)
-            
-        # Update UI to show processing state
-        if overlay:
-            overlay.update_status("Processing...", "#FFA500")
-            
-        # Set a flag to track if this request was canceled
-        if not hasattr(overlay, 'current_session_id'):
-            overlay.current_session_id = None
-        overlay.current_session_id = session_id
-            
-        # Run the API call in a separate thread to avoid blocking the UI
-        def api_call_thread():
-            try:
-                # Apply rate limiting with semaphore
-                with api_semaphore:
-                    # Check if we need to wait to respect the rate limit
-                    global last_request_time
-                    current_time = time.time()
-                    time_since_last_request = current_time - last_request_time
-                    
-                    if time_since_last_request < RATE_LIMIT:
-                        wait_time = RATE_LIMIT - time_since_last_request
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ Rate limiting: waiting {wait_time:.2f}s", flush=True)
-                        time.sleep(wait_time)
-                    
-                    # Update the last request time
-                    last_request_time = time.time()
-                    
-                    # Start the analysis request with all screenshots
-                    response_json = analyze_with_audio_and_image(
-                        mic_audio, 
-                        "wav", 
-                        screenshots, 
-                        "jpeg", 
-                        desktop_audio
-                    )
-                    
-                    # Check if this session was canceled before updating UI
-                    if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Session {session_id} was canceled, discarding results", flush=True)
-                        return
-                    
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 AI response for session {session_id}:", flush=True)
-                    print("-" * 50, flush=True)
-                    sys.stdout.flush()
-                    
-                    # Extract the user query and response
-                    user_query = response_json.get("user_query", "Could not extract query")
-                    ai_response = response_json.get("response", "No response generated")
-                    
-                    # Print the complete response
-                    print(f"User's query: {user_query}\n")
-                    print(f"AI response: {ai_response}", flush=True)
-                    print("\n" + "-" * 50, flush=True)
-                    
-                    sys.stdout.flush()
-                    
-                    # Check again if this session was canceled before updating UI
-                    if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Session {session_id} was canceled, discarding results", flush=True)
-                        return
-                    
-                    # Update overlay with structured response from the main thread
-                    if overlay:
-                        QtCore.QMetaObject.invokeMethod(
-                            overlay, 
-                            "update_response",
-                            QtCore.Qt.ConnectionType.QueuedConnection,
-                            QtCore.Q_ARG(dict, response_json)
-                        )
-                        QtCore.QMetaObject.invokeMethod(
-                            overlay,
-                            "update_status",
-                            QtCore.Qt.ConnectionType.QueuedConnection,
-                            QtCore.Q_ARG(str, "Listening..."),
-                            QtCore.Q_ARG(str, "#4CAF50")
-                        )
-                        QtCore.QMetaObject.invokeMethod(
-                            overlay,
-                            "set_processing",
-                            QtCore.Qt.ConnectionType.QueuedConnection,
-                            QtCore.Q_ARG(bool, False)
-                        )
-            except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in analysis session {session_id}: {e}", flush=True)
-                if overlay:
-                    # Check if this session was canceled
-                    if hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Session {session_id} was canceled, not showing error", flush=True)
-                        return
-                        
-                    error_response = {"user_query": "Error occurred", "response": f"Error: {str(e)}"}
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_status",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(str, "Error"),
-                        QtCore.Q_ARG(str, "#FF0000")
-                    )
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, error_response)
-                    )
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "set_processing",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(bool, False)
-                    )
-                sys.stdout.flush()
-                
-        # Start the thread
-        thread = threading.Thread(target=api_call_thread)
-        thread.daemon = True
-        thread.start()
-        
-        # Return None since the actual response will be handled in the background thread
-        return None
-    
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up analysis session {session_id}: {e}", flush=True)
-        if overlay:
-            overlay.update_status("Error", "#FF0000")
-            error_response = {"user_query": "Error occurred", "response": f"Error: {str(e)}"}
-            overlay.update_response(error_response)
-            overlay.set_processing(False)
-        sys.stdout.flush()
-        return error_response
-
-def process_text_input(text_input):
-    """Process text input from the overlay UI"""
-    global overlay
-    
-    try:
-        # Check if we're already processing something
-        if overlay and overlay.is_processing:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring text input", flush=True)
-            return
-        
-        # Set processing state
-        if overlay:
-            overlay.set_processing(True)
-            overlay.update_status("Processing...", "#FFA500")
-            
-            # Generate a session ID for this text analysis
-            session_id = f"text_{datetime.now().strftime('%H%M%S')}_{hash(text_input)}"
-            if not hasattr(overlay, 'current_session_id'):
-                overlay.current_session_id = None
-            overlay.current_session_id = session_id
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🆔 Processing text session {session_id}", flush=True)
-        
-        # Collect screenshots and audio on the main thread before sending to background
-        screenshots = []
-        if overlay and overlay.screenshot_toggle_button.isChecked():
-            from overlay import screenshot_queue
-            # Collect all queued screenshots
-            while not screenshot_queue.empty():
-                try:
-                    screenshot = screenshot_queue.get_nowait()
-                    screenshots.append(screenshot)
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot for text input", flush=True)
-                except queue.Empty:
-                    break
-            
-            # If no queued screenshots, capture a new one
-            if not screenshots:
-                screenshots = [capture_screenshot()]
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for text input", flush=True)
-        else:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Screenshots disabled, not sending image data for text input", flush=True)
-        
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Text input received: {text_input}", flush=True)
-        
-        # Get desktop audio using our local stub function
-        # Removed: from speech_capture import get_desktop_speech_segments
-        
-        # Check if desktop audio should be included
-        include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
-        desktop_audio = get_desktop_speech_segments() if include_desktop_audio else ""
-        
-        # Log desktop audio status
-        if desktop_audio:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured and included", flush=True)
-        elif not include_desktop_audio:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Desktop audio available but not included (disabled)", flush=True)
-        
-        # Run the API call in a separate thread to avoid blocking the UI
-        def api_call_thread():
-            try:
-                # Apply rate limiting with semaphore
-                with api_semaphore:
-                    # Check if we need to wait to respect the rate limit
-                    global last_request_time
-                    current_time = time.time()
-                    time_since_last_request = current_time - last_request_time
-                    
-                    if time_since_last_request < RATE_LIMIT:
-                        wait_time = RATE_LIMIT - time_since_last_request
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ Rate limiting: waiting {wait_time:.2f}s", flush=True)
-                        time.sleep(wait_time)
-                    
-                    # Update the last request time
-                    last_request_time = time.time()
-                    
-                    # Process the text input with all screenshots
-                    response_json = analyze_with_text_input(
-                        text_input,
-                        screenshots,
-                        "jpeg",
-                        desktop_audio
-                    )
-                    
-                    # Check if this session was canceled before updating UI
-                    if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Text session {session_id} was canceled, discarding results", flush=True)
-                        return
-                    
-                    # Use QtCore.QMetaObject.invokeMethod to safely update UI from background thread
-                    if overlay:
-                        # Update UI from the main thread
-                        QtCore.QMetaObject.invokeMethod(
-                            overlay, 
-                            "update_response",
-                            QtCore.Qt.ConnectionType.QueuedConnection,
-                            QtCore.Q_ARG(dict, response_json)
-                        )
-                        QtCore.QMetaObject.invokeMethod(
-                            overlay,
-                            "update_status",
-                            QtCore.Qt.ConnectionType.QueuedConnection,
-                            QtCore.Q_ARG(str, "Listening..."),
-                            QtCore.Q_ARG(str, "#4CAF50")
-                        )
-                    
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 AI response:", flush=True)
-                    print("-" * 50, flush=True)
-                    sys.stdout.flush()
-                    
-                    # Extract the user query and response
-                    user_query = response_json.get("user_query", text_input)
-                    ai_response = response_json.get("response", "No response generated")
-                    
-                    # Print the complete response
-                    print(f"User's query: {user_query}\n")
-                    print(f"AI response: {ai_response}", flush=True)
-                    print("\n" + "-" * 50, flush=True)
-                    
-                    sys.stdout.flush()
-                    
-            except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in background thread: {e}", flush=True)
-                
-                # Check if this session was canceled
-                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Text session {session_id} was canceled, not showing error", flush=True)
-                    return
-                    
-                if overlay:
-                    # Update UI from the main thread
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_status",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(str, "Error"),
-                        QtCore.Q_ARG(str, "#FF0000")
-                    )
-                    error_response = {"user_query": text_input, "response": f"Error: {str(e)}"}
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, error_response)
-                    )
-            finally:
-                # Always reset processing state when done
-                if overlay:
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "set_processing",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(bool, False)
-                    )
-        
-        # Start the thread
-        thread = threading.Thread(target=api_call_thread)
-        thread.daemon = True
-        thread.start()
-        
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up text input processing: {e}", flush=True)
-        if overlay:
-            overlay.update_status("Error", "#FF0000")
-            overlay.update_response({"user_query": text_input, "response": f"Error: {str(e)}"})
-            overlay.set_processing(False)
-
-def process_pro_text_input(text_input):
-    """Process text input from the overlay UI using the Pro model for coding problems"""
-    global overlay
-    
-    try:
-        # Check if we're already processing something
-        if overlay and overlay.is_processing:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring text input", flush=True)
-            return
-        
-        # Set processing state
-        if overlay:
-            overlay.set_processing(True)
-            overlay.update_status("Processing with Pro model...", "#4B0082")  # Indigo color for Pro
-            
-            # Generate a session ID for this pro analysis
-            session_id = f"pro_{datetime.now().strftime('%H%M%S')}_{hash(text_input)}"
-            if not hasattr(overlay, 'current_session_id'):
-                overlay.current_session_id = None
-            overlay.current_session_id = session_id
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🆔 Processing Pro session {session_id}", flush=True)
-        
-        # Collect screenshots and audio on the main thread before sending to background
-        screenshots = []
-        if overlay and overlay.screenshot_toggle_button.isChecked():
-            from overlay import screenshot_queue
-            # Collect all queued screenshots
-            while not screenshot_queue.empty():
-                try:
-                    screenshot = screenshot_queue.get_nowait()
-                    screenshots.append(screenshot)
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot for Pro input", flush=True)
-                except queue.Empty:
-                    break
-            
-            # If no queued screenshots, capture a new one
-            if not screenshots:
-                screenshots = [capture_screenshot()]
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for Pro input", flush=True)
-        else:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Screenshots disabled, not sending image data for Pro input", flush=True)
-        
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Pro analysis request received: {text_input}", flush=True)
-        
-        # Get desktop audio using our local stub function
-        # Removed: from speech_capture import get_desktop_speech_segments
-        
-        # Check if desktop audio should be included
-        include_desktop_audio = overlay and overlay.desktop_audio_button.isChecked()
-        desktop_audio = get_desktop_speech_segments() if include_desktop_audio else ""
-        
-        # Log desktop audio status
-        if desktop_audio:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured and included", flush=True)
-        elif not include_desktop_audio:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Desktop audio available but not included (disabled)", flush=True)
-        
-        # Run the API call in a separate thread to avoid blocking the UI
-        def api_call_thread():
-            try:
-                # Apply rate limiting with semaphore
-                with api_semaphore:
-                    # Check if we need to wait to respect the rate limit
-                    global last_request_time
-                    current_time = time.time()
-                    time_since_last_request = current_time - last_request_time
-                    
-                    if time_since_last_request < RATE_LIMIT:
-                        wait_time = RATE_LIMIT - time_since_last_request
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ Rate limiting: waiting {wait_time:.2f}s", flush=True)
-                        time.sleep(wait_time)
-                    
-                    # Update the last request time
-                    last_request_time = time.time()
-                    
-                    # Process the text input with all screenshots
-                    response_json = analyze_with_text_input(
-                        text_input,
-                        screenshots,
-                        "jpeg",
-                        desktop_audio
-                    )
-                    
-                    # Check if this session was canceled before updating UI
-                    if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Pro text session {session_id} was canceled, discarding results", flush=True)
-                        return
-                    
-                    # Use QtCore.QMetaObject.invokeMethod to safely update UI from background thread
-                    if overlay:
-                        # Update UI from the main thread
-                        QtCore.QMetaObject.invokeMethod(
-                            overlay, 
-                            "update_response",
-                            QtCore.Qt.ConnectionType.QueuedConnection,
-                            QtCore.Q_ARG(dict, response_json)
-                        )
-                        QtCore.QMetaObject.invokeMethod(
-                            overlay,
-                            "update_status",
-                            QtCore.Qt.ConnectionType.QueuedConnection,
-                            QtCore.Q_ARG(str, "Listening..."),
-                            QtCore.Q_ARG(str, "#4CAF50")
-                        )
-                    
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Pro AI response:", flush=True)
-                    print("-" * 50, flush=True)
-                    sys.stdout.flush()
-                    
-                    # Extract the user query and response
-                    user_query = response_json.get("user_query", text_input)
-                    ai_response = response_json.get("response", "No response generated")
-                    
-                    # Print the complete response
-                    print(f"User's query: {user_query}\n")
-                    print(f"AI response: {ai_response}", flush=True)
-                    print("\n" + "-" * 50, flush=True)
-                    
-                    sys.stdout.flush()
-                    
-            except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in Pro text analysis background thread: {e}", flush=True)
-                
-                # Check if this session was canceled
-                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Pro text session {session_id} was canceled, not showing error", flush=True)
-                    return
-                    
-                if overlay:
-                    # Update UI from the main thread
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_status",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(str, "Error"),
-                        QtCore.Q_ARG(str, "#FF0000")
-                    )
-                    error_response = {"user_query": text_input, "response": f"Error: {str(e)}"}
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, error_response)
-                    )
-            finally:
-                # Always reset processing state when done
-                if overlay:
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "set_processing",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(bool, False)
-                    )
-        
-        # Start the thread
-        thread = threading.Thread(target=api_call_thread)
-        thread.daemon = True
-        thread.start()
-        
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up Pro text input processing: {e}", flush=True)
-        if overlay:
-            overlay.update_status("Error", "#FF0000")
-            overlay.update_response({"user_query": text_input, "response": f"Error: {str(e)}"})
-            overlay.set_processing(False)
-
-def process_code_analysis(transcription):
-    """Process code analysis using the regular model with specialized code problem prompt"""
-    global overlay
-    
-    try:
-        # Check if we're already processing something
-        if overlay and overlay.is_processing:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring code analysis", flush=True)
-            return
-        
-        # Set processing state
-        if overlay:
-            overlay.set_processing(True)
-            overlay.update_status("Analyzing code problem...", "#00ADD8")
-            
-            # Generate a session ID for this analysis
-            session_id = f"code_{datetime.now().strftime('%H%M%S')}_{hash(transcription)}"
-            if not hasattr(overlay, 'current_session_id'):
-                overlay.current_session_id = None
-            overlay.current_session_id = session_id
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Processing code analysis session {session_id}", flush=True)
-        
-        # Run the API call in a separate thread to avoid blocking the UI
-        def api_call_thread():
-            try:
-                from chat import analyze_code_problem
-                
-                # Take a screenshot if screenshots are enabled
-                screenshots = []
-                if overlay and overlay.screenshot_toggle_button.isChecked():
-                    from overlay import screenshot_queue
-                    while not screenshot_queue.empty():
-                        try:
-                            screenshot = screenshot_queue.get_nowait()
-                            screenshots.append(screenshot)
-                        except queue.Empty:
-                            break
-                    
-                    # If no queued screenshots, capture a new one
-                    if not screenshots:
-                        screenshots = [capture_screenshot()]
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for code analysis", flush=True)
-                
-                # Get desktop audio if enabled
-                desktop_audio = ""
-                if overlay and overlay.desktop_audio_button.isChecked():
-                    desktop_audio = get_desktop_speech_segments()
-                    if desktop_audio:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for code analysis", flush=True)
-                
-                # Pass the transcription directly 
-                # If empty, the function will still work with just screenshots/audio
-                response_json = analyze_code_problem(transcription, screenshots, "jpg", desktop_audio)
-                
-                # Check if this session was canceled before updating UI
-                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Code analysis session {session_id} was canceled, discarding results", flush=True)
-                    return
-                
-                # Update overlay with response
-                if overlay and response_json:
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, response_json)
-                    )
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_status",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(str, "Ready"),
-                        QtCore.Q_ARG(str, "#4CAF50")
-                    )
-            except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in code analysis: {e}", flush=True)
-                if overlay:
-                    error_response = {"user_query": transcription, "response": f"Error in code analysis: {str(e)}"}
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, error_response)
-                    )
-            finally:
-                # Always reset processing state when done
-                if overlay:
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "set_processing",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(bool, False)
-                    )
-        
-        # Start the thread
-        thread = threading.Thread(target=api_call_thread)
-        thread.daemon = True
-        thread.start()
-        
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up code analysis processing: {e}", flush=True)
-        if overlay:
-            overlay.update_status("Error", "#FF0000")
-            overlay.update_response({"user_query": transcription, "response": f"Error: {str(e)}"})
-            overlay.set_processing(False)
-
-def process_general_analysis(transcription):
-    """Process general analysis using the regular model with specialized general analysis prompt"""
-    global overlay
-    
-    try:
-        # Check if we're already processing something
-        if overlay and overlay.is_processing:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring general analysis", flush=True)
-            return
-        
-        # Set processing state
-        if overlay:
-            overlay.set_processing(True)
-            overlay.update_status("Analyzing general problem...", "#228B22")
-              # Generate a session ID for this analysis
-            session_id = f"general_{datetime.now().strftime('%H%M%S')}_{hash(transcription)}"
-            if not hasattr(overlay, 'current_session_id'):
-                overlay.current_session_id = None
-            overlay.current_session_id = session_id
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Processing general analysis session {session_id}", flush=True)
-        
-        # Run the API call in a separate thread to avoid blocking the UI
-        def api_call_thread():
-            try:
-                from chat import analyze_general_problem
-                
-                # Take a screenshot if screenshots are enabled
-                screenshots = []
-                if overlay and overlay.screenshot_toggle_button.isChecked():
-                    from overlay import screenshot_queue
-                    while not screenshot_queue.empty():
-                        try:
-                            screenshot = screenshot_queue.get_nowait()
-                            screenshots.append(screenshot)
-                        except queue.Empty:
-                            break
-                    
-                    # If no queued screenshots, capture a new one
-                    if not screenshots:
-                        screenshots = [capture_screenshot()]
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for general analysis", flush=True)
-                
-                # Get desktop audio if enabled
-                desktop_audio = ""
-                if overlay and overlay.desktop_audio_button.isChecked():
-                    desktop_audio = get_desktop_speech_segments()
-                    if desktop_audio:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for general analysis", flush=True)
-                
-                # Pass the transcription directly
-                # If empty, the function will still work with just screenshots/audio
-                response_json = analyze_general_problem(transcription, screenshots, "jpg", desktop_audio)
-                
-                # Check if this session was canceled before updating UI
-                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 General analysis session {session_id} was canceled, discarding results", flush=True)
-                    return
-                
-                # Update overlay with response
-                if overlay and response_json:
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, response_json)
-                    )
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_status",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(str, "Ready"),
-                        QtCore.Q_ARG(str, "#4CAF50")
-                    )
-            except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in general analysis: {e}", flush=True)
-                if overlay:
-                    error_response = {"user_query": transcription, "response": f"Error in general analysis: {str(e)}"}
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, error_response)
-                    )
-            finally:
-                # Always reset processing state when done
-                if overlay:
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "set_processing",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(bool, False)
-                    )
-        
-        # Start the thread
-        thread = threading.Thread(target=api_call_thread)
-        thread.daemon = True
-        thread.start()
-        
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up general analysis processing: {e}", flush=True)
-        if overlay:
-            overlay.update_status("Error", "#FF0000")
-            overlay.update_response({"user_query": transcription, "response": f"Error: {str(e)}"})
-            overlay.set_processing(False)
-
-def process_repeat_analysis(transcription):
-    """Process repeat analysis using the regular model with specialized repeat analysis prompt"""
-    global overlay
-    
-    try:
-        # Check if we're already processing something
-        if overlay and overlay.is_processing:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring repeat analysis", flush=True)
-            return
-        
-        # Set processing state
-        if overlay:
-            overlay.set_processing(True)
-            overlay.update_status("Analyzing repeated problem...", "#FF8C00")
-            
-            # Generate a session ID for this analysis
-            session_id = f"repeat_{datetime.now().strftime('%H%M%S')}_{hash(transcription)}"
-            if not hasattr(overlay, 'current_session_id'):
-                overlay.current_session_id = None
-            overlay.current_session_id = session_id
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Processing repeat analysis session {session_id}", flush=True)
-        
-        # Run the API call in a separate thread to avoid blocking the UI
-        def api_call_thread():
-            try:
-                from chat import analyze_repeat_problem
-                
-                # Take a screenshot if screenshots are enabled
-                screenshots = []
-                if overlay and overlay.screenshot_toggle_button.isChecked():
-                    from overlay import screenshot_queue
-                    while not screenshot_queue.empty():
-                        try:
-                            screenshot = screenshot_queue.get_nowait()
-                            screenshots.append(screenshot)
-                        except queue.Empty:
-                            break
-                    
-                    # If no queued screenshots, capture a new one
-                    if not screenshots:
-                        screenshots = [capture_screenshot()]
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for repeat analysis", flush=True)
-                
-                # Get desktop audio if enabled
-                desktop_audio = ""
-                if overlay and overlay.desktop_audio_button.isChecked():
-                    desktop_audio = get_desktop_speech_segments()
-                    if desktop_audio:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for repeat analysis", flush=True)
-                
-                # Pass the transcription directly
-                # If empty, the function will still work with just screenshots/audio  
-                response_json = analyze_repeat_problem(transcription, screenshots, "jpg", desktop_audio)
-                
-                # Check if this session was canceled before updating UI
-                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Repeat analysis session {session_id} was canceled, discarding results", flush=True)
-                    return
-                
-                # Update overlay with response
-                if overlay and response_json:
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, response_json)
-                    )
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_status",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(str, "Ready"),
-                        QtCore.Q_ARG(str, "#4CAF50")
-                    )
-            except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in repeat analysis: {e}", flush=True)
-                if overlay:
-                    error_response = {"user_query": transcription, "response": f"Error in repeat analysis: {str(e)}"}
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, error_response)
-                    )
-            finally:
-                # Always reset processing state when done
-                if overlay:
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "set_processing",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(bool, False)
-                    )
-        
-        # Start the thread
-        thread = threading.Thread(target=api_call_thread)
-        thread.daemon = True
-        thread.start()
-        
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up repeat analysis processing: {e}", flush=True)
-        if overlay:
-            overlay.update_status("Error", "#FF0000")
-            overlay.update_response({"user_query": transcription, "response": f"Error: {str(e)}"})
-            overlay.set_processing(False)
-
-def process_pro_code_analysis(transcription):
-    """Process code analysis using the Pro model with specialized code problem prompt"""
-    global overlay
-    
-    try:
-        # Check if we're already processing something
-        if overlay and overlay.is_processing:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring Pro code analysis", flush=True)
-            return
-        
-        # Set processing state
-        if overlay:
-            overlay.set_processing(True)
-            overlay.update_status("Analyzing code with Pro model...", "#4B0082")
-            
-            # Generate a session ID for this analysis
-            session_id = f"pro_code_{datetime.now().strftime('%H%M%S')}_{hash(transcription)}"
-            if not hasattr(overlay, 'current_session_id'):
-                overlay.current_session_id = None
-            overlay.current_session_id = session_id
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Processing Pro code analysis session {session_id}", flush=True)
-        
-        # Run the API call in a separate thread to avoid blocking the UI
-        def api_call_thread():
-            try:
-                from chat import analyze_code_problem_pro
-                
-                # Take a screenshot if screenshots are enabled
-                screenshots = []
-                if overlay and overlay.screenshot_toggle_button.isChecked():
-                    from overlay import screenshot_queue
-                    while not screenshot_queue.empty():
-                        try:
-                            screenshot = screenshot_queue.get_nowait()
-                            screenshots.append(screenshot)
-                        except queue.Empty:
-                            break
-                    
-                    # If no queued screenshots, capture a new one
-                    if not screenshots:
-                        screenshots = [capture_screenshot()]
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for Pro code analysis", flush=True)
-                
-                # Get desktop audio if enabled
-                desktop_audio = ""
-                if overlay and overlay.desktop_audio_button.isChecked():
-                    desktop_audio = get_desktop_speech_segments()
-                    if desktop_audio:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for Pro code analysis", flush=True)
-                
-                # Pass the transcription directly
-                # If empty, the function will still work with just screenshots/audio
-                response_json = analyze_code_problem_pro(transcription, screenshots, "jpg", desktop_audio)
-                
-                # Check if this session was canceled before updating UI
-                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Pro code analysis session {session_id} was canceled, discarding results", flush=True)
-                    return
-                
-                # Update overlay with response
-                if overlay and response_json:
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, response_json)
-                    )
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_status",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(str, "Ready"),
-                        QtCore.Q_ARG(str, "#4CAF50")
-                    )
-            except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in Pro code analysis: {e}", flush=True)
-                if overlay:
-                    error_response = {"user_query": transcription, "response": f"Error in Pro code analysis: {str(e)}"}
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, error_response)
-                    )
-            finally:
-                # Always reset processing state when done
-                if overlay:
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "set_processing",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(bool, False)
-                    )
-        
-        # Start the thread
-        thread = threading.Thread(target=api_call_thread)
-        thread.daemon = True
-        thread.start()
-        
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up Pro code analysis processing: {e}", flush=True)
-        if overlay:
-            overlay.update_status("Error", "#FF0000")
-            overlay.update_response({"user_query": transcription, "response": f"Error: {str(e)}"})
-            overlay.set_processing(False)
-
-def process_pro_repeat_analysis(transcription):
-    """Process repeat analysis using the Pro model with specialized repeat analysis prompt"""
-    global overlay
-    
-    try:
-        # Check if we're already processing something
-        if overlay and overlay.is_processing:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Already processing another request, ignoring Pro repeat analysis", flush=True)
-            return
-        
-        # Set processing state
-        if overlay:
-            overlay.set_processing(True)
-            overlay.update_status("Analyzing repeat problem with Pro model...", "#8B008B")
-            
-            # Generate a session ID for this analysis
-            session_id = f"pro_repeat_{datetime.now().strftime('%H%M%S')}_{hash(transcription)}"
-            if not hasattr(overlay, 'current_session_id'):
-                overlay.current_session_id = None
-            overlay.current_session_id = session_id
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚡ Processing Pro repeat analysis session {session_id}", flush=True)
-        
-        # Run the API call in a separate thread to avoid blocking the UI
-        def api_call_thread():
-            try:
-                from chat import analyze_repeat_problem_pro
-                
-                # Take a screenshot if screenshots are enabled
-                screenshots = []
-                if overlay and overlay.screenshot_toggle_button.isChecked():
-                    from overlay import screenshot_queue
-                    while not screenshot_queue.empty():
-                        try:
-                            screenshot = screenshot_queue.get_nowait()
-                            screenshots.append(screenshot)
-                        except queue.Empty:
-                            break
-                    
-                    # If no queued screenshots, capture a new one
-                    if not screenshots:
-                        screenshots = [capture_screenshot()]
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Capturing new screenshot for Pro repeat analysis", flush=True)
-                
-                # Get desktop audio if enabled
-                desktop_audio = ""
-                if overlay and overlay.desktop_audio_button.isChecked():
-                    desktop_audio = get_desktop_speech_segments()
-                    if desktop_audio:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for Pro repeat analysis", flush=True)
-                
-                # Pass the transcription directly
-                # If empty, the function will still work with just screenshots/audio
-                response_json = analyze_repeat_problem_pro(transcription, screenshots, "jpg", desktop_audio)
-                
-                # Check if this session was canceled before updating UI
-                if overlay and hasattr(overlay, 'current_session_id') and overlay.current_session_id != session_id:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Pro repeat analysis session {session_id} was canceled, discarding results", flush=True)
-                    return
-                
-                # Update overlay with response
-                if overlay and response_json:
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, response_json)
-                    )
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_status",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(str, "Ready"),
-                        QtCore.Q_ARG(str, "#4CAF50")
-                    )
-            except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error in Pro repeat analysis: {e}", flush=True)
-                if overlay:
-                    error_response = {"user_query": transcription, "response": f"Error in Pro repeat analysis: {str(e)}"}
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "update_response",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(dict, error_response)
-                    )
-            finally:
-                # Always reset processing state when done
-                if overlay:
-                    QtCore.QMetaObject.invokeMethod(
-                        overlay,
-                        "set_processing",
-                        QtCore.Qt.ConnectionType.QueuedConnection,
-                        QtCore.Q_ARG(bool, False)
-                    )
-        
-        # Start the thread
-        thread = threading.Thread(target=api_call_thread)
-        thread.daemon = True
-        thread.start()
-        
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Error setting up Pro repeat analysis processing: {e}", flush=True)
-        if overlay:
-            overlay.update_status("Error", "#FF0000")
-            overlay.update_response({"user_query": transcription, "response": f"Error: {str(e)}"})
-            overlay.set_processing(False)
-
-def process_general_analysis_no_thinking(transcription):
-    """Process text input with the no-thinking general analysis mode"""
-    global overlay
-    
-    # Handle rate limiting
-    global last_request_time
-    current_time = time.time()
-    time_since_last = current_time - last_request_time
-    if time_since_last < RATE_LIMIT:
-        wait_time = RATE_LIMIT - time_since_last
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ Rate limiting: waiting {wait_time:.2f}s before processing", flush=True)
-        time.sleep(wait_time)
-    
-    # Update UI to show processing state
-    if overlay:
-        overlay.update_status("Processing...", "#FFA500")  # Orange color for processing
-    
-    # Get any screenshots from the queue
-    screenshot_base64 = None
-    try:
-        from overlay import screenshot_queue
-        if not screenshot_queue.empty():
-            screenshot_base64 = screenshot_queue.get_nowait()
+            screenshot = screenshot_queue.get_nowait()
+            screenshots.append(screenshot)
             screenshot_queue.task_done()
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Using queued screenshot for analysis", flush=True)
-        else:
-            # Only take a new screenshot if screenshots are enabled
-            if overlay and overlay.screenshot_toggle_button.isChecked():
-                screenshot_base64 = capture_screenshot()
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Captured new screenshot for analysis", flush=True)
-            else:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Screenshots disabled, skipping capture", flush=True)
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Error capturing screenshot: {e}", flush=True)
-    
-    # Create and start a thread for the API call
+            print(f"{timestamp()} Using queued screenshot", flush=True)
+        except Exception:
+            break
+
+    if not screenshots:
+        screenshots.append(capture_screenshot())
+        print(f"{timestamp()} Captured new screenshot", flush=True)
+
+    return screenshots
+
+
+@contextmanager
+def _with_rate_limit():
+    global last_request_time
+
+    with api_semaphore:
+        current_time = time.time()
+        wait_time = RATE_LIMIT - (current_time - last_request_time)
+        if wait_time > 0:
+            print(f"{timestamp()} Rate limiting: waiting {wait_time:.2f}s", flush=True)
+            time.sleep(wait_time)
+
+        last_request_time = time.time()
+        yield
+
+
+def _start_manual_analysis(
+    *,
+    session_prefix: str,
+    user_input: str,
+    status: str,
+    status_color: str,
+    analysis_fn: Callable[[str, List[str], str], dict],
+    error_label: str,
+):
+    global overlay
+
+    if overlay and overlay.is_processing:
+        print(f"{timestamp()} Already processing another request, ignoring {session_prefix}", flush=True)
+        return
+
+    session_id = f"{session_prefix}_{datetime.now().strftime('%H%M%S')}_{hash(user_input)}"
+    if overlay:
+        _mark_processing(session_id, status, status_color)
+
+    try:
+        screenshots = _collect_screenshots()
+    except Exception as exc:
+        print(f"{timestamp()} Error capturing screenshot: {exc}", flush=True)
+        screenshots = []
+
+    print(f"{timestamp()} Starting {session_prefix} analysis", flush=True)
+
     def api_call_thread():
-        global api_semaphore
-        
         try:
-            # Acquire semaphore to ensure only one API call at a time
-            api_semaphore.acquire()
-            
-            # Update global timestamp for rate limiting
-            global last_request_time
-            last_request_time = time.time()
-            
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🧠 Processing general analysis (no thinking) with transcription: {transcription[:50] if transcription else 'None'}...", flush=True)
-            
-            # Get desktop audio if enabled
-            desktop_audio_base64 = ""
-            if overlay and overlay.desktop_audio_button.isChecked():
-                # Desktop audio processing would go here if available
-                desktop_audio_base64 = get_desktop_speech_segments() 
-                if desktop_audio_base64:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔊 Desktop audio captured for no-thinking analysis", flush=True)
-            
-            # Call the core chat processing function with no thinking budget
-            from chat import analyze_general_problem_no_thinking
-            
-            # Process the screenshot
-            images = []
-            if screenshot_base64:
-                images.append(screenshot_base64)
-            
-            # Call the API - pass the transcription directly
-            # Even if empty, the function will still work with just screenshots/audio
-            start_time = time.time()
-            response_json = analyze_general_problem_no_thinking(transcription, images, "jpg", desktop_audio_base64)
-            processing_time = time.time() - start_time
-            
-            # Update the UI with the response
-            if overlay:
-                overlay.update_response(response_json)
-                overlay.update_status("Listening...", "#4CAF50")  # Green color for listening state
-                overlay.set_processing(False)
-            
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ General analysis (no thinking) processed in {processing_time:.2f}s", flush=True)
-        
-        except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Error in general analysis (no thinking): {e}", flush=True)
-            if overlay:
-                overlay.update_status("Error processing", "#FF0000")  # Red for error
-                overlay.set_processing(False)
-        
+            with _with_rate_limit():
+                response_json = analysis_fn(user_input, screenshots, "jpeg")
+
+            if not _is_current_session(session_id):
+                print(f"{timestamp()} Session {session_id} was canceled, discarding result", flush=True)
+                return
+
+            _run_on_ui("update_response", response_json)
+            _run_on_ui("update_status", "Listening...", "#4CAF50")
+        except Exception as exc:
+            print(f"{timestamp()} Error in {session_prefix} analysis: {exc}", flush=True)
+            if _is_current_session(session_id):
+                _run_on_ui("update_status", "Error", "#FF0000")
+                _run_on_ui(
+                    "update_response",
+                    {"user_query": user_input, "response": f"{error_label}: {exc}"},
+                )
         finally:
-            # Always release the semaphore
-            api_semaphore.release()
-    
-    # Start processing in a separate thread
+            if _is_current_session(session_id):
+                _run_on_ui("set_processing", False)
+
     threading.Thread(target=api_call_thread, daemon=True).start()
 
+
+def process_text_input(text_input):
+    _start_manual_analysis(
+        session_prefix="text",
+        user_input=text_input,
+        status="Processing...",
+        status_color="#FFA500",
+        analysis_fn=analyze_with_text_input,
+        error_label="Error analyzing text input",
+    )
+
+
+def process_code_analysis(transcription):
+    _start_manual_analysis(
+        session_prefix="code",
+        user_input=transcription,
+        status="Analyzing code problem...",
+        status_color="#00ADD8",
+        analysis_fn=analyze_code_problem,
+        error_label="Error in code analysis",
+    )
+
+
+def process_repeat_analysis(transcription):
+    _start_manual_analysis(
+        session_prefix="repeat",
+        user_input=transcription,
+        status="Analyzing repeated problem...",
+        status_color="#FF8C00",
+        analysis_fn=analyze_repeat_problem,
+        error_label="Error in repeat analysis",
+    )
+
+
+def process_general_analysis_no_thinking(transcription):
+    _start_manual_analysis(
+        session_prefix="general",
+        user_input=transcription,
+        status="Processing...",
+        status_color="#FFA500",
+        analysis_fn=analyze_general_problem_no_thinking,
+        error_label="Error in general analysis",
+    )
+
+
 def initialize_live_transcription():
-    """Initialize and start the live transcription service"""
     global overlay, transcription_manager
-    
-    # Make sure overlay is initialized
+
     if not overlay:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Cannot start transcription without overlay", flush=True)
+        print(f"{timestamp()} Cannot start transcription without overlay", flush=True)
         return False
-    
-    # Create the transcription callback function
+
     def transcription_callback(text, source_type):
-        """Callback function for transcription updates"""
         if overlay:
-            # Update the overlay with the transcription
-            QtCore.QMetaObject.invokeMethod(
-                overlay,
-                "update_transcription",
-                QtCore.Qt.ConnectionType.QueuedConnection,
-                QtCore.Q_ARG(str, text),
-                QtCore.Q_ARG(str, source_type)
-            )
-            
-    # Create a periodic function to update the overlay with interviewer Q&A
+            _run_on_ui("update_transcription", text, source_type)
+
     def update_interviewer_qa():
-        """Periodically check for new interviewer Q&A and update the overlay"""
         last_question = ""
         last_answer = ""
-        
+
         while True:
             try:
                 if overlay and transcription_manager:
-                    # Get the latest interviewer question and answer from the manager
                     question = transcription_manager.last_desktop_query
                     answer = transcription_manager.last_desktop_answer
-                    
-                    # Only update if we have new data to avoid constant updates
                     if question and answer and (question != last_question or answer != last_answer):
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 New interviewer Q&A detected", flush=True)
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎤 Question: {question[:50]}...", flush=True)
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 💬 Answer: {answer[:50]}...", flush=True)
-                        
-                        # Update the overlay with the Q&A
-                        QtCore.QMetaObject.invokeMethod(
-                            overlay,
-                            "update_interviewer_qa",
-                            QtCore.Qt.ConnectionType.QueuedConnection,
-                            QtCore.Q_ARG(str, question),
-                            QtCore.Q_ARG(str, answer)
-                        )
-                        
-                        # Update last values to avoid duplicate updates
+                        _run_on_ui("update_interviewer_qa", question, answer)
                         last_question = question
                         last_answer = answer
-                
-                # Check every second
+
                 time.sleep(1)
-            except Exception as e:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Error updating interviewer Q&A: {e}", flush=True)
-                time.sleep(5)  # Longer delay on error
-                
-    # Start the interviewer Q&A update thread
-    qa_update_thread = threading.Thread(target=update_interviewer_qa, daemon=True)
-    qa_update_thread.start()
-    
-    # Create the transcription manager
+            except Exception as exc:
+                print(f"{timestamp()} Error updating interviewer Q&A: {exc}", flush=True)
+                time.sleep(5)
+
+    threading.Thread(target=update_interviewer_qa, daemon=True).start()
+
     transcription_manager = LiveTranscriptionManager(transcription_callback)
-    
-    # Start the transcription
     result = transcription_manager.start_transcription()
-    
-    if result:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Live transcription started", flush=True)
-    else:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Failed to start live transcription", flush=True)
-    
+    print(f"{timestamp()} Live transcription {'started' if result else 'failed to start'}", flush=True)
     return result
 
+
+def stop_processing_and_clear_history():
+    global overlay
+
+    print(f"{timestamp()} Clearing conversation history and stopping processing", flush=True)
+
+    if overlay:
+        if hasattr(overlay, "current_session_id"):
+            overlay.current_session_id = f"canceled_{datetime.now().strftime('%H%M%S')}"
+        overlay.set_processing(False)
+        overlay.update_status("Listening...", "#4CAF50")
+        overlay.clear_conversation_display("Ready for new queries.")
+
+    clear_chat_history()
+
+
+def cleanup_transcription():
+    global transcription_manager
+
+    if transcription_manager:
+        print(f"{timestamp()} Stopping live transcription...", flush=True)
+        transcription_manager.cleanup()
+        transcription_manager = None
+
+
+def quit_application():
+    cleanup_transcription()
+
+    app = QtWidgets.QApplication.instance()
+    if app and not QtWidgets.QApplication.closingDown():
+        app.quit()
+
+
 def main():
-    # Set the graphics rendering backend to OpenGL ES
-    # This might improve performance on some systems, especially with integrated graphics
-    # PyQt6 handles this differently or might not need explicit setting
-    QtWidgets.QApplication.setAttribute(QtCore.Qt.ApplicationAttribute.AA_UseDesktopOpenGL) # Example if needed
-    
-    # Create Qt application
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.ApplicationAttribute.AA_UseDesktopOpenGL)
+
     app = QtWidgets.QApplication(sys.argv)
-    
-    # Create and show the overlay
+
     global overlay
     overlay = DraggableOverlay()
     overlay.show()
-    # Connect the text_submitted signal to the process_text_input function
+
     overlay.text_submitted.connect(process_text_input)
-    
-    # Connect the pro_text_submitted signal to the process_pro_text_input function
-    overlay.pro_text_submitted.connect(process_pro_text_input)
-    
-    # Connect the new specialized analysis signals
     overlay.code_analysis_signal.connect(process_code_analysis)
-    overlay.general_analysis_signal.connect(process_general_analysis)
     overlay.general_analysis_no_thinking_signal.connect(process_general_analysis_no_thinking)
     overlay.repeat_analysis_signal.connect(process_repeat_analysis)
-    overlay.pro_code_analysis_signal.connect(process_pro_code_analysis)
-    overlay.pro_repeat_analysis_signal.connect(process_pro_repeat_analysis)
-    # Interview answer signal connection removed
     overlay.clear_history_signal.connect(stop_processing_and_clear_history)
-    
-    # Process transcription signal connection removed
-    
-    # Initialize live transcription
+    app.aboutToQuit.connect(cleanup_transcription)
+
     initialize_live_transcription()
-    
-    # Start the audio recorder in a separate thread
-    audio_recorder_thread = threading.Thread(
-        target=audio_recorder,
-        daemon=True
-    )
-    audio_recorder_thread.start()
-    
-    # Start the audio processing in a separate thread
-    processing_thread = threading.Thread(
-        target=process_audio_data,
-        daemon=True
-    )
-    processing_thread.start()
-    
-    # Run the Qt event loop
     app.exec()
 
-def stop_processing_and_clear_history():
-    """Stop any ongoing processing and clear the chat history"""
-    global overlay
-    
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Clearing conversation history and stopping processing", flush=True)
-    
-    # Reset the processing state in the overlay
-    if overlay and overlay.is_processing:
-        # Mark current session as canceled by assigning a new session ID
-        if hasattr(overlay, 'current_session_id'):
-            old_session = overlay.current_session_id
-            overlay.current_session_id = f"canceled_{datetime.now().strftime('%H%M%S')}"
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Marked session {old_session} as canceled", flush=True)
-            
-        overlay.set_processing(False)
-        overlay.update_status("Listening...", "#4CAF50")
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🛑 Processing stopped", flush=True)
-    
-    # Clear the chat history
-    from chat import clear_chat_history
-    clear_chat_history()
-    
-    # Update the UI to show we're ready for new input
-    if overlay:
-        overlay.update_response({"user_query": "", "response": "Ready for new queries."})
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ System reset complete", flush=True)
-
-# Add code to clean up transcription manager when application closes
-def quit_application():
-    """Clean up and quit the application"""
-    global transcription_manager
-    
-    # Clean up transcription manager
-    if transcription_manager:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Stopping live transcription...", flush=True)
-        transcription_manager.cleanup()
-        transcription_manager = None
-    
-    # Quit the application
-    QtWidgets.QApplication.quit()
 
 if __name__ == "__main__":
     main()

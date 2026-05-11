@@ -8,24 +8,31 @@ AI-Live reads simple `KEY=VALUE` pairs from `.env` using `env_loader.py`.
 Copy-Item .env.example .env
 ```
 
-Edit `.env` and fill in your values.
+Edit `.env` and fill in your Azure OpenAI values. The app supports separate Azure keys and endpoints for each model path.
 
 ## Required
 
 | Variable | Description |
 | --- | --- |
-| `GEMINI_API` | Google Gemini API key used for live transcription and manual analysis. |
+| `AZURE_OPENAI_ANALYSIS_API_KEY` | Azure OpenAI API key for the `gpt-5.5` analysis deployment. |
+| `AZURE_OPENAI_ANALYSIS_ENDPOINT` | Azure OpenAI endpoint for the analysis resource. |
+| `AZURE_OPENAI_AUTO_ANSWER_API_KEY` | Azure OpenAI API key for the `gpt-5.4-nano` auto-answer deployment. |
+| `AZURE_OPENAI_AUTO_ANSWER_ENDPOINT` | Azure OpenAI endpoint for the auto-answer resource. |
+| `AZURE_OPENAI_TRANSCRIPTION_API_KEY` | Azure OpenAI API key for the realtime transcription resource. |
+| `AZURE_OPENAI_TRANSCRIPTION_ENDPOINT` | Azure OpenAI endpoint for the realtime transcription resource. |
 
 ## Optional
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `DEEPSEEK` | OpenRouter API key used only by optional DeepSeek helper functions. `OPENROUTER_API_KEY` is also accepted as a fallback. | Empty |
-| `GEMINI_FLASH_MODEL` | Gemini model for standard/manual chat analysis. | `gemini-2.5-pro` |
-| `GEMINI_GENERAL_MODEL` | Gemini model for the General Analysis button. | `gemini-2.0-flash` |
-| `GEMINI_LIVE_MODEL` | Gemini Live model for transcription. | `gemini-3.1-flash-live-preview` |
-| `DEEPSEEK_MODEL` | DeepSeek/OpenRouter model identifier. | `tngtech/deepseek-r1t-chimera:free` |
-| `SAMPLE_RATE` | Gemini Live PCM input sample rate in Hz. Values other than `16000` are normalized at runtime. | `16000` |
+| `AZURE_OPENAI_API_KEY` | Shared fallback API key used only when a purpose-specific key is omitted. | Empty |
+| `AZURE_OPENAI_ENDPOINT` | Shared fallback endpoint used only when a purpose-specific endpoint is omitted. | Empty |
+| `AZURE_OPENAI_REALTIME_DEPLOYMENT` | Azure deployment name for the GPT realtime WebSocket session. | `gpt-realtime` |
+| `AZURE_OPENAI_TRANSCRIPTION_MODEL` | Transcription model configured inside the realtime session. | `whisper-1` |
+| `AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT` | Legacy alias for `AZURE_OPENAI_REALTIME_DEPLOYMENT`. | Empty |
+| `AZURE_OPENAI_ANALYSIS_DEPLOYMENT` | Azure deployment name for manual analysis tasks. | `gpt-5.5` |
+| `AZURE_OPENAI_AUTO_ANSWER_DEPLOYMENT` | Azure deployment name for live desktop auto-answer suggestions. | `gpt-5.4-nano` |
+| `SAMPLE_RATE` | PCM input sample rate in Hz. Values other than `24000` are normalized at runtime. | `24000` |
 | `CHANNELS` | Number of audio channels. Invalid values fall back safely. | `1` |
 | `CHUNK_SIZE` | Audio chunk size in samples. Invalid values fall back safely. | `1024` |
 
@@ -35,6 +42,3 @@ Edit `.env` and fill in your values.
 - Use `.env.example` for placeholders only.
 - Delete generated build/debug artifacts if they contain environment snapshots.
 - Rotate API keys if they appeared in a generated artifact or shared log.
-
-`gemini-live-2.5-flash-preview` is treated as a stale legacy value at runtime and is automatically replaced with the current default.
-`SAMPLE_RATE=48000` is also treated as stale for Gemini Live input and is normalized to `16000`.

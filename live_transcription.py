@@ -19,9 +19,10 @@ np.fromstring = _fromstring_compat
 
 import soundcard as sc
 import warnings
-from gemini_live import AudioStreamer
-from gemini_live import CHUNK_SIZE as GEMINI_CHUNK_SIZE
-from gemini_live import SAMPLE_RATE as GEMINI_SAMPLE_RATE
+from azure_realtime import AudioStreamer
+from azure_realtime import CHUNK_SIZE as AZURE_CHUNK_SIZE
+from azure_realtime import SAMPLE_RATE as AZURE_SAMPLE_RATE
+from chat import generate_auto_answer
 
 try:
     import pyaudio
@@ -33,8 +34,8 @@ warnings.filterwarnings("ignore", message="data discontinuity in recording", cat
 
 # Audio parameters
 FORMAT = pyaudio.paInt16 if pyaudio else None
-RATE = GEMINI_SAMPLE_RATE
-CHUNK = GEMINI_CHUNK_SIZE
+RATE = AZURE_SAMPLE_RATE
+CHUNK = AZURE_CHUNK_SIZE
 
 class LiveTranscriptionManager:
     def __init__(self, transcription_callback=None):
@@ -140,7 +141,7 @@ class LiveTranscriptionManager:
                         # Convert to int16 - directly scaling to int16 range
                         int16_data = np.int16(audio_data * 32767)
                         
-                        # Convert to raw PCM bytes - this is what Gemini expects
+                        # Convert to raw PCM bytes for Azure realtime transcription
                         audio_bytes = int16_data.tobytes()
                         
                         # Add to mic streamer
@@ -163,17 +164,24 @@ class LiveTranscriptionManager:
         if self.desktop_streamer is None:
             # Create a desktop audio streamer with a custom callback to process data
             def desktop_callback(response_data, source_type):
-                # For desktop, we need both transcription and interviewer_answer
+                # For desktop, transcription is realtime; the suggested answer is generated separately.
                 text = response_data.get("transcription", "")
-                answer = response_data.get("interviewer_answer", "")
+                completed = response_data.get("completed", False)
                 
-                # Store the values for UI display
-                self.last_desktop_query = text
-                self.last_desktop_answer = answer
+                # Store the latest transcript immediately for UI display.
+                if text:
+                    self.last_desktop_query = text
                 
                 # Call the original callback with the transcription text
                 if self.transcription_callback and text:
                     self.transcription_callback(text, source_type)
+
+                if text and completed:
+                    threading.Thread(
+                        target=self._generate_desktop_answer,
+                        args=(text,),
+                        daemon=True,
+                    ).start()
             
             self.desktop_streamer = AudioStreamer(
                 transcription_callback=desktop_callback,
@@ -251,7 +259,7 @@ class LiveTranscriptionManager:
                         # Convert to int16 - directly scaling to int16 range
                         int16_data = np.int16(audio_data * 32767)
                         
-                        # Convert to raw PCM bytes - this is what Gemini expects (not WAV)
+                        # Convert to raw PCM bytes for Azure realtime transcription
                         audio_bytes = int16_data.tobytes()
                         
                         # Add to desktop streamer - sending raw PCM data
@@ -315,7 +323,7 @@ class LiveTranscriptionManager:
             # Continuous capture loop
             while self.desktop_capture_running:
                 try:
-                    # Read raw PCM data directly - this is what Gemini expects
+                    # Read raw PCM data directly for Azure realtime transcription
                     audio_chunk = stream.read(CHUNK, exception_on_overflow=False)
                     
                     # Convert to mono if stereo
@@ -341,6 +349,15 @@ class LiveTranscriptionManager:
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] PyAudio fallback failed: {e}")
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture disabled.")
+
+    def _generate_desktop_answer(self, transcript):
+        """Generate an auto-answer for a completed desktop transcript."""
+        try:
+            answer = generate_auto_answer(transcript)
+            if answer and self.last_desktop_query == transcript:
+                self.last_desktop_answer = answer
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Auto-answer generation failed: {e}", flush=True)
     
     def stop_transcription(self):
         """Stop all transcription services"""

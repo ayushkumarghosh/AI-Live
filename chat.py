@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from openai import OpenAI
 
 from env_loader import load_env_file
+from session_context import build_context, clear_session_context, record_exchange
 
 
 load_env_file()
@@ -17,7 +18,6 @@ AUTO_ANSWER_MODEL = os.getenv("AZURE_OPENAI_AUTO_ANSWER_DEPLOYMENT", "gpt-5.4-na
 
 _analysis_client: Optional[OpenAI] = None
 _auto_answer_client: Optional[OpenAI] = None
-chat_history: List[Dict[str, Any]] = []
 
 
 code_problem_prompt = (
@@ -94,8 +94,7 @@ def get_auto_answer_client() -> OpenAI:
 
 
 def reset_chat_history():
-    global chat_history
-    chat_history = []
+    clear_session_context()
     print(f"{timestamp()} Chat history reset")
 
 
@@ -130,27 +129,6 @@ def _parse_json_response(response_text: str, fallback_query: str) -> Dict[str, s
     return {"user_query": fallback_query, "response": response_text}
 
 
-def _record_history(user_content: str, response_json: Dict[str, str]):
-    chat_history.append({"user_content": user_content, "assistant_response": response_json})
-    if len(chat_history) > 50:
-        del chat_history[:-50]
-
-
-def _history_context() -> str:
-    if not chat_history:
-        return ""
-
-    recent = chat_history[-8:]
-    entries = []
-    for idx, exchange in enumerate(recent, start=1):
-        entries.append(
-            f"Previous exchange {idx}\n"
-            f"User/context:\n{exchange.get('user_content', '')}\n"
-            f"Assistant:\n{exchange.get('assistant_response', {}).get('response', '')}"
-        )
-    return "\n\n".join(entries)
-
-
 def _image_content(images_base64: List[str], image_format: str) -> List[Dict[str, str]]:
     mime_format = "jpeg" if image_format.lower() in {"jpg", "jpeg"} else image_format.lower()
     image_parts = []
@@ -174,14 +152,15 @@ def _manual_content(
     image_format: str,
     screen_label: str,
     include_history: bool = True,
+    include_transcripts: bool = True,
+    mode: str = "analysis",
 ) -> tuple[str, List[Dict[str, str]]]:
     text_parts = []
-    history = _history_context() if include_history else ""
-    if history:
-        text_parts.append(f"Recent conversation context:\n{history}")
+    if include_history:
+        text_parts.append(build_context(text_input, mode, include_transcripts=include_transcripts))
 
     if text_input:
-        text_parts.append(f"Current query/transcription:\n{text_input}")
+        text_parts.append(f"Current query/transcription selected by the user:\n{text_input}")
     else:
         text_parts.append("No transcript was provided. Use the screenshot context if available.")
 
@@ -227,6 +206,7 @@ def _send_analysis_message(
     content_text: str,
     content_parts: List[Dict[str, str]],
     system_instruction: Optional[str] = None,
+    mode: str = "analysis",
 ) -> Dict[str, str]:
     instructions = [
         "Return only JSON matching this schema: "
@@ -261,7 +241,7 @@ def _send_analysis_message(
         ) from exc
 
     response_json = _parse_json_response(_extract_output_text(response), text_input)
-    _record_history(content_text, response_json)
+    record_exchange(content_text, response_json, mode)
     return response_json
 
 
@@ -270,14 +250,17 @@ def analyze_with_text_input(
     images_base64: List[str],
     image_format: str,
     desktop_audio_base64: str = "",
+    include_transcripts: bool = True,
 ):
     content_text, content_parts = _manual_content(
         text_input,
         images_base64,
         image_format,
         "User's screens. Use them only when relevant to the current query:",
+        include_transcripts=include_transcripts,
+        mode="text",
     )
-    return _send_analysis_message(text_input, content_text, content_parts)
+    return _send_analysis_message(text_input, content_text, content_parts, mode="text")
 
 
 def analyze_code_problem(
@@ -285,14 +268,17 @@ def analyze_code_problem(
     images_base64: List[str],
     image_format: str,
     desktop_audio_base64: str = "",
+    include_transcripts: bool = True,
 ):
     content_text, content_parts = _manual_content(
         text_input,
         images_base64,
         image_format,
         "User's screens. Apply the coding problem instructions to any visible problem:",
+        include_transcripts=include_transcripts,
+        mode="code",
     )
-    return _send_analysis_message(text_input, content_text, content_parts, code_problem_prompt)
+    return _send_analysis_message(text_input, content_text, content_parts, code_problem_prompt, mode="code")
 
 
 def analyze_repeat_problem(
@@ -300,14 +286,17 @@ def analyze_repeat_problem(
     images_base64: List[str],
     image_format: str,
     desktop_audio_base64: str = "",
+    include_transcripts: bool = True,
 ):
     content_text, content_parts = _manual_content(
         text_input,
         images_base64,
         image_format,
         "User's screens. Use them with the prior chat context for this follow-up:",
+        include_transcripts=include_transcripts,
+        mode="repeat",
     )
-    return _send_analysis_message(text_input, content_text, content_parts, repeat_analysis_prompt)
+    return _send_analysis_message(text_input, content_text, content_parts, repeat_analysis_prompt, mode="repeat")
 
 
 def analyze_general_problem_no_thinking(
@@ -315,14 +304,17 @@ def analyze_general_problem_no_thinking(
     images_base64: List[str],
     image_format: str,
     desktop_audio_base64: str = "",
+    include_transcripts: bool = True,
 ):
     content_text, content_parts = _manual_content(
         text_input,
         images_base64,
         image_format,
         "User's screens. Use them to answer the latest non-coding question:",
+        include_transcripts=include_transcripts,
+        mode="general",
     )
-    return _send_analysis_message(text_input, content_text, content_parts, general_analysis_prompt)
+    return _send_analysis_message(text_input, content_text, content_parts, general_analysis_prompt, mode="general")
 
 
 def generate_auto_answer(transcript: str) -> str:
@@ -330,12 +322,13 @@ def generate_auto_answer(transcript: str) -> str:
     if not transcript:
         return ""
 
+    context_text = build_context(transcript, "auto", include_transcripts=True)
     try:
         response = _responses_create_with_retries(
             get_auto_answer_client(),
             model=AUTO_ANSWER_MODEL,
             instructions=auto_answer_prompt,
-            input=transcript,
+            input=context_text,
             max_output_tokens=1200,
             reasoning={"effort": "none"},
             text={"verbosity": "low"},
@@ -348,4 +341,7 @@ def generate_auto_answer(transcript: str) -> str:
         )
         return ""
 
-    return _extract_output_text(response).strip()
+    answer = _extract_output_text(response).strip()
+    if answer:
+        record_exchange(context_text, {"user_query": transcript, "response": answer}, "auto")
+    return answer

@@ -19,6 +19,7 @@ from chat import (
 )
 from live_transcription import LiveTranscriptionManager
 from overlay import DraggableOverlay
+from session_context import record_transcript
 
 
 def configure_console_encoding():
@@ -141,7 +142,7 @@ def _start_manual_analysis(
     user_input: str,
     status: str,
     status_color: str,
-    analysis_fn: Callable[[str, List[str], str], dict],
+    analysis_fn: Callable[..., dict],
     error_label: str,
 ):
     global overlay
@@ -160,12 +161,18 @@ def _start_manual_analysis(
         print(f"{timestamp()} Error capturing screenshot: {exc}", flush=True)
         screenshots = []
 
+    include_transcripts = bool(getattr(overlay, "use_transcriptions", True))
     print(f"{timestamp()} Starting {session_prefix} analysis", flush=True)
 
     def api_call_thread():
         try:
             with _with_rate_limit():
-                response_json = analysis_fn(user_input, screenshots, "jpeg")
+                response_json = analysis_fn(
+                    user_input,
+                    screenshots,
+                    "jpeg",
+                    include_transcripts=include_transcripts,
+                )
 
             if not _is_current_session(session_id):
                 print(f"{timestamp()} Session {session_id} was canceled, discarding result", flush=True)
@@ -240,6 +247,7 @@ def initialize_live_transcription():
         return False
 
     def transcription_callback(text, source_type):
+        record_transcript(text, source_type)
         if overlay:
             _run_on_ui("update_transcription", text, source_type)
 

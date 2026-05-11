@@ -1338,14 +1338,13 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Emit signal to process the text
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Text submitted: {text}", flush=True)
         
-        # If text is empty, use transcriptions instead
+        # If text is empty, use selected transcription text or shared session context.
         if not text.strip():
             text = self.get_transcriptions()
             if text:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Using transcriptions as input", flush=True)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Using selected transcription as input", flush=True)
             else:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ No text or transcriptions available", flush=True)
-                return
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Using shared session context as input", flush=True)
                 
         self.text_submitted.emit(text)
         # No need to set processing state here as it's set in the process_text_input function
@@ -1593,7 +1592,10 @@ class DraggableOverlay(QtWidgets.QWidget):
     # Add a new method to clear transcriptions
     def clear_transcriptions(self):
         """Clear the transcription history and display"""
+        from session_context import clear_transcript_context
+
         self.transcription_history = []
+        clear_transcript_context()
         self.transcription_text.clear()
         self.transcription_text.append("<div style='color: #FFA500; margin: 10px 0;'>Transcription history cleared</div>")
         
@@ -1670,8 +1672,8 @@ class DraggableOverlay(QtWidgets.QWidget):
     # Add helper method to get transcriptions
     def get_transcriptions(self):
         """
-        Get either the selected transcriptions or the last 4 transcriptions.
-        Returns a string formatted as interviewer/user conversation.
+        Get selected transcription text for the current analysis request.
+        Unselected transcript context is supplied by session_context.
         """
         # If transcriptions are disabled, return empty string
         if not self.use_transcriptions:
@@ -1687,21 +1689,6 @@ class DraggableOverlay(QtWidgets.QWidget):
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Using selected transcription text", flush=True)
             return selected_text
         
-        # Otherwise, use the last 7 transcriptions
-        if len(self.transcription_history) > 0:
-            # Get last 7 transcriptions (or fewer if not enough available)
-            last_transcriptions = self.transcription_history[-7:] if len(self.transcription_history) >= 7 else self.transcription_history
-            formatted_text = ""
-            
-            # Format them as interviewer/user conversation
-            for entry in last_transcriptions:
-                speaker = "Interviewer" if entry["source"] == "desktop" else "Me"
-                formatted_text += f"{speaker}: {entry['text']}\n\n"
-                
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Using last {len(last_transcriptions)} transcriptions", flush=True)
-            return formatted_text + "Please answer the last question in this conversation."
-        
-        # If no transcriptions available
         return ""
 
     def change_opacity(self, value):

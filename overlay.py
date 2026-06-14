@@ -1,6 +1,6 @@
 import sys, ctypes, json
 import html
-from PyQt6 import QtWidgets, QtCore, QtGui
+from PyQt6 import QtWidgets, QtCore, QtGui, QtSvg
 from PyQt6.QtCore import pyqtSignal as Signal, pyqtSlot as Slot
 from datetime import datetime
 import queue
@@ -26,6 +26,219 @@ WS_EX_NOACTIVATE = 0x08000000
 
 # Queue for screenshots
 screenshot_queue = queue.Queue()
+
+RESPONSIVE_BREAKPOINT = 900
+MIN_OVERLAY_WIDTH = 520
+MIN_OVERLAY_HEIGHT = 360
+
+UI = {
+    "window": "rgba(14, 19, 24, 205)",
+    "chrome": "rgba(24, 30, 36, 220)",
+    "panel": "rgba(19, 24, 29, 202)",
+    "panel_alt": "rgba(28, 34, 41, 190)",
+    "border": "rgba(118, 134, 150, 78)",
+    "border_strong": "rgba(160, 177, 194, 110)",
+    "text": "#F4F7FA",
+    "muted": "#AAB5C2",
+    "muted_dim": "#748190",
+    "accent": "#77B7FF",
+    "success": "#69D279",
+    "warning": "#F6A53A",
+    "danger": "#FF5F66",
+    "code": "#8FD7FF",
+    "button": "rgba(37, 45, 54, 175)",
+    "button_hover": "rgba(52, 63, 74, 210)",
+    "button_active": "rgba(65, 78, 90, 230)",
+    "font": "Segoe UI",
+}
+
+TONE_COLORS = {
+    "neutral": UI["muted"],
+    "accent": UI["accent"],
+    "success": UI["success"],
+    "warning": UI["warning"],
+    "danger": UI["danger"],
+}
+
+
+def _rgba(hex_color, alpha=255):
+    color = QtGui.QColor(hex_color)
+    color.setAlpha(alpha)
+    return color
+
+
+SVG_ICONS = {
+    "text": (
+        '<path d="M4 6.5h16a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H8l-4 3v-3H4A1.5 1.5 0 0 1 2.5 16V8A1.5 1.5 0 0 1 4 6.5Z"/>'
+        '<path d="M7.5 10h9M7.5 13.5h6"/>'
+    ),
+    "camera": (
+        '<path d="M4.5 8.5h3l1.5-2h6l1.5 2h3A2.5 2.5 0 0 1 22 11v6.5a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 2 17.5V11a2.5 2.5 0 0 1 2.5-2.5Z"/>'
+        '<circle cx="12" cy="14" r="3.4"/>'
+    ),
+    "trash": (
+        '<path d="M4 6.5h16"/>'
+        '<path d="M9 6.5V4.5h6v2"/>'
+        '<path d="M7 9l.8 10.5A2 2 0 0 0 9.8 21h4.4a2 2 0 0 0 2-1.5L17 9"/>'
+        '<path d="M10.5 11.5v6M13.5 11.5v6"/>'
+    ),
+    "code": '<path d="m8.5 7-5 5 5 5M15.5 7l5 5-5 5M13 4.5 11 19.5"/>',
+    "document": (
+        '<path d="M6.5 3.5h7L18.5 8v12.5h-12Z"/>'
+        '<path d="M13.5 3.5V8h5"/>'
+        '<path d="M9 12h6M9 15h6M9 18h3.5"/>'
+    ),
+    "repeat": (
+        '<path d="M20 7.5h-7.5a5.5 5.5 0 0 0-5.2 3.7"/>'
+        '<path d="m17 4.5 3 3-3 3"/>'
+        '<path d="M4 16.5h7.5a5.5 5.5 0 0 0 5.2-3.7"/>'
+        '<path d="m7 19.5-3-3 3-3"/>'
+    ),
+    "transcript": (
+        '<path d="M7 3.5h10A2.5 2.5 0 0 1 19.5 6v12A2.5 2.5 0 0 1 17 20.5H7A2.5 2.5 0 0 1 4.5 18V6A2.5 2.5 0 0 1 7 3.5Z"/>'
+        '<path d="M8.5 8h7M8.5 12h7M8.5 16h4"/>'
+    ),
+    "auto": (
+        '<path d="M13 3.5 14.8 8l4.7 1.8-4.7 1.8L13 16l-1.8-4.4-4.7-1.8L11.2 8Z"/>'
+        '<path d="M5.5 15.5 6.4 18l2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9Z"/>'
+    ),
+    "more": '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
+    "close": '<path d="M6 6 18 18M18 6 6 18"/>',
+    "fallback": '<circle cx="12" cy="12" r="7"/>',
+}
+
+
+def _icon(kind, color=None, size=22):
+    """Create crisp SVG-backed line icons without external asset files."""
+    color = color or UI["muted"]
+    body = SVG_ICONS.get(kind, SVG_ICONS["fallback"])
+    svg = f"""
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
+             viewBox="0 0 24 24" fill="none" stroke="{color}"
+             stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            {body}
+        </svg>
+    """
+    renderer = QtSvg.QSvgRenderer(QtCore.QByteArray(svg.encode("utf-8")))
+    render_size = max(size * 4, 72)
+    pixmap = QtGui.QPixmap(render_size, render_size)
+    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+
+    painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+    renderer.render(painter, QtCore.QRectF(0, 0, render_size, render_size))
+    painter.end()
+
+    return QtGui.QIcon(pixmap)
+
+
+def _tool_button_style(tone="neutral", active=False, compact=False):
+    tone_color = TONE_COLORS.get(tone, UI["muted"])
+    active_border = tone_color if active else UI["border"]
+    active_bg = f"rgba({QtGui.QColor(tone_color).red()}, {QtGui.QColor(tone_color).green()}, {QtGui.QColor(tone_color).blue()}, 42)" if active else UI["button"]
+    padding = "0px" if compact else "0px 11px"
+    return f"""
+        QToolButton {{
+            background-color: {active_bg};
+            color: {UI["text"]};
+            border: 1px solid {active_border};
+            border-radius: 7px;
+            padding: {padding};
+            font-family: {UI["font"]};
+            font-size: 13px;
+            font-weight: 600;
+        }}
+        QToolButton:hover {{
+            background-color: {UI["button_hover"]};
+            border-color: {UI["border_strong"]};
+        }}
+        QToolButton:pressed {{
+            background-color: {UI["button_active"]};
+            border-color: {tone_color};
+        }}
+        QToolButton:checked {{
+            background-color: rgba({QtGui.QColor(tone_color).red()}, {QtGui.QColor(tone_color).green()}, {QtGui.QColor(tone_color).blue()}, 48);
+            border-color: {tone_color};
+        }}
+        QToolButton:disabled {{
+            color: {UI["muted_dim"]};
+            border-color: rgba(100, 112, 124, 44);
+            background-color: rgba(31, 37, 44, 120);
+        }}
+    """
+
+
+def _text_edit_style():
+    return f"""
+        QTextEdit {{
+            background-color: {UI["panel"]};
+            color: {UI["text"]};
+            border: 1px solid rgba(118, 134, 150, 50);
+            border-radius: 7px;
+            font-family: {UI["font"]};
+            font-size: 14px;
+            padding: 12px;
+            line-height: 1.45;
+            selection-background-color: rgba(119, 183, 255, 95);
+        }}
+        QScrollBar:vertical {{
+            border: none;
+            background: rgba(38, 45, 52, 105);
+            width: 9px;
+            margin: 8px 0 8px 0;
+            border-radius: 4px;
+        }}
+        QScrollBar::handle:vertical {{
+            background: rgba(150, 164, 180, 120);
+            min-height: 24px;
+            border-radius: 4px;
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            height: 0px;
+        }}
+    """
+
+
+def _slider_style():
+    return """
+        QSlider::groove:horizontal {
+            height: 4px;
+            background: rgba(135, 150, 166, 90);
+            margin: 0px;
+            border-radius: 2px;
+        }
+        QSlider::handle:horizontal {
+            background: #F4F7FA;
+            width: 12px;
+            margin: -4px 0;
+            border-radius: 6px;
+        }
+        QSlider::sub-page:horizontal {
+            background: rgba(119, 183, 255, 150);
+            border-radius: 2px;
+        }
+    """
+
+
+def _menu_style():
+    return f"""
+        QMenu {{
+            background-color: {UI["chrome"]};
+            color: {UI["text"]};
+            border: 1px solid {UI["border"]};
+            border-radius: 8px;
+            padding: 8px;
+            font-family: {UI["font"]};
+            font-size: 13px;
+        }}
+        QMenu::item {{
+            padding: 7px 18px;
+            border-radius: 5px;
+        }}
+        QMenu::item:selected {{
+            background-color: {UI["button_hover"]};
+        }}
+    """
 
 # ----------------------------------------------------------------
 # Utility function: sets the window to be excluded from screen capture.
@@ -86,72 +299,71 @@ class InputOverlay(QtWidgets.QWidget):
         )
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(400, 100)
+        parent_width = parent.width() if parent else 560
+        self.resize(max(360, min(640, int(parent_width * 0.58))), 154)
 
         # Main layout with margins.
         main_layout = QtWidgets.QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setSpacing(10)
+
+        self.setStyleSheet(f"""
+            InputOverlay {{
+                background-color: {UI["window"]};
+                border: 1px solid {UI["border"]};
+                border-radius: 10px;
+            }}
+            QLabel {{
+                color: {UI["text"]};
+                font-family: {UI["font"]};
+            }}
+            QLineEdit {{
+                background-color: {UI["panel"]};
+                color: {UI["text"]};
+                border: 1px solid {UI["border"]};
+                border-radius: 7px;
+                padding: 10px 12px;
+                font-family: {UI["font"]};
+                font-size: 14px;
+                selection-background-color: rgba(119, 183, 255, 95);
+            }}
+            QLineEdit:focus {{
+                border-color: {UI["accent"]};
+            }}
+        """)
 
         # Top row with a close button.
         title_layout = QtWidgets.QHBoxLayout()
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(8)
+
+        title = QtWidgets.QLabel("Text Input")
+        title.setStyleSheet("font-size: 14px; font-weight: 700;")
+        title_layout.addWidget(title)
         title_layout.addStretch(1)
-        self.close_button = QtWidgets.QPushButton("✕")
-        self.close_button.setFixedSize(20, 20)
-        self.close_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(80, 80, 80, 200);
-                color: white;
-                border: none;
-                border-radius: 10px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: rgba(200, 60, 60, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(180, 40, 40, 200);
-            }
-        """)
+        self.close_button = QtWidgets.QToolButton()
+        self.close_button.setIcon(_icon("close", UI["text"], 18))
+        self.close_button.setFixedSize(30, 30)
+        self.close_button.setToolTip("Close")
+        self.close_button.setStyleSheet(_tool_button_style("danger", compact=True))
         self.close_button.clicked.connect(self.close)
         title_layout.addWidget(self.close_button)
         main_layout.addLayout(title_layout)
 
         # Input field.
         self.input_field = QtWidgets.QLineEdit()
-        self.input_field.setStyleSheet("""
-            QLineEdit {
-                background-color: rgba(60, 60, 60, 150);
-                color: white;
-                border: 1px solid rgba(100, 100, 100, 150);
-                border-radius: 5px;
-                padding: 8px;
-                font-size: 14px;
-            }
-        """)
         self.input_field.setPlaceholderText("Type your question and press Enter...")
         # When return is pressed, call handle_submit.
         self.input_field.returnPressed.connect(self.handle_submit)
         main_layout.addWidget(self.input_field)
 
         # Submit button (kept in the input overlay).
-        self.submit_button = QtWidgets.QPushButton("Submit")
-        self.submit_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(70, 130, 180, 200);
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 8px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: rgba(100, 160, 210, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(60, 120, 170, 200);
-            }
-        """)
+        self.submit_button = QtWidgets.QToolButton()
+        self.submit_button.setText("Submit")
+        self.submit_button.setIcon(_icon("text", UI["accent"]))
+        self.submit_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.submit_button.setFixedHeight(38)
+        self.submit_button.setStyleSheet(_tool_button_style("accent"))
         self.submit_button.clicked.connect(self.handle_submit)
         main_layout.addWidget(self.submit_button)
 
@@ -192,7 +404,6 @@ class DraggableOverlay(QtWidgets.QWidget):
 
     def __init__(self):
         super().__init__()
-        # Set up as non-activating.
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.setWindowFlags(
@@ -202,559 +413,454 @@ class DraggableOverlay(QtWidgets.QWidget):
             QtCore.Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setWindowOpacity(0.9)  # Default opacity of 90%
-        self.resize(1200, 600)  # Wider to accommodate the transcription section
+        self.setWindowOpacity(0.9)
+        self.setMinimumSize(MIN_OVERLAY_WIDTH, MIN_OVERLAY_HEIGHT)
+        self.resize(1200, 600)
 
-        # Initialize processing state.
         self.is_processing = False
-        
-        # New flag to control if transcriptions should be passed to analysis
         self.use_transcriptions = True
-        
-        # New flag to control showing interviewer suggestions
         self.show_interviewer_suggestions = False
-        
-        # Store the last interviewer question and suggested answer
+
         self.last_interviewer_question = ""
         self.last_suggested_answer = ""
         self._active_auto_answer_question = ""
         self._active_auto_answer_user_index = None
         self._active_auto_answer_answer_index = None
 
-        # Flags for dragging and resizing.
         self.dragging = False
         self.resizing = False
         self.offset = QtCore.QPoint()
         self.resize_position = None
         self.show_resize_handles = True
+        self.responsive_mode = None
+        self.user_transcription_panel_visible = True
+        self.compact_transcription_drawer_visible = False
+        self.is_transcription_collapsed = False
+        self._applying_responsive_layout = False
+        self._status_text = "Listening..."
+        self._status_color = UI["success"]
 
-        # Main layout.
         self.layout = QtWidgets.QVBoxLayout(self)
-        self.layout.setContentsMargins(20, 20, 20, 20)
+        self.layout.setContentsMargins(18, 18, 18, 18)
+        self.layout.setSpacing(8)
 
-        # Title bar.
-        self.title_bar = QtWidgets.QWidget(self)
-        self.title_bar.setStyleSheet("background-color: rgba(50, 50, 50, 200); border-radius: 5px;")
-        title_layout = QtWidgets.QHBoxLayout(self.title_bar)
-        title_layout.setContentsMargins(10, 5, 10, 5)
-
-        self.title_label = QtWidgets.QLabel("AI Live")
-        self.title_label.setStyleSheet("color: white; font-weight: bold; font-size: 16px;")
-        title_layout.addWidget(self.title_label)
-
-        self.status_label = QtWidgets.QLabel("Listening...")
-        self.status_label.setStyleSheet("color: #4CAF50; font-size: 14px;")
-        title_layout.addWidget(self.status_label)
-        title_layout.addStretch(1)
-        
-        # Add opacity slider
-        opacity_layout = QtWidgets.QHBoxLayout()
-        opacity_layout.setContentsMargins(0, 0, 0, 0)
-        opacity_layout.setSpacing(5)
-        
-        opacity_label = QtWidgets.QLabel("Opacity:")
-        opacity_label.setStyleSheet("color: white; font-size: 12px;")
-        opacity_layout.addWidget(opacity_label)
-        
-        self.opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.opacity_slider.setMinimum(20)  # 20% minimum opacity
-        self.opacity_slider.setMaximum(100)  # 100% maximum opacity
-        self.opacity_slider.setValue(90)  # 90% default opacity
-        self.opacity_slider.setFixedWidth(80)
-        self.opacity_slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                height: 4px;
-                background: rgba(100, 100, 100, 150);
-                margin: 0px;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: white;
-                width: 10px;
-                margin: -3px 0;
-                border-radius: 5px;
-            }
-        """)
-        self.opacity_slider.valueChanged.connect(self.change_opacity)
-        opacity_layout.addWidget(self.opacity_slider)
-        
-        title_layout.addLayout(opacity_layout)
-        
-        # Desktop audio button removed
-        
-        # Microphone button removed
-        
-        # Add properties for desktop_audio_button and mic_button even though they don't exist in UI
-        # This is for backward compatibility with existing code
         class DummyButton:
             def __init__(self, checked=True):
                 self._checked = checked
-                
+
             def isChecked(self):
                 return self._checked
-                
+
             def sizeHint(self):
-                # Return a dummy size hint
                 class SizeHint:
                     def __init__(self):
                         self.height = 26
                         self.width = 100
+
                     def height(self):
                         return self.height
                 return SizeHint()
-        
-        # Create dummy buttons that will be used by code that depends on these objects
+
         self.desktop_audio_button = DummyButton(checked=True)
         self.mic_button = DummyButton(checked=True)
-        
-        # Add Screenshot Toggle button (Moved to Title Bar)
-        self.screenshot_toggle_button = QtWidgets.QPushButton("🖼️ Screenshots On")
-        self.screenshot_toggle_button.setCheckable(True)
-        self.screenshot_toggle_button.setChecked(True) # Enabled by default
-        # Set fixed height for the button
-        self.screenshot_toggle_button.setFixedHeight(26)
-        self.screenshot_toggle_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(100, 180, 100, 200); /* Greenish */
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 5px 10px; /* Match other title bar buttons */
-                font-size: 12px; /* Match other title bar buttons */
-            }
-            QPushButton:checked {
-                background-color: rgba(70, 150, 70, 200); /* Darker Green */
-            }
-            QPushButton:hover {
-                background-color: rgba(120, 200, 120, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(90, 170, 90, 200);
-            }
-        """)
-        self.screenshot_toggle_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.screenshot_toggle_button.toggled.connect(self.toggle_screenshots)
-        title_layout.addWidget(self.screenshot_toggle_button)
-        
-        # Add Transcription Toggle buttons
-        # First button is for including transcripts in analysis
-        self.transcription_toggle_button = QtWidgets.QPushButton("🗣️ Include Transcripts")
-        self.transcription_toggle_button.setCheckable(True)
-        self.transcription_toggle_button.setChecked(True) # Enabled by default
-        # Set fixed height for the button
-        self.transcription_toggle_button.setFixedHeight(26)
-        self.transcription_toggle_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(100, 150, 180, 200); /* Blueish */
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 5px 10px; /* Match other title bar buttons */
-                font-size: 12px; /* Match other title bar buttons */
-            }
-            QPushButton:checked {
-                background-color: rgba(70, 120, 150, 200); /* Darker Blue */
-            }
-            QPushButton:hover {
-                background-color: rgba(120, 170, 200, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(90, 140, 170, 200);
-            }
-        """)
-        self.transcription_toggle_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.transcription_toggle_button.toggled.connect(self.toggle_transcriptions)
-        title_layout.addWidget(self.transcription_toggle_button)
-        
-        # Add interviewer auto-answer toggle button
-        self.interviewer_suggestion_button = QtWidgets.QPushButton("🤖 Auto-Answer")
-        self.interviewer_suggestion_button.setCheckable(True)
-        self.interviewer_suggestion_button.setChecked(False) # Disabled by default
-        self.interviewer_suggestion_button.setFixedHeight(26)
-        self.interviewer_suggestion_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(180, 130, 180, 200); /* Purple-ish */
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 5px 10px;
-                font-size: 12px;
-            }
-            QPushButton:checked {
-                background-color: rgba(150, 100, 150, 200); /* Darker Purple */
-            }
-            QPushButton:hover {
-                background-color: rgba(200, 150, 200, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(170, 120, 170, 200);
-            }
-        """)
-        self.interviewer_suggestion_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.interviewer_suggestion_button.toggled.connect(self.toggle_interviewer_suggestions)
-        title_layout.addWidget(self.interviewer_suggestion_button)
-        
-        # Second button is for showing/hiding transcription panel
-        self.show_transcription_panel_button = QtWidgets.QPushButton("👁️ Show Transcriptions")
-        self.show_transcription_panel_button.setCheckable(True)
-        self.show_transcription_panel_button.setChecked(True) # Visible by default
-        self.show_transcription_panel_button.setFixedHeight(26)
-        self.show_transcription_panel_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(140, 100, 180, 200); /* Purple */
-                color: white;
-                border: none;
-                border-radius: 5px;
-                padding: 5px 10px;
-                font-size: 12px;
-            }
-            QPushButton:checked {
-                background-color: rgba(120, 80, 160, 200); /* Darker Purple */
-            }
-            QPushButton:hover {
-                background-color: rgba(160, 120, 200, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(130, 90, 170, 200);
-            }
-        """)
-        self.show_transcription_panel_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.show_transcription_panel_button.toggled.connect(self.toggle_transcription_panel)
-        title_layout.addWidget(self.show_transcription_panel_button)
-        
-        self.close_button = QtWidgets.QPushButton("✕")
-        self.close_button.setFixedSize(24, 24)
-        self.close_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(80, 80, 80, 200);
-                color: white; 
-                border: none;
-                border-radius: 12px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: rgba(200, 60, 60, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(180, 40, 40, 200);
-            }
-        """)
-        self.close_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.close_button.clicked.connect(self.quit_application)
-        title_layout.addWidget(self.close_button)
+
+        self._build_title_bar()
         self.layout.addWidget(self.title_bar)
 
-        # Main content area with split for conversation and transcription
-        self.content_area = QtWidgets.QWidget(self)
-        self.content_area.setStyleSheet("background-color: rgba(30, 30, 30, 180); border-radius: 5px;")
-        
-        # Create a horizontal layout for the split
-        content_split_layout = QtWidgets.QHBoxLayout(self.content_area)
-        content_split_layout.setContentsMargins(10, 10, 10, 10)
-        
-        # Create the conversation panel (left side)
+        self._build_content_area()
+        self.layout.addWidget(self.content_area)
+        self.setLayout(self.layout)
+
+        self.create_resize_handles()
+
+        self.conversation_history = []
+        self.transcription_history = []
+        self.input_overlay = None
+
+        self.update_conversation_signal.connect(self._update_conversation_text)
+        self.update_transcription_signal.connect(self._update_transcription_text)
+        self._apply_responsive_layout(force=True)
+
+    def _build_title_bar(self):
+        self.title_bar = QtWidgets.QFrame(self)
+        self.title_bar.setObjectName("TitleBar")
+        self.title_bar.setStyleSheet(f"""
+            QFrame#TitleBar {{
+                background-color: {UI["chrome"]};
+                border: 1px solid rgba(118, 134, 150, 50);
+                border-radius: 8px;
+            }}
+            QLabel {{
+                color: {UI["text"]};
+                font-family: {UI["font"]};
+            }}
+        """)
+        title_layout = QtWidgets.QHBoxLayout(self.title_bar)
+        title_layout.setContentsMargins(10, 5, 8, 5)
+        title_layout.setSpacing(7)
+
+        self.title_label = QtWidgets.QLabel("AI Live")
+        self.title_label.setMinimumWidth(58)
+        self.title_label.setStyleSheet("font-size: 15px; font-weight: 800;")
+        title_layout.addWidget(self.title_label)
+
+        self.status_dot = QtWidgets.QLabel("●")
+        self.status_dot.setFixedWidth(10)
+        self.status_dot.setStyleSheet(f"color: {self._status_color}; font-size: 13px;")
+        title_layout.addWidget(self.status_dot)
+
+        self.status_label = QtWidgets.QLabel(self._status_text)
+        self.status_label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
+        self.status_label.setMinimumWidth(58)
+        self.status_label.setStyleSheet(f"color: {self._status_color}; font-size: 13px; font-weight: 600;")
+        title_layout.addWidget(self.status_label, 1)
+
+        self.opacity_container = QtWidgets.QWidget()
+        opacity_layout = QtWidgets.QHBoxLayout(self.opacity_container)
+        opacity_layout.setContentsMargins(0, 0, 0, 0)
+        opacity_layout.setSpacing(7)
+        opacity_label = QtWidgets.QLabel("Opacity")
+        opacity_label.setStyleSheet(f"color: {UI['text']}; font-size: 12px;")
+        opacity_layout.addWidget(opacity_label)
+        self.opacity_slider = self._create_opacity_slider(76)
+        opacity_layout.addWidget(self.opacity_slider)
+        title_layout.addWidget(self.opacity_container)
+
+        self.screenshot_toggle_button = self._create_toolbar_button(
+            "camera", "Screenshots included", "success", checkable=True, checked=True
+        )
+        self.screenshot_toggle_button.toggled.connect(self.toggle_screenshots)
+        title_layout.addWidget(self.screenshot_toggle_button)
+
+        self.transcription_toggle_button = self._create_toolbar_button(
+            "transcript", "Transcripts included in analysis", "accent", checkable=True, checked=True
+        )
+        self.transcription_toggle_button.toggled.connect(self.toggle_transcriptions)
+        title_layout.addWidget(self.transcription_toggle_button)
+
+        self.interviewer_suggestion_button = self._create_toolbar_button(
+            "auto", "Auto-answer disabled", "success", checkable=True, checked=False
+        )
+        self.interviewer_suggestion_button.toggled.connect(self.toggle_interviewer_suggestions)
+        title_layout.addWidget(self.interviewer_suggestion_button)
+
+        self.show_transcription_panel_button = self._create_toolbar_button(
+            "transcript", "Hide live transcription", "accent", checkable=True, checked=True
+        )
+        self.show_transcription_panel_button.toggled.connect(self.toggle_transcription_panel)
+        title_layout.addWidget(self.show_transcription_panel_button)
+
+        self.more_button = self._create_toolbar_button("more", "More settings", "neutral")
+        self.more_button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.more_button.setMenu(self._build_settings_menu())
+        title_layout.addWidget(self.more_button)
+
+        self.close_button = self._create_toolbar_button("close", "Close", "danger")
+        self.close_button.clicked.connect(self.quit_application)
+        title_layout.addWidget(self.close_button)
+
+    def _build_settings_menu(self):
+        menu = QtWidgets.QMenu(self)
+        menu.setStyleSheet(_menu_style())
+
+        opacity_widget = QtWidgets.QWidget()
+        opacity_layout = QtWidgets.QHBoxLayout(opacity_widget)
+        opacity_layout.setContentsMargins(8, 5, 8, 5)
+        opacity_layout.setSpacing(8)
+        label = QtWidgets.QLabel("Opacity")
+        label.setStyleSheet(f"color: {UI['text']}; font-family: {UI['font']}; font-size: 13px;")
+        opacity_layout.addWidget(label)
+        self.menu_opacity_slider = self._create_opacity_slider(120)
+        opacity_layout.addWidget(self.menu_opacity_slider)
+        action = QtWidgets.QWidgetAction(menu)
+        action.setDefaultWidget(opacity_widget)
+        menu.addAction(action)
+        return menu
+
+    def _build_content_area(self):
+        self.content_area = QtWidgets.QFrame(self)
+        self.content_area.setObjectName("ContentArea")
+        self.content_area.setStyleSheet(f"""
+            QFrame#ContentArea {{
+                background-color: {UI["window"]};
+                border: 1px solid rgba(118, 134, 150, 50);
+                border-radius: 8px;
+            }}
+        """)
+
+        content_root = QtWidgets.QVBoxLayout(self.content_area)
+        content_root.setContentsMargins(10, 10, 10, 10)
+        content_root.setSpacing(8)
+        self.content_root_layout = content_root
+
+        self.split_container = QtWidgets.QWidget()
+        self.content_split_layout = QtWidgets.QHBoxLayout(self.split_container)
+        self.content_split_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_split_layout.setSpacing(8)
+        content_root.addWidget(self.split_container, 1)
+
         self.conversation_panel = QtWidgets.QWidget()
         conversation_layout = QtWidgets.QVBoxLayout(self.conversation_panel)
-        conversation_layout.setContentsMargins(0, 0, 10, 0)
-        
-        # Conversation area
+        conversation_layout.setContentsMargins(0, 0, 0, 0)
+        conversation_layout.setSpacing(0)
+
         self.conversation_text = QtWidgets.QTextEdit()
         self.conversation_text.setReadOnly(True)
-        self.conversation_text.setStyleSheet("""
-            QTextEdit {
-                background-color: rgba(40, 40, 40, 150);
-                color: #E0E0E0;
-                border: none;
-                font-size: 14px;
-                padding: 10px;
-                line-height: 1.5;
-            }
-            QScrollBar:vertical {
-                border: none;
-                background: rgba(50, 50, 50, 100);
-                width: 10px;
-                margin: 0px;
-            }
-            QScrollBar::handle:vertical {
-                background: rgba(100, 100, 100, 150);
-                min-height: 20px;
-                border-radius: 5px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-        """)
+        self.conversation_text.setStyleSheet(_text_edit_style())
         self.conversation_text.viewport().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.conversation_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.conversation_text.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.WidgetWidth)
         conversation_layout.addWidget(self.conversation_text)
-        
-        # Input area - create a layout for action buttons
-        input_layout = QtWidgets.QHBoxLayout()
-        
-        # Create a button for text input
-        self.input_button = QtWidgets.QPushButton("💬 Text Input")
-        self.input_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(60, 60, 60, 150);
-                color: white;
-                border: 1px solid rgba(100, 100, 100, 150);
-                border-radius: 5px;
-                padding: 8px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: rgba(80, 80, 80, 150);
-            }
-            QPushButton:pressed {
-                background-color: rgba(60, 60, 60, 200);
-            }
-        """)
-        self.input_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.input_button.clicked.connect(self.open_input_overlay)
-        input_layout.addWidget(self.input_button)
-        
-        # Add screenshot button
-        self.screenshot_button = QtWidgets.QPushButton("📸 Screenshot")
-        self.screenshot_button.setFixedHeight(30)  # Set a fixed height
-        self.screenshot_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(180, 130, 70, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;  /* Adjust padding */
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: rgba(210, 160, 100, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(170, 120, 60, 200);
-            }
-        """)
-        self.screenshot_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.screenshot_button.clicked.connect(self.take_screenshot)
-        input_layout.addWidget(self.screenshot_button)
-        
-        # Add Clear History button
-        self.clear_button = QtWidgets.QPushButton("🗑️ Clear History")
-        self.clear_button.setFixedHeight(30)  # Set a fixed height
-        self.clear_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(180, 80, 80, 200);  /* Red color */
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;  /* Adjust padding */
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: rgba(200, 100, 100, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(160, 60, 60, 200);
-            }
-        """)
-        self.clear_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.clear_button.clicked.connect(self.clear_history)
-        input_layout.addWidget(self.clear_button)
-        
-        conversation_layout.addLayout(input_layout)
-        
-        # Create a second row for analysis buttons
-        analysis_layout = QtWidgets.QHBoxLayout()
-        
-        # Add Code Analysis button
-        self.code_analyze_button = QtWidgets.QPushButton("🔍 Code Analysis")
-        self.code_analyze_button.setFixedHeight(30)
-        self.code_analyze_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(70, 130, 180, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: rgba(90, 150, 200, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(50, 110, 160, 200);
-            }
-        """)
-        self.code_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.code_analyze_button.clicked.connect(self.execute_code_analyze)
-        analysis_layout.addWidget(self.code_analyze_button)
-        
-        # Add General Analysis button
-        self.general_analyze_button_regular = QtWidgets.QPushButton("📝 General Analysis")
-        self.general_analyze_button_regular.setFixedHeight(30)
-        self.general_analyze_button_regular.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(34, 150, 50, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: rgba(54, 170, 70, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(14, 130, 30, 200);
-            }
-        """)
-        self.general_analyze_button_regular.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.general_analyze_button_regular.clicked.connect(self.execute_general_analyze_no_thinking)
-        analysis_layout.addWidget(self.general_analyze_button_regular)
-        
-        # Add Repeat Analysis button
-        self.repeat_analyze_button = QtWidgets.QPushButton("🔄 Repeat Analysis")
-        self.repeat_analyze_button.setFixedHeight(30)
-        self.repeat_analyze_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 140, 0, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: rgba(255, 160, 20, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(235, 120, 0, 200);
-            }
-        """)
-        self.repeat_analyze_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.repeat_analyze_button.clicked.connect(self.execute_repeat_analyze)
-        analysis_layout.addWidget(self.repeat_analyze_button)
-        
-        conversation_layout.addLayout(analysis_layout)
-        
-        # Fourth row for utility buttons removed
-        
-        # Add the conversation panel to the split layout
-        content_split_layout.addWidget(self.conversation_panel, 2)  # 2/3 of width
-        
-        # Create the transcription panel (right side)
+        self.content_split_layout.addWidget(self.conversation_panel, 2)
+
         self.transcription_panel = QtWidgets.QWidget()
-        self.transcription_panel.setMinimumWidth(200)  # Set minimum width when expanded
+        self.transcription_panel.setMinimumWidth(0)
         transcription_layout = QtWidgets.QVBoxLayout(self.transcription_panel)
-        transcription_layout.setContentsMargins(10, 0, 0, 0)
-        
-        # Store reference to the layout for collapsing
+        transcription_layout.setContentsMargins(0, 0, 0, 0)
+        transcription_layout.setSpacing(8)
         self.transcription_layout = transcription_layout
-        self.content_split_layout = content_split_layout
-        self.is_transcription_collapsed = False
-        
-        # Store the original stretch factors
-        self.conversation_stretch = 2
-        self.transcription_stretch = 1
-        
-        # Transcription title
+
         transcription_header = QtWidgets.QWidget()
         transcription_header_layout = QtWidgets.QHBoxLayout(transcription_header)
         transcription_header_layout.setContentsMargins(0, 0, 0, 0)
-        
+        transcription_header_layout.setSpacing(6)
+
         self.transcription_title = QtWidgets.QLabel("Live Transcription")
-        self.transcription_title.setStyleSheet("color: white; font-weight: bold; font-size: 14px;")
+        self.transcription_title.setStyleSheet(
+            f"color: {UI['text']}; font-family: {UI['font']}; font-weight: 800; font-size: 14px;"
+        )
         transcription_header_layout.addWidget(self.transcription_title)
         transcription_header_layout.addStretch(1)
-        
+
+        self.clear_transcription_button = self._create_toolbar_button(
+            "trash", "Clear transcriptions", "danger"
+        )
+        self.clear_transcription_button.clicked.connect(self.clear_transcriptions)
+        transcription_header_layout.addWidget(self.clear_transcription_button)
         transcription_layout.addWidget(transcription_header)
-        
-        # Transcription display
+
         self.transcription_text = QtWidgets.QTextEdit()
         self.transcription_text.setReadOnly(True)
-        self.transcription_text.setStyleSheet("""
-            QTextEdit {
-                background-color: rgba(40, 40, 40, 150);
-                color: #E0E0E0;
-                border: none;
-                font-size: 14px;
-                padding: 10px;
-                line-height: 1.5;
-            }
-            QScrollBar:vertical {
-                border: none;
-                background: rgba(50, 50, 50, 100);
-                width: 10px;
-                margin: 0px;
-            }
-            QScrollBar::handle:vertical {
-                background: rgba(100, 100, 100, 150);
-                min-height: 20px;
-                border-radius: 5px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-        """)
+        self.transcription_text.setStyleSheet(_text_edit_style())
         self.transcription_text.viewport().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.transcription_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.transcription_text.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.WidgetWidth)
-        # Enable text selection capabilities
         self.transcription_text.setTextInteractionFlags(
-            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse | 
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse |
             QtCore.Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
         transcription_layout.addWidget(self.transcription_text)
-        
-        # Create a layout for transcription action buttons
-        transcription_buttons_layout = QtWidgets.QHBoxLayout()
-        
-        # Clear transcription button
-        self.clear_transcription_button = QtWidgets.QPushButton("🗑️ Clear Transcriptions")
-        self.clear_transcription_button.setFixedHeight(30)
-        self.clear_transcription_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(180, 80, 80, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: rgba(200, 100, 100, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(160, 60, 60, 200);
-            }
+
+        self.compact_drawer = QtWidgets.QWidget()
+        self.compact_drawer_layout = QtWidgets.QVBoxLayout(self.compact_drawer)
+        self.compact_drawer_layout.setContentsMargins(0, 0, 0, 0)
+        self.compact_drawer_layout.setSpacing(0)
+        self.compact_drawer.setVisible(False)
+        content_root.addWidget(self.compact_drawer, 0)
+
+        self.command_bar = QtWidgets.QFrame()
+        self.command_bar.setObjectName("CommandBar")
+        self.command_bar.setStyleSheet(f"""
+            QFrame#CommandBar {{
+                background-color: rgba(15, 20, 25, 115);
+                border-top: 1px solid rgba(118, 134, 150, 55);
+                border-radius: 0px;
+            }}
         """)
-        self.clear_transcription_button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.clear_transcription_button.clicked.connect(self.clear_transcriptions)
-        transcription_buttons_layout.addWidget(self.clear_transcription_button)
-        
-        transcription_layout.addLayout(transcription_buttons_layout)
-        
-        # Add the transcription panel to the split layout
-        content_split_layout.addWidget(self.transcription_panel, 1)  # 1/3 of width
-        
-        # Add the content area to the main layout
-        self.layout.addWidget(self.content_area)
-        self.setLayout(self.layout)
+        self.command_layout = QtWidgets.QHBoxLayout(self.command_bar)
+        self.command_layout.setContentsMargins(0, 8, 0, 0)
+        self.command_layout.setSpacing(7)
+        content_root.addWidget(self.command_bar)
 
-        # Create resize handles.
-        self.create_resize_handles()
+        self.input_button = self._create_action_button("text", "Text Input", "neutral", self.open_input_overlay)
+        self.screenshot_button = self._create_action_button("camera", "Screenshot", "warning", self.take_screenshot)
+        self.clear_button = self._create_action_button("trash", "Clear History", "danger", self.clear_history)
+        self.code_analyze_button = self._create_action_button("code", "Code Analysis", "accent", self.execute_code_analyze)
+        self.general_analyze_button_regular = self._create_action_button("document", "General Analysis", "success", self.execute_general_analyze_no_thinking)
+        self.repeat_analyze_button = self._create_action_button("repeat", "Repeat Analysis", "warning", self.execute_repeat_analyze)
 
-        # Conversation history.
-        self.conversation_history = []
-        # Transcription history
-        self.transcription_history = []
-        
-        # Keep track of input overlay instance.
-        self.input_overlay = None
-        
-        # Connect the signals to slots
-        self.update_conversation_signal.connect(self._update_conversation_text)
-        self.update_transcription_signal.connect(self._update_transcription_text)
+        self.command_buttons = [
+            self.input_button,
+            self.screenshot_button,
+            self.clear_button,
+            self.code_analyze_button,
+            self.general_analyze_button_regular,
+            self.repeat_analyze_button,
+        ]
+        for button in self.command_buttons:
+            self.command_layout.addWidget(button)
+
+        self.conversation_stretch = 2
+        self.transcription_stretch = 1
+        self._attach_transcription_to_split()
+
+    def _create_opacity_slider(self, width):
+        slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        slider.setMinimum(20)
+        slider.setMaximum(100)
+        slider.setValue(90)
+        slider.setFixedWidth(width)
+        slider.setStyleSheet(_slider_style())
+        slider.valueChanged.connect(self.change_opacity)
+        return slider
+
+    def _create_toolbar_button(self, icon_kind, tooltip, tone="neutral", checkable=False, checked=False):
+        button = QtWidgets.QToolButton()
+        button._icon_kind = icon_kind
+        button._tone = tone
+        button.setFixedSize(36, 32)
+        button.setIconSize(QtCore.QSize(20, 20))
+        button.setIcon(_icon(icon_kind, TONE_COLORS.get(tone, UI["muted"])))
+        button.setToolTip(tooltip)
+        button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        button.setCheckable(checkable)
+        if checkable:
+            button.setChecked(checked)
+        button.setStyleSheet(_tool_button_style(tone, compact=True))
+        return button
+
+    def _create_action_button(self, icon_kind, label, tone, callback):
+        button = QtWidgets.QToolButton()
+        button._icon_kind = icon_kind
+        button._tone = tone
+        button._wide_text = label
+        button._short_text = {
+            "Text Input": "Input",
+            "Screenshot": "Shot",
+            "Clear History": "Clear",
+            "Code Analysis": "Code",
+            "General Analysis": "General",
+            "Repeat Analysis": "Repeat",
+        }.get(label, label)
+        button.setText(label)
+        button.setToolTip(label)
+        button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        button.setIconSize(QtCore.QSize(20, 20))
+        button.setIcon(_icon(icon_kind, TONE_COLORS.get(tone, UI["muted"])))
+        button.setFixedHeight(38)
+        button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        button.setStyleSheet(_tool_button_style(tone))
+        button.clicked.connect(callback)
+        return button
+
+    def _flash_button(self, button, tone=None, duration=500):
+        tone = tone or getattr(button, "_tone", "neutral")
+        compact = button.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+        button.setStyleSheet(_tool_button_style(tone, active=True, compact=compact))
+
+        def reset():
+            if button:
+                self._apply_button_style(button)
+
+        QtCore.QTimer.singleShot(duration, reset)
+
+    def _apply_button_style(self, button):
+        compact = button.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+        button.setStyleSheet(_tool_button_style(getattr(button, "_tone", "neutral"), compact=compact))
+
+    def _set_checked_silently(self, button, checked):
+        blocker = QtCore.QSignalBlocker(button)
+        button.setChecked(checked)
+        del blocker
+
+    def _attach_transcription_to_split(self):
+        self.compact_drawer_layout.removeWidget(self.transcription_panel)
+        self.content_split_layout.removeWidget(self.transcription_panel)
+        self.transcription_panel.setParent(self.split_container)
+        self.content_split_layout.addWidget(self.transcription_panel, self.transcription_stretch)
+        self.content_split_layout.setStretch(0, self.conversation_stretch)
+        self.content_split_layout.setStretch(1, self.transcription_stretch)
+
+    def _attach_transcription_to_drawer(self):
+        self.content_split_layout.removeWidget(self.transcription_panel)
+        self.compact_drawer_layout.removeWidget(self.transcription_panel)
+        self.transcription_panel.setParent(self.compact_drawer)
+        self.compact_drawer_layout.addWidget(self.transcription_panel)
+
+    def _detach_transcription_panel(self):
+        self.content_split_layout.removeWidget(self.transcription_panel)
+        self.compact_drawer_layout.removeWidget(self.transcription_panel)
+        self.transcription_panel.setVisible(False)
+        self.transcription_panel.setParent(None)
+
+    def _set_command_bar_mode(self, compact):
+        for button in self.command_buttons:
+            if compact:
+                button.setText("")
+                button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+                button.setFixedSize(43, 38)
+                button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
+            else:
+                button.setText(button._short_text if self.width() < 1040 else button._wide_text)
+                button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+                button.setMinimumWidth(0)
+                button.setMaximumWidth(16777215)
+                button.setFixedHeight(38)
+                button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+            self._apply_button_style(button)
+
+    def _sync_status_label(self):
+        compact = self.responsive_mode == "compact"
+        max_width = 150 if compact else 320
+        self.status_label.setMaximumWidth(max_width)
+        metrics = QtGui.QFontMetrics(self.status_label.font())
+        self.status_label.setText(metrics.elidedText(self._status_text, QtCore.Qt.TextElideMode.ElideRight, max_width))
+        self.status_label.setToolTip(self._status_text)
+
+    def _sync_transcription_button(self):
+        if self.responsive_mode == "compact":
+            checked = self.compact_transcription_drawer_visible
+            tooltip = "Hide live transcription drawer" if checked else "Show live transcription drawer"
+        else:
+            checked = self.user_transcription_panel_visible
+            tooltip = "Hide live transcription" if checked else "Show live transcription"
+        self._set_checked_silently(self.show_transcription_panel_button, checked)
+        self.show_transcription_panel_button.setToolTip(tooltip)
+
+    def _apply_responsive_layout(self, force=False):
+        if (
+            not hasattr(self, "opacity_container")
+            or not hasattr(self, "content_split_layout")
+            or not hasattr(self, "command_buttons")
+        ):
+            return
+        if self._applying_responsive_layout:
+            return
+        self._applying_responsive_layout = True
+        try:
+            compact = self.width() < RESPONSIVE_BREAKPOINT
+            mode = "compact" if compact else "wide"
+            mode_changed = mode != self.responsive_mode
+            if mode_changed or force:
+                self.responsive_mode = mode
+
+            self.layout.setContentsMargins(12 if compact else 18, 12 if compact else 18, 12 if compact else 18, 12 if compact else 18)
+            self.opacity_container.setVisible(not compact)
+            self.more_button.setVisible(compact)
+            self._set_command_bar_mode(compact)
+
+            if compact:
+                self._attach_transcription_to_drawer()
+                self.compact_drawer.setMaximumHeight(max(122, int(self.height() * 0.42)))
+                self.transcription_panel.setVisible(self.compact_transcription_drawer_visible)
+                self.compact_drawer.setVisible(self.compact_transcription_drawer_visible)
+                self.is_transcription_collapsed = True
+            else:
+                self.compact_transcription_drawer_visible = False
+                self.compact_drawer.setVisible(False)
+                if self.user_transcription_panel_visible:
+                    self._attach_transcription_to_split()
+                    self.transcription_panel.setVisible(True)
+                    self.is_transcription_collapsed = False
+                else:
+                    self._detach_transcription_panel()
+                    self.is_transcription_collapsed = True
+
+            self._sync_transcription_button()
+            self._sync_status_label()
+        finally:
+            self._applying_responsive_layout = False
 
     @Slot(bool)
     def set_processing(self, processing_state: bool):
@@ -778,112 +884,48 @@ class DraggableOverlay(QtWidgets.QWidget):
     def toggle_screenshots(self, checked):
         """Handle screenshot toggle button state changes"""
         if checked:
-            self.screenshot_toggle_button.setText("🖼️ Screenshots On")
-            self.screenshot_toggle_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(100, 180, 100, 200); /* Greenish */
-                    color: white;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 5px 10px; /* Match other title bar buttons */
-                    font-size: 12px; /* Match other title bar buttons */
-                }
-                QPushButton:checked {
-                    background-color: rgba(70, 150, 70, 200); /* Darker Green */
-                }
-                QPushButton:hover {
-                    background-color: rgba(120, 200, 120, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(90, 170, 90, 200);
-                }
-            """)
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🖼️ Screenshots enabled for analysis", flush=True)
+            self.screenshot_toggle_button.setToolTip("Screenshots included")
+            self.screenshot_toggle_button.setIcon(_icon("camera", UI["success"]))
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Screenshots enabled for analysis", flush=True)
         else:
-            self.screenshot_toggle_button.setText("🚫 Screenshots Off")
-            self.screenshot_toggle_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(180, 100, 100, 200); /* Reddish */
-                    color: white;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 5px 10px; /* Match other title bar buttons */
-                    font-size: 12px; /* Match other title bar buttons */
-                }
-                QPushButton:checked {
-                     background-color: rgba(150, 70, 70, 200); /* Darker Red */
-                }
-                QPushButton:hover {
-                    background-color: rgba(200, 120, 120, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(170, 90, 90, 200);
-                }
-            """)
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Screenshots disabled for analysis", flush=True)
+            self.screenshot_toggle_button.setToolTip("Screenshots excluded")
+            self.screenshot_toggle_button.setIcon(_icon("camera", UI["muted_dim"]))
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Screenshots disabled for analysis", flush=True)
+        self._apply_button_style(self.screenshot_toggle_button)
 
     def toggle_transcriptions(self, checked):
         """Handle transcription toggle button state changes"""
         self.use_transcriptions = checked
         if checked:
-            self.transcription_toggle_button.setText("🗣️ Include Transcripts")
-            self.transcription_toggle_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(100, 150, 180, 200); /* Blueish */
-                    color: white;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 5px 10px; /* Match other title bar buttons */
-                    font-size: 12px; /* Match other title bar buttons */
-                }
-                QPushButton:checked {
-                    background-color: rgba(70, 120, 150, 200); /* Darker Blue */
-                }
-                QPushButton:hover {
-                    background-color: rgba(120, 170, 200, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(90, 140, 170, 200);
-                }
-            """)
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗣️ Transcriptions will be included in analysis", flush=True)
+            self.transcription_toggle_button.setToolTip("Transcripts included in analysis")
+            self.transcription_toggle_button.setIcon(_icon("transcript", UI["accent"]))
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Transcriptions will be included in analysis", flush=True)
         else:
-            self.transcription_toggle_button.setText("🔇 Exclude Transcripts")
-            self.transcription_toggle_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(180, 120, 160, 200); /* Purplish */
-                    color: white;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 5px 10px; /* Match other title bar buttons */
-                    font-size: 12px; /* Match other title bar buttons */
-                }
-                QPushButton:checked {
-                     background-color: rgba(150, 90, 130, 200); /* Darker Purple */
-                }
-                QPushButton:hover {
-                    background-color: rgba(200, 140, 180, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(170, 110, 150, 200);
-                }
-            """)
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Transcriptions will be excluded from analysis", flush=True)
+            self.transcription_toggle_button.setToolTip("Transcripts excluded from analysis")
+            self.transcription_toggle_button.setIcon(_icon("transcript", UI["muted_dim"]))
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Transcriptions will be excluded from analysis", flush=True)
+        self._apply_button_style(self.transcription_toggle_button)
             
     def toggle_interviewer_suggestions(self, checked):
         """Handle interviewer auto-answer toggle button state changes"""
         self.show_interviewer_suggestions = checked
         if checked:
-            self.interviewer_suggestion_button.setText("🚫 No Auto-Answer")
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Interviewer questions will be auto-answered", flush=True)
+            self.interviewer_suggestion_button.setToolTip("Auto-answer enabled")
+            self.interviewer_suggestion_button.setIcon(_icon("auto", UI["success"]))
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Interviewer questions will be auto-answered", flush=True)
         else:
-            self.interviewer_suggestion_button.setText("🤖 Auto-Answer")
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Interviewer questions will not be auto-answered", flush=True)
+            self.interviewer_suggestion_button.setToolTip("Auto-answer disabled")
+            self.interviewer_suggestion_button.setIcon(_icon("auto", UI["muted_dim"]))
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Interviewer questions will not be auto-answered", flush=True)
+        self._apply_button_style(self.interviewer_suggestion_button)
 
     @Slot(str, str)
     def update_status(self, status: str, color="#4CAF50"):
-        self.status_label.setText(status)
-        self.status_label.setStyleSheet(f"color: {color}; font-size: 14px;")
+        self._status_text = status
+        self._status_color = color
+        self.status_dot.setStyleSheet(f"color: {color}; font-size: 13px;")
+        self.status_label.setStyleSheet(f"color: {color}; font-size: 13px; font-weight: 600;")
+        self._sync_status_label()
 
     def _update_conversation_text(self, conversation_text):
         """Thread-safe method to update the conversation text"""
@@ -1277,6 +1319,7 @@ class DraggableOverlay(QtWidgets.QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.position_resize_handles()
+        self._apply_responsive_layout()
 
     def start_resize(self, position, global_pos):
         self.resizing = True
@@ -1288,17 +1331,39 @@ class DraggableOverlay(QtWidgets.QWidget):
         if not self.resizing:
             return
         delta = global_pos - self.start_resize_pos
-        new_geo = QtCore.QRect(self.start_resize_geometry)
+        start_geo = self.start_resize_geometry
+
+        new_x = start_geo.x()
+        new_y = start_geo.y()
+        new_width = start_geo.width()
+        new_height = start_geo.height()
+
         if "left" in self.resize_position:
-            new_geo.setLeft(self.start_resize_geometry.left() + delta.x())
-        if "right" in self.resize_position:
-            new_geo.setRight(self.start_resize_geometry.right() + delta.x())
+            new_x = start_geo.x() + delta.x()
+            new_width = start_geo.width() - delta.x()
+        elif "right" in self.resize_position:
+            new_width = start_geo.width() + delta.x()
+
         if "top" in self.resize_position:
-            new_geo.setTop(self.start_resize_geometry.top() + delta.y())
-        if "bottom" in self.resize_position:
-            new_geo.setBottom(self.start_resize_geometry.bottom() + delta.y())
-        if new_geo.width() >= self.minimumWidth() and new_geo.height() >= self.minimumHeight():
-            self.setGeometry(new_geo)
+            new_y = start_geo.y() + delta.y()
+            new_height = start_geo.height() - delta.y()
+        elif "bottom" in self.resize_position:
+            new_height = start_geo.height() + delta.y()
+
+        min_width = self.minimumWidth()
+        min_height = self.minimumHeight()
+
+        if new_width < min_width:
+            if "left" in self.resize_position:
+                new_x = start_geo.x() + start_geo.width() - min_width
+            new_width = min_width
+
+        if new_height < min_height:
+            if "top" in self.resize_position:
+                new_y = start_geo.y() + start_geo.height() - min_height
+            new_height = min_height
+
+        self.setGeometry(QtCore.QRect(new_x, new_y, new_width, new_height))
 
     def end_resize(self):
         self.resizing = False
@@ -1378,33 +1443,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             screenshot_base64 = capture_screenshot()
             screenshot_queue.put(screenshot_base64)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 📸 Screenshot added to queue", flush=True)
-            # Show a brief visual feedback
-            self.screenshot_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(70, 180, 70, 200);
-                    color: white;
-                    border: none; 
-                    border-radius: 5px;
-                    padding: 0 8px;  /* Keep padding consistent */
-                    font-size: 14px;
-                }
-            """)
-            # Reset the button style after 500ms
-            QtCore.QTimer.singleShot(500, lambda: self.screenshot_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(180, 130, 70, 200);
-                    color: white;
-                    border: none;
-                    border-radius: 5px; 
-                    padding: 0 8px;
-                    font-size: 14px;  
-                }
-                QPushButton:hover {
-                    background-color: rgba(210, 160, 100, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(170, 120, 60, 200);
-                }            """))
+            self._flash_button(self.screenshot_button, "success")
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error taking screenshot: {e}", flush=True)
     
@@ -1424,35 +1463,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 # Emit an empty string if no transcriptions
                 self.code_analysis_signal.emit("")
             
-            # Visual feedback
-            self.code_analyze_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(50, 110, 160, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-            """)
-            
-            # Reset the button style after 500ms
-            QtCore.QTimer.singleShot(500, lambda: self.code_analyze_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(70, 130, 180, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(90, 150, 200, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(50, 110, 160, 200);
-                }
-            """))
+            self._flash_button(self.code_analyze_button)
             
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing code analysis: {e}", flush=True)
@@ -1473,35 +1484,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 # Emit an empty string if no transcriptions
                 self.repeat_analysis_signal.emit("")
             
-            # Visual feedback
-            self.repeat_analyze_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(235, 120, 0, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-            """)
-            
-            # Reset the button style after 500ms
-            QtCore.QTimer.singleShot(500, lambda: self.repeat_analyze_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(255, 140, 0, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(255, 160, 20, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(235, 120, 0, 200);
-                }
-            """))
+            self._flash_button(self.repeat_analyze_button)
             
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing repeat analysis: {e}", flush=True)
@@ -1517,35 +1500,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             from chat import clear_chat_history
             clear_chat_history()
             
-            # Visual feedback for the button
-            self.clear_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(160, 60, 60, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 14px;
-                }
-            """)
-            
-            # Reset the button style after 500ms
-            QtCore.QTimer.singleShot(500, lambda: self.clear_button.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(180, 80, 80, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 14px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(200, 100, 100, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(160, 60, 60, 200);
-                }
-            """))
+            self._flash_button(self.clear_button)
             
             # Update status
             self.update_status("History cleared", "#FFA500")
@@ -1575,35 +1530,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 # Emit an empty string if no transcriptions
                 self.general_analysis_no_thinking_signal.emit("")
             
-            # Visual feedback
-            self.general_analyze_button_regular.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(14, 130, 30, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-            """)
-            
-            # Reset the button style after 500ms
-            QtCore.QTimer.singleShot(500, lambda: self.general_analyze_button_regular.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(34, 150, 50, 200);
-                    color: white; 
-                    border: none;
-                    border-radius: 5px;
-                    padding: 0 8px;
-                    font-size: 12px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(54, 170, 70, 200);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(14, 130, 30, 200);
-                }
-            """))
+            self._flash_button(self.general_analyze_button_regular)
             
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing general analysis (no thinking): {e}", flush=True)
@@ -1620,35 +1547,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.transcription_text.clear()
         self.transcription_text.append("<div style='color: #FFA500; margin: 10px 0;'>Transcription history cleared</div>")
         
-        # Visual feedback for the button
-        self.clear_transcription_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(160, 60, 60, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;
-                font-size: 14px;
-            }
-        """)
-        
-        # Reset the button style after 500ms
-        QtCore.QTimer.singleShot(500, lambda: self.clear_transcription_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(180, 80, 80, 200);
-                color: white; 
-                border: none;
-                border-radius: 5px;
-                padding: 0 8px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: rgba(200, 100, 100, 200);
-            }
-            QPushButton:pressed {
-                background-color: rgba(160, 60, 60, 200);
-            }
-        """))
+        self._flash_button(self.clear_transcription_button)
         
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Transcription history cleared", flush=True)
     
@@ -1716,63 +1615,27 @@ class DraggableOverlay(QtWidgets.QWidget):
         """Change the opacity of the window based on slider value"""
         opacity = value / 100.0
         self.setWindowOpacity(opacity)
+        for slider in (getattr(self, "opacity_slider", None), getattr(self, "menu_opacity_slider", None)):
+            if slider and slider.value() != value:
+                blocker = QtCore.QSignalBlocker(slider)
+                slider.setValue(value)
+                del blocker
     
     def toggle_transcription_panel(self, checked=None):
-        """Toggle the visibility of the transcription panel"""
-        # Store the current window size before making changes
-        current_size = self.size()
-        
-        # Use the checked value if available, otherwise toggle the current state
-        if checked is not None:
-            self.is_transcription_collapsed = not checked
+        """Toggle the side transcription panel in wide mode or drawer in compact mode."""
+        compact = self.width() < RESPONSIVE_BREAKPOINT
+        if compact:
+            if checked is None:
+                self.compact_transcription_drawer_visible = not self.compact_transcription_drawer_visible
+            else:
+                self.compact_transcription_drawer_visible = checked
         else:
-            self.is_transcription_collapsed = not self.is_transcription_collapsed
-            
-        if not self.is_transcription_collapsed:
-            # Update button state first
-            self.show_transcription_panel_button.setText("👁️ Hide Transcriptions")
-            self.show_transcription_panel_button.setChecked(True)
-            
-            # Keep panel hidden until fully configured
-            self.transcription_panel.setVisible(False)
-            
-            # Calculate sizes
-            current_width = self.width()
-            conversation_width = (current_width * self.conversation_stretch) / (self.conversation_stretch + self.transcription_stretch)
-            transcription_width = (current_width * self.transcription_stretch) / (self.conversation_stretch + self.transcription_stretch)
-            
-            # Configure panel before adding it
-            self.transcription_panel.setFixedWidth(int(transcription_width))
-            
-            # Add to layout with proper stretch
-            self.content_split_layout.insertWidget(1, self.transcription_panel)
-            self.content_split_layout.setStretch(0, self.conversation_stretch)
-            self.content_split_layout.setStretch(1, self.transcription_stretch)
-            
-            # Process any pending events before making visible
-            QtWidgets.QApplication.processEvents()
-            
-            # Now make visible
-            self.transcription_panel.setVisible(True)
-            
-            # Release fixed width constraint after everything is stable
-            def release_width_constraint():
-                self.transcription_panel.setFixedWidth(16777215)  # QWIDGETSIZE_MAX
-                
-            QtCore.QTimer.singleShot(150, release_width_constraint)
-            
-        else:
-            # Completely collapse the panel
-            self.transcription_panel.setVisible(False)
-            self.show_transcription_panel_button.setText("👁️ Show Transcriptions")
-            self.show_transcription_panel_button.setChecked(False)
-            # Remove the panel from the layout entirely
-            self.transcription_panel.setParent(None)
-        
-        # Update the layout without resizing the window
-        self.update()
-        # Restore the original size
-        self.resize(current_size)
+            if checked is None:
+                self.user_transcription_panel_visible = not self.user_transcription_panel_visible
+            else:
+                self.user_transcription_panel_visible = checked
+            self.compact_transcription_drawer_visible = False
+        self._apply_responsive_layout(force=True)
 
 # This method is now directly in update_interviewer_qa for better flow control
         

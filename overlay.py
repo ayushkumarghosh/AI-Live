@@ -1,4 +1,5 @@
 import sys, ctypes, json
+from ctypes import wintypes
 import html
 from PyQt6 import QtWidgets, QtCore, QtGui, QtSvg
 from PyQt6.QtCore import pyqtSignal as Signal, pyqtSlot as Slot
@@ -25,12 +26,126 @@ configure_console_encoding()
 # Windows extended style constant for no activation.
 GWL_EXSTYLE = -20
 WS_EX_NOACTIVATE = 0x08000000
+_windows_ole_initialized = False
+
+
+def initialize_windows_ole():
+    """Initialize OLE on the GUI thread so Qt can use the Windows clipboard."""
+    global _windows_ole_initialized
+
+    if platform.system() != "Windows" or _windows_ole_initialized:
+        return
+
+    ole32 = ctypes.windll.ole32
+    ole32.OleInitialize.argtypes = [ctypes.c_void_p]
+    ole32.OleInitialize.restype = ctypes.c_long
+    result = ole32.OleInitialize(None)
+    unsigned_result = result & 0xFFFFFFFF
+
+    if unsigned_result in (0x00000000, 0x00000001):
+        _windows_ole_initialized = True
+        return
+
+    if unsigned_result == 0x80010106:
+        print("Warning: OLE clipboard support was already initialized with another COM threading model.", flush=True)
+        return
+
+    print(f"Warning: Failed to initialize OLE clipboard support: HRESULT 0x{unsigned_result:08X}", flush=True)
+
+
+def uninitialize_windows_ole():
+    """Balance a successful OleInitialize call made by initialize_windows_ole."""
+    global _windows_ole_initialized
+
+    if platform.system() != "Windows" or not _windows_ole_initialized:
+        return
+
+    ctypes.windll.ole32.OleUninitialize()
+    _windows_ole_initialized = False
 
 
 def apply_no_activate(hwnd):
     """Prevent a top-level overlay window from becoming the active foreground window."""
     current_ex_style = ctypes.windll.user32.GetWindowLongW(int(hwnd), GWL_EXSTYLE)
     ctypes.windll.user32.SetWindowLongW(int(hwnd), GWL_EXSTYLE, current_ex_style | WS_EX_NOACTIVATE)
+
+
+def _copy_text_to_windows_clipboard(text):
+    """Copy plain Unicode text without using Qt's OLE MIME clipboard path."""
+    if platform.system() != "Windows":
+        return False
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    CF_UNICODETEXT = 13
+    GMEM_MOVEABLE = 0x0002
+    GMEM_ZEROINIT = 0x0040
+
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.argtypes = []
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = wintypes.BOOL
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = wintypes.LPVOID
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+    kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalFree.restype = wintypes.HGLOBAL
+
+    encoded = (text + "\0").encode("utf-16-le")
+    handle = kernel32.GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, len(encoded))
+    if not handle:
+        return False
+
+    locked = kernel32.GlobalLock(handle)
+    if not locked:
+        kernel32.GlobalFree(handle)
+        return False
+
+    ctypes.memmove(locked, encoded, len(encoded))
+    kernel32.GlobalUnlock(handle)
+
+    if not user32.OpenClipboard(None):
+        kernel32.GlobalFree(handle)
+        return False
+
+    clipboard_owns_handle = False
+    try:
+        if not user32.EmptyClipboard():
+            return False
+        clipboard_owns_handle = bool(user32.SetClipboardData(CF_UNICODETEXT, handle))
+        return clipboard_owns_handle
+    finally:
+        user32.CloseClipboard()
+        if not clipboard_owns_handle:
+            kernel32.GlobalFree(handle)
+
+
+def _selected_text_for_clipboard(text_edit):
+    cursor = text_edit.textCursor()
+    text = cursor.selectedText()
+    return text.replace("\u2029", "\n").replace("\u2028", "\n")
+
+
+def copy_selected_text(text_edit):
+    text = _selected_text_for_clipboard(text_edit)
+    if not text:
+        return False
+
+    if platform.system() == "Windows":
+        if _copy_text_to_windows_clipboard(text):
+            return True
+        print("Warning: Failed to copy selected text to the Windows clipboard.", flush=True)
+        return False
+
+    QtWidgets.QApplication.clipboard().setText(text)
+    return True
 
 # Queue for screenshots
 screenshot_queue = queue.Queue()
@@ -221,6 +336,9 @@ def set_exclude_from_capture(winId):
 
 def apply_private_no_focus_window(widget):
     """Apply the main overlay's capture and activation rules to a top-level widget."""
+    if not widget.isWindow():
+        return
+
     widget.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
     no_focus_flag = QtCore.Qt.WindowType.WindowDoesNotAcceptFocus
     if not widget.windowFlags() & no_focus_flag:
@@ -230,12 +348,39 @@ def apply_private_no_focus_window(widget):
     apply_no_activate(widget.winId())
 
 
+def _is_copy_action(action):
+    text = action.text().replace("&", "").split("\t", 1)[0].strip().lower()
+    return text == "copy"
+
+
+def _replace_copy_action(menu, text_edit):
+    selected_text = _selected_text_for_clipboard(text_edit)
+    for action in menu.actions():
+        if not _is_copy_action(action):
+            continue
+
+        copy_action = QtGui.QAction(action.icon(), action.text(), menu)
+        copy_action.setShortcut(action.shortcut())
+        copy_action.setShortcutVisibleInContextMenu(action.isShortcutVisibleInContextMenu())
+        copy_action.setEnabled(bool(selected_text))
+        copy_action.triggered.connect(lambda _checked=False: copy_selected_text(text_edit))
+        menu.insertAction(action, copy_action)
+        menu.removeAction(action)
+        action.deleteLater()
+        return
+
+    copy_action = menu.addAction("Copy")
+    copy_action.setEnabled(bool(selected_text))
+    copy_action.triggered.connect(lambda _checked=False: copy_selected_text(text_edit))
+
+
 def show_private_text_context_menu(text_edit, event):
     menu = text_edit.createStandardContextMenu(event.pos())
     if menu is None:
         event.accept()
         return
 
+    _replace_copy_action(menu, text_edit)
     apply_private_no_focus_window(menu)
 
     def refresh_menu_window_settings():
@@ -295,9 +440,17 @@ class PromptTextEdit(QtWidgets.QPlainTextEdit):
     submit_requested = Signal()
     close_requested = Signal()
 
+    def copy(self):
+        if not copy_selected_text(self) and platform.system() != "Windows":
+            super().copy()
+
     def keyPressEvent(self, event):
         key = event.key()
         modifiers = event.modifiers()
+        if event.matches(QtGui.QKeySequence.StandardKey.Copy):
+            self.copy()
+            event.accept()
+            return
         if key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
             if modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier:
                 super().keyPressEvent(event)
@@ -316,6 +469,17 @@ class PromptTextEdit(QtWidgets.QPlainTextEdit):
 
 
 class OverlayTextEdit(QtWidgets.QTextEdit):
+    def copy(self):
+        if not copy_selected_text(self) and platform.system() != "Windows":
+            super().copy()
+
+    def keyPressEvent(self, event):
+        if event.matches(QtGui.QKeySequence.StandardKey.Copy):
+            self.copy()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def contextMenuEvent(self, event):
         show_private_text_context_menu(self, event)
 
@@ -1839,7 +2003,9 @@ class DraggableOverlay(QtWidgets.QWidget):
 # ----------------------------------------------------------------
 # Main entry point.
 if __name__ == "__main__":
+    initialize_windows_ole()
     app = QtWidgets.QApplication(sys.argv)
+    app.aboutToQuit.connect(uninitialize_windows_ole)
     overlay = DraggableOverlay()
     overlay.show()
     sys.exit(app.exec())

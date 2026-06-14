@@ -18,7 +18,7 @@ from chat import (
     clear_chat_history,
 )
 from live_transcription import LiveTranscriptionManager
-from overlay import DraggableOverlay
+from overlay import DraggableOverlay, initialize_windows_ole, uninitialize_windows_ole
 from session_context import record_transcript
 
 
@@ -281,6 +281,11 @@ def cleanup_transcription():
         transcription_manager = None
 
 
+def cleanup_application():
+    cleanup_transcription()
+    uninitialize_windows_ole()
+
+
 def quit_application():
     cleanup_transcription()
 
@@ -290,6 +295,7 @@ def quit_application():
 
 
 def main():
+    initialize_windows_ole()
     QtWidgets.QApplication.setAttribute(QtCore.Qt.ApplicationAttribute.AA_UseDesktopOpenGL)
 
     app = QtWidgets.QApplication(sys.argv)
@@ -302,7 +308,7 @@ def main():
     overlay.code_analysis_signal.connect(process_code_analysis)
     overlay.general_analysis_no_thinking_signal.connect(process_general_analysis_no_thinking)
     overlay.clear_history_signal.connect(stop_processing_and_clear_history)
-    app.aboutToQuit.connect(cleanup_transcription)
+    app.aboutToQuit.connect(cleanup_application)
 
     initialize_live_transcription()
     app.exec()

@@ -220,26 +220,6 @@ def _slider_style():
     """
 
 
-def _menu_style():
-    return f"""
-        QMenu {{
-            background-color: {UI["chrome"]};
-            color: {UI["text"]};
-            border: 1px solid {UI["border"]};
-            border-radius: 8px;
-            padding: 8px;
-            font-family: {UI["font"]};
-            font-size: 13px;
-        }}
-        QMenu::item {{
-            padding: 7px 18px;
-            border-radius: 5px;
-        }}
-        QMenu::item:selected {{
-            background-color: {UI["button_hover"]};
-        }}
-    """
-
 # ----------------------------------------------------------------
 # Utility function: sets the window to be excluded from screen capture.
 def set_exclude_from_capture(winId):
@@ -464,6 +444,9 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.desktop_audio_button = DummyButton(checked=True)
         self.mic_button = DummyButton(checked=True)
 
+        self._build_opacity_row()
+        self.layout.addWidget(self.opacity_row)
+
         self._build_title_bar()
         self.layout.addWidget(self.title_bar)
 
@@ -480,6 +463,23 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.update_conversation_signal.connect(self._update_conversation_text)
         self.update_transcription_signal.connect(self._update_transcription_text)
         self._apply_responsive_layout(force=True)
+
+    def _build_opacity_row(self):
+        self.opacity_row = QtWidgets.QWidget(self)
+        self.opacity_row.setAutoFillBackground(False)
+        self.opacity_row.setFixedHeight(26)
+
+        opacity_layout = QtWidgets.QHBoxLayout(self.opacity_row)
+        opacity_layout.setContentsMargins(0, 0, 0, 0)
+        opacity_layout.setSpacing(8)
+
+        self.opacity_label = QtWidgets.QLabel("Opacity")
+        self.opacity_label.setStyleSheet(f"color: {UI['text']}; font-family: {UI['font']}; font-size: 12px;")
+        opacity_layout.addWidget(self.opacity_label)
+
+        self.opacity_slider = self._create_opacity_slider(260)
+        opacity_layout.addWidget(self.opacity_slider)
+        opacity_layout.addStretch(1)
 
     def _build_title_bar(self):
         self.title_bar = QtWidgets.QFrame(self)
@@ -515,17 +515,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.status_label.setStyleSheet(f"color: {self._status_color}; font-size: 13px; font-weight: 600;")
         title_layout.addWidget(self.status_label, 1)
 
-        self.opacity_container = QtWidgets.QWidget()
-        opacity_layout = QtWidgets.QHBoxLayout(self.opacity_container)
-        opacity_layout.setContentsMargins(0, 0, 0, 0)
-        opacity_layout.setSpacing(7)
-        opacity_label = QtWidgets.QLabel("Opacity")
-        opacity_label.setStyleSheet(f"color: {UI['text']}; font-size: 12px;")
-        opacity_layout.addWidget(opacity_label)
-        self.opacity_slider = self._create_opacity_slider(76)
-        opacity_layout.addWidget(self.opacity_slider)
-        title_layout.addWidget(self.opacity_container)
-
         self.screenshot_toggle_button = self._create_toolbar_button(
             "camera", "Screenshots included", "success", checkable=True, checked=True
         )
@@ -550,32 +539,9 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.show_transcription_panel_button.toggled.connect(self.toggle_transcription_panel)
         title_layout.addWidget(self.show_transcription_panel_button)
 
-        self.more_button = self._create_toolbar_button("more", "More settings", "neutral")
-        self.more_button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.more_button.setMenu(self._build_settings_menu())
-        title_layout.addWidget(self.more_button)
-
         self.close_button = self._create_toolbar_button("close", "Close", "danger")
         self.close_button.clicked.connect(self.quit_application)
         title_layout.addWidget(self.close_button)
-
-    def _build_settings_menu(self):
-        menu = QtWidgets.QMenu(self)
-        menu.setStyleSheet(_menu_style())
-
-        opacity_widget = QtWidgets.QWidget()
-        opacity_layout = QtWidgets.QHBoxLayout(opacity_widget)
-        opacity_layout.setContentsMargins(8, 5, 8, 5)
-        opacity_layout.setSpacing(8)
-        label = QtWidgets.QLabel("Opacity")
-        label.setStyleSheet(f"color: {UI['text']}; font-family: {UI['font']}; font-size: 13px;")
-        opacity_layout.addWidget(label)
-        self.menu_opacity_slider = self._create_opacity_slider(120)
-        opacity_layout.addWidget(self.menu_opacity_slider)
-        action = QtWidgets.QWidgetAction(menu)
-        action.setDefaultWidget(opacity_widget)
-        menu.addAction(action)
-        return menu
 
     def _build_content_area(self):
         self.content_area = QtWidgets.QFrame(self)
@@ -820,7 +786,7 @@ class DraggableOverlay(QtWidgets.QWidget):
 
     def _apply_responsive_layout(self, force=False):
         if (
-            not hasattr(self, "opacity_container")
+            not hasattr(self, "opacity_row")
             or not hasattr(self, "content_split_layout")
             or not hasattr(self, "command_buttons")
         ):
@@ -836,8 +802,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                 self.responsive_mode = mode
 
             self.layout.setContentsMargins(12 if compact else 18, 12 if compact else 18, 12 if compact else 18, 12 if compact else 18)
-            self.opacity_container.setVisible(not compact)
-            self.more_button.setVisible(compact)
+            self.opacity_slider.setFixedWidth(190 if compact else 260)
             self._set_command_bar_mode(compact)
 
             if compact:
@@ -1615,7 +1580,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         """Change the opacity of the window based on slider value"""
         opacity = value / 100.0
         self.setWindowOpacity(opacity)
-        for slider in (getattr(self, "opacity_slider", None), getattr(self, "menu_opacity_slider", None)):
+        for slider in (getattr(self, "opacity_slider", None),):
             if slider and slider.value() != value:
                 blocker = QtCore.QSignalBlocker(slider)
                 slider.setValue(value)

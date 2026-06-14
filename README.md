@@ -1,6 +1,6 @@
 # AI-Live
 
-AI-Live is a Windows desktop overlay for live transcription and manual AI analysis. It listens to your microphone and desktop audio, shows transcripts in a side panel, and lets you explicitly trigger analysis with buttons such as Text Input, Code Analysis, General Analysis, and Repeat Analysis.
+AI-Live is a Windows desktop overlay for live transcription and manual AI analysis. It listens to your microphone and desktop audio, shows transcripts in a side panel, and lets you explicitly trigger analysis with buttons such as Text Input, Code Analysis, and General Analysis.
 
 ## Features
 
@@ -56,7 +56,6 @@ The app does not automatically answer spoken queries unless Auto-Answer is enabl
 - **Screenshot**: queue a screenshot for the next manual analysis request.
 - **Code Analysis**: analyze the latest selected or recent transcripts plus screenshot context as a coding problem.
 - **General Analysis**: answer the latest selected or recent transcripts as a non-coding interview question.
-- **Repeat Analysis**: ask for an improved or follow-up answer using prior chat context.
 - **Auto-Answer**: when enabled, displays suggested answers generated from completed desktop transcription turns.
 
 ## Build Notes

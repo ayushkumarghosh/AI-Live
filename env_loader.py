@@ -1,10 +1,16 @@
 import os
+import sys
 from pathlib import Path
 
 
 def load_env_file(filename=".env"):
     """Load simple KEY=VALUE pairs from a local .env file."""
-    env_path = Path(__file__).resolve().parent / filename
+    if getattr(sys, "frozen", False):
+        base_dir = Path(sys.executable).resolve().parent
+    else:
+        base_dir = Path(__file__).resolve().parent
+
+    env_path = base_dir / filename
     if not env_path.exists():
         return
 

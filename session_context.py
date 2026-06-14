@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List
+from difflib import SequenceMatcher
+from typing import Dict, List, Optional
 
 
 MAX_TRANSCRIPT_TURNS = 12
@@ -26,6 +28,7 @@ class AIExchange:
     response: str
     user_query: str
     timestamp: str
+    current_input: str = ""
 
 
 _lock = threading.RLock()
@@ -44,6 +47,34 @@ def _compact(text: str, limit: int = MAX_FIELD_CHARS) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3].rstrip() + "..."
+
+
+def _normalize_question(text: str) -> str:
+    text = str(text or "").casefold()
+    text = re.sub(r"[^a-z0-9_]+", " ", text)
+    return " ".join(text.split())
+
+
+def _looks_like_same_question(left: str, right: str) -> bool:
+    left_normalized = _normalize_question(left)
+    right_normalized = _normalize_question(right)
+    if not left_normalized or not right_normalized:
+        return False
+    if left_normalized == right_normalized:
+        return True
+
+    left_tokens = set(left_normalized.split())
+    right_tokens = set(right_normalized.split())
+    if left_tokens and left_tokens == right_tokens:
+        return True
+
+    shorter = min(len(left_normalized), len(right_normalized))
+    if shorter < 30:
+        return False
+
+    ratio = SequenceMatcher(None, left_normalized, right_normalized).ratio()
+    overlap = len(left_tokens & right_tokens) / max(len(left_tokens | right_tokens), 1)
+    return ratio >= 0.93 and overlap >= 0.85
 
 
 def _trim_summary(text: str) -> str:
@@ -86,7 +117,7 @@ def _summarize_transcript(turn: TranscriptTurn) -> str:
 def _summarize_exchange(exchange: AIExchange) -> str:
     return (
         f"- {exchange.timestamp} {exchange.mode} exchange: "
-        f"request={_compact(exchange.user_query or exchange.user_content, 450)}; "
+        f"request={_compact(exchange.user_query or exchange.current_input or exchange.user_content, 450)}; "
         f"answer={_compact(exchange.response, 650)}"
     )
 
@@ -122,10 +153,16 @@ def record_transcript(text: str, source: str) -> None:
         _prune_locked()
 
 
-def record_exchange(user_content: str, assistant_response: Dict[str, str], mode: str) -> None:
+def record_exchange(
+    user_content: str,
+    assistant_response: Dict[str, str],
+    mode: str,
+    current_input: str = "",
+) -> None:
     response = str((assistant_response or {}).get("response", "")).strip()
     user_query = str((assistant_response or {}).get("user_query", "")).strip()
     user_content = str(user_content or "").strip()
+    current_input = str(current_input or user_query).strip()
     if not user_content and not user_query and not response:
         return
 
@@ -137,9 +174,34 @@ def record_exchange(user_content: str, assistant_response: Dict[str, str], mode:
                 response=response,
                 user_query=user_query,
                 timestamp=_timestamp(),
+                current_input=current_input,
             )
         )
         _prune_locked()
+
+
+def find_repeated_exchange(current_input: str, mode: str) -> Optional[Dict[str, str]]:
+    current_input = str(current_input or "").strip()
+    if not current_input:
+        return None
+
+    mode = str(mode or "analysis")
+    with _lock:
+        exchanges = list(_exchanges)
+
+    for exchange in reversed(exchanges):
+        if exchange.mode != mode:
+            continue
+        previous_input = exchange.current_input or exchange.user_query
+        if _looks_like_same_question(current_input, previous_input):
+            return {
+                "mode": exchange.mode,
+                "current_input": exchange.current_input,
+                "user_query": exchange.user_query,
+                "response": exchange.response,
+                "timestamp": exchange.timestamp,
+            }
+    return None
 
 
 def build_context(current_input: str, mode: str, include_transcripts: bool = True) -> str:
@@ -170,7 +232,7 @@ def build_context(current_input: str, mode: str, include_transcripts: bool = Tru
         for idx, exchange in enumerate(exchanges, start=1):
             lines.append(
                 f"Previous AI exchange {idx} ({exchange.mode}, {exchange.timestamp})\n"
-                f"Request: {_compact(exchange.user_query or exchange.user_content)}\n"
+                f"Request: {_compact(exchange.user_query or exchange.current_input or exchange.user_content)}\n"
                 f"Answer: {_compact(exchange.response)}"
             )
         sections.append("Recent AI exchanges:\n" + "\n\n".join(lines))
@@ -210,7 +272,7 @@ def build_auto_answer_context(current_input: str, transcript_turns: int = 6, exc
         for idx, exchange in enumerate(exchanges, start=1):
             lines.append(
                 f"Prior answer {idx} ({exchange.mode}, {exchange.timestamp})\n"
-                f"Question: {_compact(exchange.user_query or exchange.user_content, 350)}\n"
+                f"Question: {_compact(exchange.user_query or exchange.current_input or exchange.user_content, 350)}\n"
                 f"Answer: {_compact(exchange.response, 450)}"
             )
         sections.append("Recent answer context:\n" + "\n\n".join(lines))

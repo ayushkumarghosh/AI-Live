@@ -23,7 +23,14 @@ def configure_console_encoding():
 configure_console_encoding()
 
 # Windows extended style constant for no activation.
+GWL_EXSTYLE = -20
 WS_EX_NOACTIVATE = 0x08000000
+
+
+def apply_no_activate(hwnd):
+    """Prevent a top-level overlay window from becoming the active foreground window."""
+    current_ex_style = ctypes.windll.user32.GetWindowLongW(int(hwnd), GWL_EXSTYLE)
+    ctypes.windll.user32.SetWindowLongW(int(hwnd), GWL_EXSTYLE, current_ex_style | WS_EX_NOACTIVATE)
 
 # Queue for screenshots
 screenshot_queue = queue.Queue()
@@ -127,16 +134,39 @@ def _tool_button_style(tone="neutral", active=False, compact=False):
     """
 
 
+def _command_button_style(tone="neutral", active=False):
+    tone_color = TONE_COLORS.get(tone, UI["muted"])
+    active_bg = f"rgba({QtGui.QColor(tone_color).red()}, {QtGui.QColor(tone_color).green()}, {QtGui.QColor(tone_color).blue()}, 34)" if active else "transparent"
+    return f"""
+        QToolButton {{
+            background-color: {active_bg};
+            color: {UI["text"]};
+            border: none;
+            border-radius: 6px;
+            padding: 0px 10px;
+            font-family: {UI["font"]};
+            font-size: 14px;
+            font-weight: 500;
+        }}
+        QToolButton:hover {{
+            background-color: rgba(255, 255, 255, 18);
+        }}
+        QToolButton:pressed {{
+            background-color: rgba(255, 255, 255, 28);
+        }}
+    """
+
+
 def _text_edit_style():
     return f"""
         QTextEdit {{
-            background-color: {UI["panel"]};
+            background-color: transparent;
             color: {UI["text"]};
-            border: 1px solid rgba(118, 134, 150, 50);
-            border-radius: 7px;
+            border: none;
+            border-radius: 0px;
             font-family: {UI["font"]};
             font-size: 14px;
-            padding: 12px;
+            padding: 10px;
             line-height: 1.45;
             selection-background-color: rgba(119, 183, 255, 95);
         }}
@@ -188,6 +218,43 @@ def set_exclude_from_capture(winId):
     if not result:
         print("Warning: Failed to set window display affinity.")
 
+
+def apply_private_no_focus_window(widget):
+    """Apply the main overlay's capture and activation rules to a top-level widget."""
+    widget.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+    no_focus_flag = QtCore.Qt.WindowType.WindowDoesNotAcceptFocus
+    if not widget.windowFlags() & no_focus_flag:
+        widget.setWindowFlag(no_focus_flag, True)
+    widget.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+    set_exclude_from_capture(widget.winId())
+    apply_no_activate(widget.winId())
+
+
+def show_private_text_context_menu(text_edit, event):
+    menu = text_edit.createStandardContextMenu(event.pos())
+    if menu is None:
+        event.accept()
+        return
+
+    apply_private_no_focus_window(menu)
+
+    def refresh_menu_window_settings():
+        if menu:
+            apply_private_no_focus_window(menu)
+
+    def cleanup_menu():
+        if getattr(text_edit, "_private_context_menu", None) is menu:
+            text_edit._private_context_menu = None
+        menu.deleteLater()
+
+    text_edit._private_context_menu = menu
+    menu.aboutToShow.connect(refresh_menu_window_settings)
+    menu.aboutToHide.connect(cleanup_menu)
+    menu.popup(event.globalPos())
+    QtCore.QTimer.singleShot(0, refresh_menu_window_settings)
+    event.accept()
+
+
 # ----------------------------------------------------------------
 # ResizeHandle: used for resizing the overlay.
 class ResizeHandle(QtWidgets.QWidget):
@@ -223,6 +290,36 @@ class ResizeHandle(QtWidgets.QWidget):
             self.parent.end_resize()
 
 # ----------------------------------------------------------------
+# PromptTextEdit: text editor that preserves Enter-to-submit behavior.
+class PromptTextEdit(QtWidgets.QPlainTextEdit):
+    submit_requested = Signal()
+    close_requested = Signal()
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        modifiers = event.modifiers()
+        if key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
+            if modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier:
+                super().keyPressEvent(event)
+                return
+            self.submit_requested.emit()
+            event.accept()
+            return
+        if key == QtCore.Qt.Key.Key_Escape:
+            self.close_requested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event):
+        show_private_text_context_menu(self, event)
+
+
+class OverlayTextEdit(QtWidgets.QTextEdit):
+    def contextMenuEvent(self, event):
+        show_private_text_context_menu(self, event)
+
+
 # InputOverlay: a separate focusable overlay for text input.
 class InputOverlay(QtWidgets.QWidget):
     # Signal emitted when text is submitted.
@@ -230,44 +327,59 @@ class InputOverlay(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # Do not set WS_EX_NOACTIVATE here so that this window can accept focus.
+        # This top-level window must be activatable for Windows to deliver keyboard input.
         self.setWindowFlags(
             QtCore.Qt.WindowType.FramelessWindowHint |
             QtCore.Qt.WindowType.WindowStaysOnTopHint |
             QtCore.Qt.WindowType.Tool
         )
-        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        self.setObjectName("InputOverlay")
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         parent_width = parent.width() if parent else 560
-        self.resize(max(360, min(640, int(parent_width * 0.58))), 154)
+        parent_height = parent.height() if parent else 520
+        self.resize(
+            max(420, min(720, int(parent_width * 0.62))),
+            max(206, min(252, int(parent_height * 0.38))),
+        )
+
+        root_layout = QtWidgets.QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        self.panel = QtWidgets.QFrame(self)
+        self.panel.setObjectName("InputPanel")
+        self.panel.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        root_layout.addWidget(self.panel)
 
         # Main layout with margins.
-        main_layout = QtWidgets.QVBoxLayout(self)
-        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout = QtWidgets.QVBoxLayout(self.panel)
+        main_layout.setContentsMargins(14, 14, 14, 14)
         main_layout.setSpacing(10)
 
         self.setStyleSheet(f"""
-            InputOverlay {{
+            QFrame#InputPanel {{
                 background-color: {UI["window"]};
                 border: 1px solid {UI["border"]};
-                border-radius: 10px;
+                border-radius: 12px;
             }}
             QLabel {{
                 color: {UI["text"]};
                 font-family: {UI["font"]};
             }}
-            QLineEdit {{
-                background-color: {UI["panel"]};
+            QPlainTextEdit {{
+                background-color: rgba(12, 17, 22, 214);
                 color: {UI["text"]};
                 border: 1px solid {UI["border"]};
-                border-radius: 7px;
+                border-radius: 8px;
                 padding: 10px 12px;
                 font-family: {UI["font"]};
                 font-size: 14px;
                 selection-background-color: rgba(119, 183, 255, 95);
             }}
-            QLineEdit:focus {{
+            QPlainTextEdit:focus {{
                 border-color: {UI["accent"]};
+                background-color: rgba(15, 21, 27, 232);
             }}
         """)
 
@@ -276,48 +388,82 @@ class InputOverlay(QtWidgets.QWidget):
         title_layout.setContentsMargins(0, 0, 0, 0)
         title_layout.setSpacing(8)
 
+        title_icon = QtWidgets.QLabel()
+        title_icon.setFixedSize(24, 24)
+        title_icon.setPixmap(_icon("text", UI["accent"], 18).pixmap(QtCore.QSize(18, 18)))
+        title_icon.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        title_icon.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        title_layout.addWidget(title_icon)
+
         title = QtWidgets.QLabel("Text Input")
-        title.setStyleSheet("font-size: 14px; font-weight: 700;")
+        title.setStyleSheet("font-size: 15px; font-weight: 800;")
+        title.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         title_layout.addWidget(title)
         title_layout.addStretch(1)
         self.close_button = QtWidgets.QToolButton()
         self.close_button.setIcon(_icon("close", UI["text"], 18))
         self.close_button.setFixedSize(30, 30)
         self.close_button.setToolTip("Close")
+        self.close_button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.close_button.setStyleSheet(_tool_button_style("danger", compact=True))
         self.close_button.clicked.connect(self.close)
         title_layout.addWidget(self.close_button)
         main_layout.addLayout(title_layout)
 
         # Input field.
-        self.input_field = QtWidgets.QLineEdit()
-        self.input_field.setPlaceholderText("Type your question and press Enter...")
-        # When return is pressed, call handle_submit.
-        self.input_field.returnPressed.connect(self.handle_submit)
-        main_layout.addWidget(self.input_field)
+        self.input_field = PromptTextEdit()
+        self.input_field.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        self.input_field.setPlaceholderText("Ask about the current screen or session...")
+        self.input_field.setMinimumHeight(96)
+        self.input_field.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
+        self.input_field.submit_requested.connect(self.handle_submit)
+        self.input_field.close_requested.connect(self.close)
+        self.input_field.textChanged.connect(self._sync_submit_state)
+        main_layout.addWidget(self.input_field, 1)
+
+        action_layout = QtWidgets.QHBoxLayout()
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(8)
+        action_layout.addStretch(1)
 
         # Submit button (kept in the input overlay).
         self.submit_button = QtWidgets.QToolButton()
         self.submit_button.setText("Submit")
         self.submit_button.setIcon(_icon("text", UI["accent"]))
         self.submit_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.submit_button.setFixedWidth(116)
         self.submit_button.setFixedHeight(38)
+        self.submit_button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.submit_button.setStyleSheet(_tool_button_style("accent"))
         self.submit_button.clicked.connect(self.handle_submit)
-        main_layout.addWidget(self.submit_button)
+        action_layout.addWidget(self.submit_button)
+        main_layout.addLayout(action_layout)
+        self._sync_submit_state()
+
+    def _sync_submit_state(self):
+        self.submit_button.setEnabled(bool(self.input_field.toPlainText().strip()))
 
     def showEvent(self, event):
         super().showEvent(event)
         # Exclude this window from screen capture.
         set_exclude_from_capture(self.winId())
         # Bring focus to the input field.
-        QtCore.QTimer.singleShot(0, self.input_field.setFocus)
+        QtCore.QTimer.singleShot(0, self._focus_editor)
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        self._focus_editor()
+
+    def _focus_editor(self):
+        self.raise_()
+        self.activateWindow()
+        self.input_field.setFocus(QtCore.Qt.FocusReason.ActiveWindowFocusReason)
 
     def handle_submit(self):
-        text = self.input_field.text().strip()
+        text = self.input_field.toPlainText().strip()
         if text:
             self.text_submitted.emit(text)
-        self.close()
+            self.close()
 
 # ----------------------------------------------------------------
 # DraggableOverlay: the main overlay window.
@@ -326,7 +472,6 @@ class DraggableOverlay(QtWidgets.QWidget):
     
     # New signals for specialized analysis functions
     code_analysis_signal = Signal(str)  # For code problem analysis
-    repeat_analysis_signal = Signal(str)  # For repeat analysis
     
     update_conversation_signal = Signal(str)  # New signal for thread-safe updates
     clear_history_signal = Signal()  # Signal to stop processing and clear history
@@ -381,7 +526,7 @@ class DraggableOverlay(QtWidgets.QWidget):
 
         self.layout = QtWidgets.QVBoxLayout(self)
         self.layout.setContentsMargins(18, 18, 18, 18)
-        self.layout.setSpacing(8)
+        self.layout.setSpacing(0)
 
         class DummyButton:
             def __init__(self, checked=True):
@@ -405,6 +550,7 @@ class DraggableOverlay(QtWidgets.QWidget):
 
         self._build_opacity_row()
         self.layout.addWidget(self.opacity_row)
+        self.opacity_row.setVisible(False)
 
         self._build_title_bar()
         self.layout.addWidget(self.title_bar)
@@ -447,16 +593,21 @@ class DraggableOverlay(QtWidgets.QWidget):
             QFrame#TitleBar {{
                 background-color: {UI["chrome"]};
                 border: 1px solid rgba(118, 134, 150, 50);
-                border-radius: 8px;
+                border-bottom: 1px solid rgba(118, 134, 150, 68);
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                border-bottom-left-radius: 0px;
+                border-bottom-right-radius: 0px;
             }}
             QLabel {{
                 color: {UI["text"]};
                 font-family: {UI["font"]};
             }}
         """)
+        self.title_bar.setFixedHeight(52)
         title_layout = QtWidgets.QHBoxLayout(self.title_bar)
-        title_layout.setContentsMargins(10, 5, 8, 5)
-        title_layout.setSpacing(7)
+        title_layout.setContentsMargins(16, 0, 14, 0)
+        title_layout.setSpacing(8)
 
         self.title_label = QtWidgets.QLabel("AI Live")
         self.title_label.setMinimumWidth(58)
@@ -469,16 +620,34 @@ class DraggableOverlay(QtWidgets.QWidget):
         title_layout.addWidget(self.status_dot)
 
         self.status_label = QtWidgets.QLabel(self._status_text)
-        self.status_label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
+        self.status_label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Preferred)
         self.status_label.setMinimumWidth(58)
         self.status_label.setStyleSheet(f"color: {self._status_color}; font-size: 13px; font-weight: 600;")
-        title_layout.addWidget(self.status_label, 1)
+        title_layout.addWidget(self.status_label)
+        title_layout.addStretch(1)
+
+        self.header_opacity_container = QtWidgets.QWidget(self.title_bar)
+        header_opacity_layout = QtWidgets.QHBoxLayout(self.header_opacity_container)
+        header_opacity_layout.setContentsMargins(0, 0, 0, 0)
+        header_opacity_layout.setSpacing(7)
+        self.header_opacity_label = QtWidgets.QLabel("Opacity")
+        self.header_opacity_label.setStyleSheet(f"color: {UI['text']}; font-family: {UI['font']}; font-size: 12px;")
+        header_opacity_layout.addWidget(self.header_opacity_label)
+        self.header_opacity_slider = self._create_opacity_slider(92)
+        header_opacity_layout.addWidget(self.header_opacity_slider)
+        title_layout.addWidget(self.header_opacity_container)
 
         self.screenshot_toggle_button = self._create_toolbar_button(
             "camera", "Screenshots included", "success", checkable=True, checked=True
         )
         self.screenshot_toggle_button.toggled.connect(self.toggle_screenshots)
         title_layout.addWidget(self.screenshot_toggle_button)
+
+        self.show_transcription_panel_button = self._create_toolbar_button(
+            "transcript_panel", "Hide live transcription", "accent", checkable=True, checked=True
+        )
+        self.show_transcription_panel_button.toggled.connect(self.toggle_transcription_panel)
+        title_layout.addWidget(self.show_transcription_panel_button)
 
         self.transcription_toggle_button = self._create_toolbar_button(
             "transcript", "Transcripts included in analysis", "accent", checkable=True, checked=True
@@ -492,12 +661,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.interviewer_suggestion_button.toggled.connect(self.toggle_interviewer_suggestions)
         title_layout.addWidget(self.interviewer_suggestion_button)
 
-        self.show_transcription_panel_button = self._create_toolbar_button(
-            "transcript_panel", "Hide live transcription", "accent", checkable=True, checked=True
-        )
-        self.show_transcription_panel_button.toggled.connect(self.toggle_transcription_panel)
-        title_layout.addWidget(self.show_transcription_panel_button)
-
         self.close_button = self._create_toolbar_button("close", "Close", "danger")
         self.close_button.clicked.connect(self.quit_application)
         title_layout.addWidget(self.close_button)
@@ -508,20 +671,26 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.content_area.setStyleSheet(f"""
             QFrame#ContentArea {{
                 background-color: {UI["window"]};
-                border: 1px solid rgba(118, 134, 150, 50);
-                border-radius: 8px;
+                border-left: 1px solid rgba(118, 134, 150, 50);
+                border-right: 1px solid rgba(118, 134, 150, 50);
+                border-bottom: 1px solid rgba(118, 134, 150, 50);
+                border-top: none;
+                border-top-left-radius: 0px;
+                border-top-right-radius: 0px;
+                border-bottom-left-radius: 8px;
+                border-bottom-right-radius: 8px;
             }}
         """)
 
         content_root = QtWidgets.QVBoxLayout(self.content_area)
-        content_root.setContentsMargins(10, 10, 10, 10)
-        content_root.setSpacing(8)
+        content_root.setContentsMargins(0, 0, 0, 0)
+        content_root.setSpacing(0)
         self.content_root_layout = content_root
 
         self.split_container = QtWidgets.QWidget()
         self.content_split_layout = QtWidgets.QHBoxLayout(self.split_container)
         self.content_split_layout.setContentsMargins(0, 0, 0, 0)
-        self.content_split_layout.setSpacing(8)
+        self.content_split_layout.setSpacing(0)
         content_root.addWidget(self.split_container, 1)
 
         self.conversation_panel = QtWidgets.QWidget()
@@ -529,7 +698,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         conversation_layout.setContentsMargins(0, 0, 0, 0)
         conversation_layout.setSpacing(0)
 
-        self.conversation_text = QtWidgets.QTextEdit()
+        self.conversation_text = OverlayTextEdit()
         self.conversation_text.setReadOnly(True)
         self.conversation_text.setStyleSheet(_text_edit_style())
         self.conversation_text.viewport().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
@@ -537,6 +706,11 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.conversation_text.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.WidgetWidth)
         conversation_layout.addWidget(self.conversation_text)
         self.content_split_layout.addWidget(self.conversation_panel, 2)
+
+        self.split_divider = QtWidgets.QFrame()
+        self.split_divider.setFixedWidth(1)
+        self.split_divider.setStyleSheet("background-color: rgba(118, 134, 150, 62); border: none;")
+        self.content_split_layout.addWidget(self.split_divider)
 
         self.transcription_panel = QtWidgets.QWidget()
         self.transcription_panel.setMinimumWidth(0)
@@ -560,11 +734,12 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.clear_transcription_button = self._create_toolbar_button(
             "trash", "Clear transcriptions", "danger"
         )
+        self.clear_transcription_button.setVisible(False)
         self.clear_transcription_button.clicked.connect(self.clear_transcriptions)
         transcription_header_layout.addWidget(self.clear_transcription_button)
         transcription_layout.addWidget(transcription_header)
 
-        self.transcription_text = QtWidgets.QTextEdit()
+        self.transcription_text = OverlayTextEdit()
         self.transcription_text.setReadOnly(True)
         self.transcription_text.setStyleSheet(_text_edit_style())
         self.transcription_text.viewport().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
@@ -587,14 +762,15 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.command_bar.setObjectName("CommandBar")
         self.command_bar.setStyleSheet(f"""
             QFrame#CommandBar {{
-                background-color: rgba(15, 20, 25, 115);
-                border-top: 1px solid rgba(118, 134, 150, 55);
+                background-color: rgba(15, 20, 25, 78);
+                border-top: 1px solid rgba(118, 134, 150, 68);
                 border-radius: 0px;
             }}
         """)
         self.command_layout = QtWidgets.QHBoxLayout(self.command_bar)
-        self.command_layout.setContentsMargins(0, 8, 0, 0)
-        self.command_layout.setSpacing(7)
+        self.command_layout.setContentsMargins(18, 0, 18, 0)
+        self.command_layout.setSpacing(12)
+        self.command_bar.setFixedHeight(72)
         content_root.addWidget(self.command_bar)
 
         self.input_button = self._create_action_button("text", "Text Input", "neutral", self.open_input_overlay)
@@ -602,7 +778,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.clear_button = self._create_action_button("trash", "Clear History", "danger", self.clear_history)
         self.code_analyze_button = self._create_action_button("code", "Code Analysis", "accent", self.execute_code_analyze)
         self.general_analyze_button_regular = self._create_action_button("document", "General Analysis", "success", self.execute_general_analyze_no_thinking)
-        self.repeat_analyze_button = self._create_action_button("repeat", "Repeat Analysis", "warning", self.execute_repeat_analyze)
 
         self.command_buttons = [
             self.input_button,
@@ -610,10 +785,15 @@ class DraggableOverlay(QtWidgets.QWidget):
             self.clear_button,
             self.code_analyze_button,
             self.general_analyze_button_regular,
-            self.repeat_analyze_button,
         ]
-        for button in self.command_buttons:
+        self.command_divider = QtWidgets.QFrame()
+        self.command_divider.setFixedWidth(1)
+        self.command_divider.setStyleSheet("background-color: rgba(118, 134, 150, 70); border: none;")
+
+        for index, button in enumerate(self.command_buttons):
             self.command_layout.addWidget(button)
+            if index == 2:
+                self.command_layout.addWidget(self.command_divider)
 
         self.conversation_stretch = 2
         self.transcription_stretch = 1
@@ -648,6 +828,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         button = QtWidgets.QToolButton()
         button._icon_kind = icon_kind
         button._tone = tone
+        button._button_role = "command"
         button._wide_text = label
         button._short_text = {
             "Text Input": "Input",
@@ -655,7 +836,6 @@ class DraggableOverlay(QtWidgets.QWidget):
             "Clear History": "Clear",
             "Code Analysis": "Code",
             "General Analysis": "General",
-            "Repeat Analysis": "Repeat",
         }.get(label, label)
         button.setText(label)
         button.setToolTip(label)
@@ -665,14 +845,17 @@ class DraggableOverlay(QtWidgets.QWidget):
         button.setFixedHeight(38)
         button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
-        button.setStyleSheet(_tool_button_style(tone))
+        button.setStyleSheet(_command_button_style(tone))
         button.clicked.connect(callback)
         return button
 
     def _flash_button(self, button, tone=None, duration=500):
         tone = tone or getattr(button, "_tone", "neutral")
         compact = button.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
-        button.setStyleSheet(_tool_button_style(tone, active=True, compact=compact))
+        if getattr(button, "_button_role", "") == "command":
+            button.setStyleSheet(_command_button_style(tone, active=True))
+        else:
+            button.setStyleSheet(_tool_button_style(tone, active=True, compact=compact))
 
         def reset():
             if button:
@@ -682,7 +865,10 @@ class DraggableOverlay(QtWidgets.QWidget):
 
     def _apply_button_style(self, button):
         compact = button.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
-        button.setStyleSheet(_tool_button_style(getattr(button, "_tone", "neutral"), compact=compact))
+        if getattr(button, "_button_role", "") == "command":
+            button.setStyleSheet(_command_button_style(getattr(button, "_tone", "neutral")))
+        else:
+            button.setStyleSheet(_tool_button_style(getattr(button, "_tone", "neutral"), compact=compact))
 
     def _set_checked_silently(self, button, checked):
         blocker = QtCore.QSignalBlocker(button)
@@ -693,23 +879,29 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.compact_drawer_layout.removeWidget(self.transcription_panel)
         self.content_split_layout.removeWidget(self.transcription_panel)
         self.transcription_panel.setParent(self.split_container)
+        self.split_divider.setVisible(True)
         self.content_split_layout.addWidget(self.transcription_panel, self.transcription_stretch)
         self.content_split_layout.setStretch(0, self.conversation_stretch)
-        self.content_split_layout.setStretch(1, self.transcription_stretch)
+        self.content_split_layout.setStretch(1, 0)
+        self.content_split_layout.setStretch(2, self.transcription_stretch)
 
     def _attach_transcription_to_drawer(self):
         self.content_split_layout.removeWidget(self.transcription_panel)
         self.compact_drawer_layout.removeWidget(self.transcription_panel)
+        self.split_divider.setVisible(False)
         self.transcription_panel.setParent(self.compact_drawer)
         self.compact_drawer_layout.addWidget(self.transcription_panel)
 
     def _detach_transcription_panel(self):
         self.content_split_layout.removeWidget(self.transcription_panel)
         self.compact_drawer_layout.removeWidget(self.transcription_panel)
+        self.split_divider.setVisible(False)
         self.transcription_panel.setVisible(False)
         self.transcription_panel.setParent(None)
 
     def _set_command_bar_mode(self, compact):
+        self.command_divider.setVisible(not compact)
+        self.command_bar.setFixedHeight(46 if compact else 72)
         for button in self.command_buttons:
             if compact:
                 button.setText("")
@@ -727,16 +919,18 @@ class DraggableOverlay(QtWidgets.QWidget):
 
     def _sync_status_label(self):
         compact = self.responsive_mode == "compact"
-        max_width = 150 if compact else 320
+        max_width = 92 if compact else 320
         self.status_label.setMaximumWidth(max_width)
         metrics = QtGui.QFontMetrics(self.status_label.font())
         self.status_label.setText(metrics.elidedText(self._status_text, QtCore.Qt.TextElideMode.ElideRight, max_width))
         self.status_label.setToolTip(self._status_text)
 
     def _sync_transcription_button(self):
-        if self.responsive_mode == "compact":
-            checked = self.compact_transcription_drawer_visible
-            tooltip = "Hide live transcription drawer" if checked else "Show live transcription drawer"
+        compact = self.responsive_mode == "compact"
+        self.show_transcription_panel_button.setVisible(not compact)
+        if compact:
+            checked = False
+            tooltip = "Live transcription is hidden in compact mode"
         else:
             checked = self.user_transcription_panel_visible
             tooltip = "Hide live transcription" if checked else "Show live transcription"
@@ -761,14 +955,17 @@ class DraggableOverlay(QtWidgets.QWidget):
                 self.responsive_mode = mode
 
             self.layout.setContentsMargins(12 if compact else 18, 12 if compact else 18, 12 if compact else 18, 12 if compact else 18)
+            self.layout.setSpacing(0)
+            self.opacity_row.setVisible(False)
             self.opacity_slider.setFixedWidth(190 if compact else 260)
+            self.header_opacity_label.setVisible(not compact)
+            self.header_opacity_slider.setFixedWidth(48 if compact else 92)
             self._set_command_bar_mode(compact)
 
             if compact:
-                self._attach_transcription_to_drawer()
-                self.compact_drawer.setMaximumHeight(max(122, int(self.height() * 0.42)))
-                self.transcription_panel.setVisible(self.compact_transcription_drawer_visible)
-                self.compact_drawer.setVisible(self.compact_transcription_drawer_visible)
+                self.compact_transcription_drawer_visible = False
+                self.compact_drawer.setVisible(False)
+                self._detach_transcription_panel()
                 self.is_transcription_collapsed = True
             else:
                 self.compact_transcription_drawer_visible = False
@@ -962,7 +1159,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             code_block_lines = []
             style = "monokai"
 
-            formatter = HtmlFormatter(noclasses=True, style=style)
+            formatter = HtmlFormatter(noclasses=True, style=style, nowrap=True)
 
             i = 0
             while i < len(lines):
@@ -1002,7 +1199,17 @@ class DraggableOverlay(QtWidgets.QWidget):
                         # Remove enclosing <div> Pygments generates, keep only <pre>
                         highlighted_html = re.sub(r'^<div[^>]*>', '', highlighted_html)
                         highlighted_html = re.sub(r'</div>\s*$', '', highlighted_html)
-                        html_lines.append(highlighted_html)
+                        highlighted_html = highlighted_html.replace("\n", "<br>")
+                        html_lines.append(
+                            '<table width="100%" cellspacing="0" cellpadding="0" '
+                            'style="margin-top: 6px; margin-bottom: 6px; border-collapse: collapse;">'
+                            '<tr><td style="background-color: #111922; border: 1px solid #2F3B48; '
+                            'padding: 6px 10px;">'
+                            '<pre style="margin: 0; font-family: Consolas, Cascadia Mono, monospace; '
+                            'font-size: 14px; line-height: 1.18; color: #E8EEF5;">'
+                            f"{highlighted_html}"
+                            "</pre></td></tr></table>"
+                        )
                         in_code_block = False
                         code_language = ""
                         code_block_lines = []
@@ -1059,7 +1266,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                             if in_paragraph:
                                 html_lines.append('</p>')
                                 in_paragraph = False
-                            html_lines.append(f'<h2 style="color: #E0E0E0; font-size: 1.6em; margin: 0.7em 0 0.35em 0;">{process_inline_markdown(line[3:])}</h2>')
+                            html_lines.append(f'<h2 style="color: #E0E0E0; font-size: 1.45em; margin: 0.45em 0 0.25em 0;">{process_inline_markdown(line[3:])}</h2>')
                         elif line.startswith('### '):
                             if in_paragraph:
                                 html_lines.append('</p>')
@@ -1088,7 +1295,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                                 in_paragraph = False
                                 
                             if not in_list:
-                                html_lines.append('<ul style="margin-top: 0.5em; margin-bottom: 0.5em;">')
+                                html_lines.append('<ul style="margin-top: 0.25em; margin-bottom: 0.25em;">')
                                 in_list = True
                             
                             content = line.strip()[2:]  # Remove the list marker
@@ -1145,7 +1352,7 @@ class DraggableOverlay(QtWidgets.QWidget):
                                 if not in_paragraph:
                                     html_lines.append('<p style="margin: 0 0; line-height: 1.2;">')
                                     in_paragraph = True
-                                html_lines.append(f'{process_inline_markdown(line)}<br>')
+                                html_lines.append(f'{process_inline_markdown(line)}')
                 
                 i += 1
             
@@ -1310,11 +1517,7 @@ class DraggableOverlay(QtWidgets.QWidget):
     # ---------------- Focus Behavior and Screen Capture Exclusion ----------------
     def showEvent(self, event):
         super().showEvent(event)
-        set_exclude_from_capture(self.winId())
-        # Apply WS_EX_NOACTIVATE to the main overlay.
-        hwnd = int(self.winId())
-        current_ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
-        ctypes.windll.user32.SetWindowLongW(hwnd, -20, current_ex_style | WS_EX_NOACTIVATE)
+        apply_private_no_focus_window(self)
 
     def quit_application(self):
         print("Closing AI Live application...")
@@ -1331,8 +1534,7 @@ class DraggableOverlay(QtWidgets.QWidget):
     def open_input_overlay(self):
         # Ensure only one input overlay is open.
         if self.input_overlay is not None and self.input_overlay.isVisible():
-            self.input_overlay.raise_()
-            self.input_overlay.activateWindow()
+            self.input_overlay._focus_editor()
             return
         self.input_overlay = InputOverlay(self)
         # Center it over the main overlay.
@@ -1391,27 +1593,6 @@ class DraggableOverlay(QtWidgets.QWidget):
             
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing code analysis: {e}", flush=True)
-
-    def execute_repeat_analyze(self):
-        try:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 Executing repeat analysis with specialized prompt", flush=True)
-            
-            # Get transcriptions to use for the analysis
-            transcriptions = self.get_transcriptions()
-            
-            # Send the transcriptions directly, no need to append the prompt
-            # since the analyze_repeat_problem function already handles this
-            if transcriptions:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Including transcriptions in repeat analysis", flush=True)
-                self.repeat_analysis_signal.emit(transcriptions)
-            else:
-                # Emit an empty string if no transcriptions
-                self.repeat_analysis_signal.emit("")
-            
-            self._flash_button(self.repeat_analyze_button)
-            
-        except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing repeat analysis: {e}", flush=True)
 
     def clear_history(self):
         try:
@@ -1539,20 +1720,17 @@ class DraggableOverlay(QtWidgets.QWidget):
         """Change the opacity of the window based on slider value"""
         opacity = value / 100.0
         self.setWindowOpacity(opacity)
-        for slider in (getattr(self, "opacity_slider", None),):
+        for slider in (getattr(self, "opacity_slider", None), getattr(self, "header_opacity_slider", None)):
             if slider and slider.value() != value:
                 blocker = QtCore.QSignalBlocker(slider)
                 slider.setValue(value)
                 del blocker
     
     def toggle_transcription_panel(self, checked=None):
-        """Toggle the side transcription panel in wide mode or drawer in compact mode."""
+        """Toggle the side transcription panel in wide mode."""
         compact = self.width() < RESPONSIVE_BREAKPOINT
         if compact:
-            if checked is None:
-                self.compact_transcription_drawer_visible = not self.compact_transcription_drawer_visible
-            else:
-                self.compact_transcription_drawer_visible = checked
+            self.compact_transcription_drawer_visible = False
         else:
             if checked is None:
                 self.user_transcription_panel_visible = not self.user_transcription_panel_visible

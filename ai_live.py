@@ -14,7 +14,6 @@ from PyQt6 import QtCore, QtWidgets
 from chat import (
     analyze_code_problem,
     analyze_general_problem_no_thinking,
-    analyze_repeat_problem,
     analyze_with_text_input,
     clear_chat_history,
 )
@@ -219,17 +218,6 @@ def process_code_analysis(transcription):
     )
 
 
-def process_repeat_analysis(transcription):
-    _start_manual_analysis(
-        session_prefix="repeat",
-        user_input=transcription,
-        status="Analyzing repeated problem...",
-        status_color="#FF8C00",
-        analysis_fn=analyze_repeat_problem,
-        error_label="Error in repeat analysis",
-    )
-
-
 def process_general_analysis_no_thinking(transcription):
     _start_manual_analysis(
         session_prefix="general",
@@ -313,7 +301,6 @@ def main():
     overlay.text_submitted.connect(process_text_input)
     overlay.code_analysis_signal.connect(process_code_analysis)
     overlay.general_analysis_no_thinking_signal.connect(process_general_analysis_no_thinking)
-    overlay.repeat_analysis_signal.connect(process_repeat_analysis)
     overlay.clear_history_signal.connect(stop_processing_and_clear_history)
     app.aboutToQuit.connect(cleanup_transcription)
 

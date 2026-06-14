@@ -33,12 +33,59 @@ class SessionContextTests(unittest.TestCase):
             "general",
         )
 
-        context = session_context.build_context("follow up", "repeat")
+        context = session_context.build_context("follow up", "general")
 
-        self.assertIn("Current analysis mode: repeat.", context)
+        self.assertIn("Current analysis mode: general.", context)
         self.assertIn("Interviewer: what is a cache?", context)
         self.assertIn("A cache stores reusable results.", context)
         self.assertIn("Current selected text or user request:\nfollow up", context)
+
+    def test_build_context_keeps_ai_exchanges_common_across_modes(self):
+        session_context.record_exchange(
+            "code request",
+            {"user_query": "Solve two sum.", "response": "Use a hash map."},
+            "code",
+            current_input="Solve two sum.",
+        )
+
+        context = session_context.build_context("Tell me about indexes.", "general")
+
+        self.assertIn("Previous AI exchange 1 (code", context)
+        self.assertIn("Use a hash map.", context)
+        self.assertIn("Current analysis mode: general.", context)
+
+    def test_find_repeated_exchange_matches_same_mode_question(self):
+        session_context.record_exchange(
+            "code request",
+            {"user_query": "Explain BFS.", "response": "Use a queue."},
+            "code",
+            current_input="Explain BFS.",
+        )
+
+        match = session_context.find_repeated_exchange("explain bfs", "code")
+
+        self.assertIsNotNone(match)
+        self.assertEqual(match["response"], "Use a queue.")
+
+    def test_find_repeated_exchange_does_not_cross_modes(self):
+        session_context.record_exchange(
+            "code request",
+            {"user_query": "Explain BFS.", "response": "Use a queue."},
+            "code",
+            current_input="Explain BFS.",
+        )
+
+        self.assertIsNone(session_context.find_repeated_exchange("Explain BFS.", "general"))
+
+    def test_find_repeated_exchange_ignores_empty_input(self):
+        session_context.record_exchange(
+            "code request",
+            {"user_query": "Explain BFS.", "response": "Use a queue."},
+            "code",
+            current_input="Explain BFS.",
+        )
+
+        self.assertIsNone(session_context.find_repeated_exchange("", "code"))
 
     def test_rolls_older_context_into_summary(self):
         for idx in range(session_context.MAX_TRANSCRIPT_TURNS + 2):

@@ -1,1 +1,2 @@
 nuitka==2.7.5
+pyinstaller==6.21.0

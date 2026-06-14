@@ -7,7 +7,13 @@ from typing import Any, Callable, Dict, List, Optional
 from openai import OpenAI
 
 from env_loader import load_env_file
-from session_context import build_auto_answer_context, build_context, clear_session_context, record_exchange
+from session_context import (
+    build_auto_answer_context,
+    build_context,
+    clear_session_context,
+    find_repeated_exchange,
+    record_exchange,
+)
 
 
 load_env_file()
@@ -35,16 +41,24 @@ general_analysis_prompt = (
     "briefly explain the reasoning. Be concise, professional, and practical."
 )
 
-repeat_analysis_prompt = (
-    "Use the previous context plus the latest transcription or screenshot to improve "
-    "the answer. For coding problems, focus on the improved optimized solution rather "
-    "than repeating the naive approach."
-)
-
 auto_answer_prompt = (
     "You are helping a software engineering interview candidate. Given the latest "
     "interviewer transcript, write a concise answer the candidate could say out loud. "
     "Do not mention that you are an AI assistant."
+)
+
+repeat_correction_prompt = (
+    "The current request appears to repeat a previous analysis request. Audit the "
+    "previous answer for mistakes, omissions, and incorrect assumptions, then provide "
+    "the corrected answer. Do not simply restate the previous answer."
+)
+
+code_repeat_correction_prompt = (
+    repeat_correction_prompt
+    + " For repeated coding questions, if screenshots are provided, inspect them for "
+    "visible compiler, runtime, test, editor, or UI errors and use those errors to "
+    "correct the solution. If no screenshot is provided, do not claim that the screen "
+    "was checked."
 )
 
 
@@ -207,6 +221,55 @@ def _manual_content(
     return text_content, content
 
 
+def _append_manual_text(
+    content_text: str,
+    content_parts: List[Dict[str, str]],
+    extra_text: str,
+) -> tuple[str, List[Dict[str, str]]]:
+    if not extra_text:
+        return content_text, content_parts
+
+    content_text = f"{content_text}\n\n{extra_text}"
+    if content_parts and content_parts[0].get("type") == "input_text":
+        content_parts[0] = {**content_parts[0], "text": content_text}
+    return content_text, content_parts
+
+
+def _repeat_correction_context(mode: str, repeat_match: Dict[str, str], has_screenshots: bool) -> str:
+    previous_question = repeat_match.get("current_input") or repeat_match.get("user_query") or ""
+    previous_answer = repeat_match.get("response") or ""
+    mode_label = "Code" if mode == "code" else "General"
+
+    lines = [
+        "Automatic repeat correction:",
+        f"The current {mode_label} Analysis request appears to be the same as this prior {mode} request.",
+        "Review the prior answer for mistakes, omissions, and incorrect assumptions before answering.",
+        f"Prior question:\n{previous_question}",
+        f"Prior answer:\n{previous_answer}",
+    ]
+
+    if mode == "code":
+        if has_screenshots:
+            lines.append(
+                "Screenshot context is attached. Inspect it for visible compiler, runtime, "
+                "test, editor, or UI errors and incorporate any fixes into the answer."
+            )
+        else:
+            lines.append(
+                "No screenshot was provided for this repeated code request, so do not claim "
+                "to have checked the screen for errors."
+            )
+
+    return "\n\n".join(lines)
+
+
+def _analysis_instruction(base_prompt: str, repeat_match: Optional[Dict[str, str]], mode: str) -> str:
+    if not repeat_match:
+        return base_prompt
+    correction_prompt = code_repeat_correction_prompt if mode == "code" else repeat_correction_prompt
+    return f"{base_prompt}\n\n{correction_prompt}"
+
+
 def _extract_output_text(response: Any) -> str:
     output_text = getattr(response, "output_text", None)
     if output_text:
@@ -253,6 +316,7 @@ def _send_analysis_message(
     content_parts: List[Dict[str, str]],
     system_instruction: Optional[str] = None,
     mode: str = "analysis",
+    current_input: Optional[str] = None,
 ) -> Dict[str, str]:
     instructions = [
         "Return only JSON matching this schema: "
@@ -287,7 +351,7 @@ def _send_analysis_message(
         ) from exc
 
     response_json = _parse_json_response(_extract_output_text(response), text_input)
-    record_exchange(content_text, response_json, mode)
+    record_exchange(content_text, response_json, mode, current_input=current_input or text_input)
     return response_json
 
 
@@ -306,7 +370,7 @@ def analyze_with_text_input(
         include_transcripts=include_transcripts,
         mode="text",
     )
-    return _send_analysis_message(text_input, content_text, content_parts, mode="text")
+    return _send_analysis_message(text_input, content_text, content_parts, mode="text", current_input=text_input)
 
 
 def analyze_code_problem(
@@ -316,6 +380,7 @@ def analyze_code_problem(
     desktop_audio_base64: str = "",
     include_transcripts: bool = True,
 ):
+    repeat_match = find_repeated_exchange(text_input, "code")
     content_text, content_parts = _manual_content(
         text_input,
         images_base64,
@@ -324,25 +389,20 @@ def analyze_code_problem(
         include_transcripts=include_transcripts,
         mode="code",
     )
-    return _send_analysis_message(text_input, content_text, content_parts, code_problem_prompt, mode="code")
-
-
-def analyze_repeat_problem(
-    text_input: str,
-    images_base64: List[str],
-    image_format: str,
-    desktop_audio_base64: str = "",
-    include_transcripts: bool = True,
-):
-    content_text, content_parts = _manual_content(
+    if repeat_match:
+        content_text, content_parts = _append_manual_text(
+            content_text,
+            content_parts,
+            _repeat_correction_context("code", repeat_match, bool(images_base64)),
+        )
+    return _send_analysis_message(
         text_input,
-        images_base64,
-        image_format,
-        "User's screens. Use them with the prior chat context for this follow-up:",
-        include_transcripts=include_transcripts,
-        mode="repeat",
+        content_text,
+        content_parts,
+        _analysis_instruction(code_problem_prompt, repeat_match, "code"),
+        mode="code",
+        current_input=text_input,
     )
-    return _send_analysis_message(text_input, content_text, content_parts, repeat_analysis_prompt, mode="repeat")
 
 
 def analyze_general_problem_no_thinking(
@@ -352,6 +412,7 @@ def analyze_general_problem_no_thinking(
     desktop_audio_base64: str = "",
     include_transcripts: bool = True,
 ):
+    repeat_match = find_repeated_exchange(text_input, "general")
     content_text, content_parts = _manual_content(
         text_input,
         images_base64,
@@ -360,7 +421,20 @@ def analyze_general_problem_no_thinking(
         include_transcripts=include_transcripts,
         mode="general",
     )
-    return _send_analysis_message(text_input, content_text, content_parts, general_analysis_prompt, mode="general")
+    if repeat_match:
+        content_text, content_parts = _append_manual_text(
+            content_text,
+            content_parts,
+            _repeat_correction_context("general", repeat_match, bool(images_base64)),
+        )
+    return _send_analysis_message(
+        text_input,
+        content_text,
+        content_parts,
+        _analysis_instruction(general_analysis_prompt, repeat_match, "general"),
+        mode="general",
+        current_input=text_input,
+    )
 
 
 def _generate_auto_answer_streaming(

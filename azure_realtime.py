@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import threading
+import time
 from datetime import datetime
 from urllib.parse import quote, urlparse
 
@@ -59,6 +60,39 @@ if SAMPLE_RATE != 24000:
     SAMPLE_RATE = 24000
 CHANNELS = parse_int_env("CHANNELS", 1)
 CHUNK_SIZE = parse_int_env("CHUNK_SIZE", 1024)
+VAD_SILENCE_MS = parse_int_env("AZURE_OPENAI_VAD_SILENCE_MS", 350)
+VAD_PREFIX_PADDING_MS = parse_int_env("AZURE_OPENAI_VAD_PREFIX_PADDING_MS", 300)
+LATENCY_LOG_ENABLED = os.getenv("AUTO_ANSWER_LATENCY_LOG", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parse_float_env(name, default):
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        parsed = float(value)
+        if parsed <= 0:
+            raise ValueError("must be positive")
+        return parsed
+    except ValueError:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Invalid {name}={value!r}; using {default}", flush=True)
+        return default
+
+
+VAD_THRESHOLD = parse_float_env("AZURE_OPENAI_VAD_THRESHOLD", 0.5)
+
+
+def latency_log(source_type, event, start_at=None, **fields):
+    if not LATENCY_LOG_ENABLED:
+        return
+
+    elapsed = ""
+    if start_at:
+        elapsed = f" +{(time.perf_counter() - start_at) * 1000:.0f}ms"
+    details = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+    if details:
+        details = f" {details}"
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] latency {source_type}.{event}{elapsed}{details}", flush=True)
 
 
 def _required_env(name, fallback_name=None):
@@ -131,6 +165,8 @@ class AudioStreamer:
         self.source_type = source_type
         self.session_handle = session_handle
         self._error_retries = 0
+        self._first_audio_enqueue_at = None
+        self._last_audio_enqueue_at = None
 
         try:
             self.api_key = _required_env("AZURE_OPENAI_TRANSCRIPTION_API_KEY", "AZURE_OPENAI_API_KEY")
@@ -183,9 +219,9 @@ class AudioStreamer:
                         },
                         "turn_detection": {
                             "type": "server_vad",
-                            "threshold": 0.5,
-                            "prefix_padding_ms": 300,
-                            "silence_duration_ms": 500,
+                            "threshold": VAD_THRESHOLD,
+                            "prefix_padding_ms": VAD_PREFIX_PADDING_MS,
+                            "silence_duration_ms": VAD_SILENCE_MS,
                             "create_response": False,
                         },
                     },
@@ -219,6 +255,7 @@ class AudioStreamer:
 
     async def process_responses(self):
         partials = {}
+        timings = {}
         while self.running:
             try:
                 async for raw_message in self.websocket:
@@ -227,15 +264,41 @@ class AudioStreamer:
                     item_id = event.get("item_id") or event.get("id") or "default"
 
                     if event_type == "conversation.item.input_audio_transcription.delta":
+                        if item_id not in timings:
+                            timings[item_id] = {
+                                "first_delta_at": time.perf_counter(),
+                                "last_audio_enqueue_at": self._last_audio_enqueue_at,
+                            }
+                            latency_log(
+                                self.source_type,
+                                "first_transcript_delta",
+                                self._last_audio_enqueue_at,
+                                item_id=item_id,
+                            )
                         partials[item_id] = partials.get(item_id, "") + event.get("delta", "")
                         continue
 
                     if event_type == "conversation.item.input_audio_transcription.completed":
                         transcript = event.get("transcript") or partials.pop(item_id, "")
                         transcript = transcript.strip()
+                        timing = timings.pop(item_id, {})
+                        completed_at = time.perf_counter()
+                        timing["completed_at"] = completed_at
+                        latency_log(
+                            self.source_type,
+                            "transcription_completed",
+                            timing.get("first_delta_at") or timing.get("last_audio_enqueue_at"),
+                            item_id=item_id,
+                            chars=len(transcript),
+                        )
                         if self.transcription_callback and transcript:
                             self.transcription_callback(
-                                {"transcription": transcript, "completed": True},
+                                {
+                                    "transcription": transcript,
+                                    "completed": True,
+                                    "item_id": item_id,
+                                    "timing": timing,
+                                },
                                 self.source_type,
                             )
                         continue
@@ -266,6 +329,12 @@ class AudioStreamer:
     def add_audio_chunk(self, audio_chunk):
         if not (self.loop and self.running and self.audio_queue) or self.loop.is_closed():
             return
+
+        enqueued_at = time.perf_counter()
+        self._last_audio_enqueue_at = enqueued_at
+        if self._first_audio_enqueue_at is None:
+            self._first_audio_enqueue_at = enqueued_at
+            latency_log(self.source_type, "first_audio_enqueue")
 
         def enqueue():
             try:

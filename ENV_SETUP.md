@@ -35,6 +35,14 @@ Edit `.env` and fill in your Azure OpenAI values. The app supports separate Azur
 | `SAMPLE_RATE` | PCM input sample rate in Hz. Values other than `24000` are normalized at runtime. | `24000` |
 | `CHANNELS` | Number of audio channels. Invalid values fall back safely. | `1` |
 | `CHUNK_SIZE` | Audio chunk size in samples. Invalid values fall back safely. | `1024` |
+| `AZURE_OPENAI_VAD_SILENCE_MS` | Server VAD silence window before finalizing a transcript turn. Lower is faster but can clip speech. | `350` |
+| `AZURE_OPENAI_VAD_THRESHOLD` | Server VAD speech detection threshold. | `0.5` |
+| `AZURE_OPENAI_VAD_PREFIX_PADDING_MS` | Audio padding retained before detected speech starts. | `300` |
+| `AUTO_ANSWER_STREAMING` | Stream auto-answer deltas to the overlay after final transcription. | `true` |
+| `AUTO_ANSWER_MAX_OUTPUT_TOKENS` | Maximum tokens for auto-answer responses. | `500` |
+| `AUTO_ANSWER_CONTEXT_TURNS` | Recent transcript turns included in compact auto-answer context. | `6` |
+| `AUTO_ANSWER_CONTEXT_EXCHANGES` | Recent AI exchanges included in compact auto-answer context. | `2` |
+| `AUTO_ANSWER_LATENCY_LOG` | Print timing logs for transcription, answer generation, and UI handoff. | `false` |
 
 ## Security
 

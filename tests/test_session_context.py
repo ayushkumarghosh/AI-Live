@@ -90,6 +90,26 @@ class SessionContextTests(unittest.TestCase):
         self.assertEqual(snapshot["transcript_summary"], "")
         self.assertIn("old answer 0", snapshot["exchange_summary"])
 
+    def test_auto_answer_context_is_compact_and_keeps_latest_question(self):
+        for idx in range(10):
+            session_context.record_transcript(f"turn {idx}", "desktop")
+        for idx in range(5):
+            session_context.record_exchange(
+                f"request {idx}",
+                {"user_query": f"request {idx}", "response": f"answer {idx}"},
+                "general",
+            )
+
+        full_context = session_context.build_context("turn 9", "auto", include_transcripts=True)
+        compact_context = session_context.build_auto_answer_context("turn 9", transcript_turns=3, exchange_count=1)
+
+        self.assertLess(len(compact_context), len(full_context))
+        self.assertIn("Latest interviewer question:\nturn 9", compact_context)
+        self.assertIn("turn 9", compact_context)
+        self.assertNotIn("turn 0", compact_context)
+        self.assertIn("answer 4", compact_context)
+        self.assertNotIn("answer 0", compact_context)
+
 
 if __name__ == "__main__":
     unittest.main()

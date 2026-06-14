@@ -2,12 +2,12 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from openai import OpenAI
 
 from env_loader import load_env_file
-from session_context import build_context, clear_session_context, record_exchange
+from session_context import build_auto_answer_context, build_context, clear_session_context, record_exchange
 
 
 load_env_file()
@@ -15,6 +15,8 @@ load_env_file()
 
 ANALYSIS_MODEL = os.getenv("AZURE_OPENAI_ANALYSIS_DEPLOYMENT", "gpt-5.5")
 AUTO_ANSWER_MODEL = os.getenv("AZURE_OPENAI_AUTO_ANSWER_DEPLOYMENT", "gpt-5.4-nano")
+AUTO_ANSWER_STREAMING = os.getenv("AUTO_ANSWER_STREAMING", "true").strip().lower() in {"1", "true", "yes", "on"}
+AUTO_ANSWER_LATENCY_LOG = os.getenv("AUTO_ANSWER_LATENCY_LOG", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 _analysis_client: Optional[OpenAI] = None
 _auto_answer_client: Optional[OpenAI] = None
@@ -48,6 +50,38 @@ auto_answer_prompt = (
 
 def timestamp():
     return f"[{datetime.now().strftime('%H:%M:%S')}]"
+
+
+def _int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError("must be positive")
+        return parsed
+    except ValueError:
+        print(f"{timestamp()} Invalid {name}={value!r}; using {default}", flush=True)
+        return default
+
+
+AUTO_ANSWER_MAX_OUTPUT_TOKENS = _int_env("AUTO_ANSWER_MAX_OUTPUT_TOKENS", 500)
+AUTO_ANSWER_CONTEXT_TURNS = _int_env("AUTO_ANSWER_CONTEXT_TURNS", 6)
+AUTO_ANSWER_CONTEXT_EXCHANGES = _int_env("AUTO_ANSWER_CONTEXT_EXCHANGES", 2)
+
+
+def _latency_log(event: str, start_at: Optional[float] = None, **fields):
+    if not AUTO_ANSWER_LATENCY_LOG:
+        return
+
+    elapsed = ""
+    if start_at is not None:
+        elapsed = f" +{(time.perf_counter() - start_at) * 1000:.0f}ms"
+    details = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+    if details:
+        details = f" {details}"
+    print(f"{timestamp()} latency auto_answer.{event}{elapsed}{details}", flush=True)
 
 
 def _required_env(name: str, fallback_name: Optional[str] = None) -> str:
@@ -201,6 +235,18 @@ def _responses_create_with_retries(client: OpenAI, **kwargs):
     raise last_exc
 
 
+def _extract_stream_delta(event: Any) -> str:
+    event_type = getattr(event, "type", None)
+    if not event_type and isinstance(event, dict):
+        event_type = event.get("type")
+    if event_type != "response.output_text.delta":
+        return ""
+
+    if isinstance(event, dict):
+        return str(event.get("delta") or "")
+    return str(getattr(event, "delta", "") or "")
+
+
 def _send_analysis_message(
     text_input: str,
     content_text: str,
@@ -317,19 +363,72 @@ def analyze_general_problem_no_thinking(
     return _send_analysis_message(text_input, content_text, content_parts, general_analysis_prompt, mode="general")
 
 
-def generate_auto_answer(transcript: str) -> str:
+def _generate_auto_answer_streaming(
+    context_text: str,
+    on_delta: Optional[Callable[[str, str], None]] = None,
+) -> str:
+    request_started_at = time.perf_counter()
+    _latency_log("request_started")
+
+    answer_parts = []
+    first_delta_at = None
+    with get_auto_answer_client().responses.stream(
+        model=AUTO_ANSWER_MODEL,
+        instructions=auto_answer_prompt,
+        input=context_text,
+        max_output_tokens=AUTO_ANSWER_MAX_OUTPUT_TOKENS,
+        reasoning={"effort": "none"},
+        text={"verbosity": "low"},
+    ) as stream:
+        for event in stream:
+            delta = _extract_stream_delta(event)
+            if not delta:
+                continue
+            if first_delta_at is None:
+                first_delta_at = time.perf_counter()
+                _latency_log("first_token", request_started_at)
+            answer_parts.append(delta)
+            if on_delta:
+                on_delta(delta, "".join(answer_parts))
+
+    answer = "".join(answer_parts).strip()
+    _latency_log("answer_complete", first_delta_at or request_started_at, chars=len(answer))
+    return answer
+
+
+def generate_auto_answer(transcript: str, on_delta: Optional[Callable[[str, str], None]] = None) -> str:
     transcript = transcript.strip()
     if not transcript:
         return ""
 
-    context_text = build_context(transcript, "auto", include_transcripts=True)
+    context_text = build_auto_answer_context(
+        transcript,
+        transcript_turns=AUTO_ANSWER_CONTEXT_TURNS,
+        exchange_count=AUTO_ANSWER_CONTEXT_EXCHANGES,
+    )
+
+    if AUTO_ANSWER_STREAMING:
+        try:
+            answer = _generate_auto_answer_streaming(context_text, on_delta=on_delta)
+            if answer:
+                record_exchange(context_text, {"user_query": transcript, "response": answer}, "auto")
+            return answer
+        except Exception as exc:
+            print(
+                f"{timestamp()} Azure OpenAI streaming auto-answer failed for deployment "
+                f"{AUTO_ANSWER_MODEL!r}; falling back to non-streaming request: {exc}",
+                flush=True,
+            )
+
+    request_started_at = time.perf_counter()
+    _latency_log("request_started")
     try:
         response = _responses_create_with_retries(
             get_auto_answer_client(),
             model=AUTO_ANSWER_MODEL,
             instructions=auto_answer_prompt,
             input=context_text,
-            max_output_tokens=1200,
+            max_output_tokens=AUTO_ANSWER_MAX_OUTPUT_TOKENS,
             reasoning={"effort": "none"},
             text={"verbosity": "low"},
         )
@@ -342,6 +441,9 @@ def generate_auto_answer(transcript: str) -> str:
         return ""
 
     answer = _extract_output_text(response).strip()
+    _latency_log("answer_complete", request_started_at, chars=len(answer))
+    if answer and on_delta:
+        on_delta(answer, answer)
     if answer:
         record_exchange(context_text, {"user_query": transcript, "response": answer}, "auto")
     return answer

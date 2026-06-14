@@ -192,6 +192,42 @@ def build_context(current_input: str, mode: str, include_transcripts: bool = Tru
     return "\n\n".join(sections)
 
 
+def build_auto_answer_context(current_input: str, transcript_turns: int = 6, exchange_count: int = 2) -> str:
+    current_input = str(current_input or "").strip()
+    transcript_turns = max(0, int(transcript_turns or 0))
+    exchange_count = max(0, int(exchange_count or 0))
+
+    with _lock:
+        transcripts = list(_transcripts[-transcript_turns:]) if transcript_turns else []
+        exchanges = list(_exchanges[-exchange_count:]) if exchange_count else []
+
+    sections = [
+        "Answer the latest interviewer question as a software engineering interview candidate.",
+    ]
+
+    if exchanges:
+        lines = []
+        for idx, exchange in enumerate(exchanges, start=1):
+            lines.append(
+                f"Prior answer {idx} ({exchange.mode}, {exchange.timestamp})\n"
+                f"Question: {_compact(exchange.user_query or exchange.user_content, 350)}\n"
+                f"Answer: {_compact(exchange.response, 450)}"
+            )
+        sections.append("Recent answer context:\n" + "\n\n".join(lines))
+
+    if transcripts:
+        lines = []
+        for turn in transcripts:
+            speaker = "Interviewer" if turn.source == "desktop" else "Me"
+            lines.append(f"{turn.timestamp} {speaker}: {_compact(turn.text, 700)}")
+        sections.append("Recent live transcript turns:\n" + "\n".join(lines))
+
+    if current_input:
+        sections.append(f"Latest interviewer question:\n{current_input}")
+
+    return "\n\n".join(sections)
+
+
 def clear_session_context() -> None:
     global _transcript_summary, _exchange_summary
     with _lock:

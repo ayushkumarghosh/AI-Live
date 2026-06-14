@@ -1,5 +1,6 @@
 import base64
 import io
+import os
 import sys
 import threading
 import time
@@ -42,6 +43,7 @@ transcription_manager = None
 RATE_LIMIT = 2.0
 last_request_time = 0.0
 api_semaphore = threading.Semaphore(1)
+AUTO_ANSWER_LATENCY_LOG = os.getenv("AUTO_ANSWER_LATENCY_LOG", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def timestamp():
@@ -251,28 +253,17 @@ def initialize_live_transcription():
         if overlay:
             _run_on_ui("update_transcription", text, source_type)
 
-    def update_interviewer_qa():
-        last_question = ""
-        last_answer = ""
+    def auto_answer_callback(question, answer, done):
+        if not overlay:
+            return
+        _run_on_ui("update_interviewer_qa", question, answer, done)
+        if AUTO_ANSWER_LATENCY_LOG:
+            print(f"{timestamp()} latency ui.auto_answer_update queued done={done}", flush=True)
 
-        while True:
-            try:
-                if overlay and transcription_manager:
-                    question = transcription_manager.last_desktop_query
-                    answer = transcription_manager.last_desktop_answer
-                    if question and answer and (question != last_question or answer != last_answer):
-                        _run_on_ui("update_interviewer_qa", question, answer)
-                        last_question = question
-                        last_answer = answer
-
-                time.sleep(1)
-            except Exception as exc:
-                print(f"{timestamp()} Error updating interviewer Q&A: {exc}", flush=True)
-                time.sleep(5)
-
-    threading.Thread(target=update_interviewer_qa, daemon=True).start()
-
-    transcription_manager = LiveTranscriptionManager(transcription_callback)
+    transcription_manager = LiveTranscriptionManager(
+        transcription_callback,
+        auto_answer_callback=auto_answer_callback,
+    )
     result = transcription_manager.start_transcription()
     print(f"{timestamp()} Live transcription {'started' if result else 'failed to start'}", flush=True)
     return result

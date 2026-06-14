@@ -10,6 +10,35 @@ class FakeResponse:
         self.output_text = output_text
 
 
+class FakeStream:
+    def __init__(self, events):
+        self.events = events
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def __iter__(self):
+        return iter(self.events)
+
+
+class FakeStreamingResponses:
+    def __init__(self, events):
+        self.events = events
+        self.kwargs = None
+
+    def stream(self, **kwargs):
+        self.kwargs = kwargs
+        return FakeStream(self.events)
+
+
+class FakeStreamingClient:
+    def __init__(self, events):
+        self.responses = FakeStreamingResponses(events)
+
+
 class ChatContextTests(unittest.TestCase):
     def setUp(self):
         session_context.clear_session_context()
@@ -76,6 +105,7 @@ class ChatContextTests(unittest.TestCase):
 
         with (
             patch.object(chat, "get_auto_answer_client", return_value=object()),
+            patch.object(chat, "AUTO_ANSWER_STREAMING", False),
             patch.object(chat, "_responses_create_with_retries", return_value=FakeResponse("Use chaining.")) as create,
         ):
             answer = chat.generate_auto_answer("How would you handle collisions?")
@@ -88,6 +118,32 @@ class ChatContextTests(unittest.TestCase):
         self.assertIn("How would you handle collisions?", request_text)
         self.assertEqual(snapshot["exchanges"][0]["mode"], "auto")
         self.assertEqual(snapshot["exchanges"][0]["response"], "Use chaining.")
+
+    def test_streaming_auto_answer_accumulates_deltas_and_records_once(self):
+        client = FakeStreamingClient(
+            [
+                {"type": "response.output_text.delta", "delta": "Use "},
+                {"type": "response.output_text.delta", "delta": "chaining."},
+            ]
+        )
+        partials = []
+
+        with (
+            patch.object(chat, "get_auto_answer_client", return_value=client),
+            patch.object(chat, "AUTO_ANSWER_STREAMING", True),
+        ):
+            answer = chat.generate_auto_answer(
+                "How would you handle collisions?",
+                on_delta=lambda _delta, partial: partials.append(partial),
+            )
+
+        snapshot = session_context.snapshot()
+
+        self.assertEqual(answer, "Use chaining.")
+        self.assertEqual(partials, ["Use ", "Use chaining."])
+        self.assertEqual(len(snapshot["exchanges"]), 1)
+        self.assertEqual(snapshot["exchanges"][0]["response"], "Use chaining.")
+        self.assertEqual(client.responses.kwargs["max_output_tokens"], chat.AUTO_ANSWER_MAX_OUTPUT_TOKENS)
 
 
 if __name__ == "__main__":

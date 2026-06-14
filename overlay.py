@@ -1,4 +1,5 @@
 import sys, ctypes, json
+import html
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import pyqtSignal as Signal, pyqtSlot as Slot
 from datetime import datetime
@@ -216,6 +217,9 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Store the last interviewer question and suggested answer
         self.last_interviewer_question = ""
         self.last_suggested_answer = ""
+        self._active_auto_answer_question = ""
+        self._active_auto_answer_user_index = None
+        self._active_auto_answer_answer_index = None
 
         # Flags for dragging and resizing.
         self.dragging = False
@@ -1209,10 +1213,27 @@ class DraggableOverlay(QtWidgets.QWidget):
         # Use signal to update the UI thread-safely
         self.update_conversation_signal.emit(conversation_text)
 
+    def _render_conversation_history_basic(self):
+        conversation_text = ""
+        for entry in self.conversation_history:
+            role_label = "You" if entry["role"] == "user" else "AI"
+            role_color = "#4CAF50" if entry["role"] == "user" else "#2196F3"
+            content = html.escape(str(entry.get("content", ""))).replace("\n", "<br>")
+            conversation_text += (
+                f"<div style='margin-bottom: 0px;'>"
+                f"<span style='color: {role_color}; font-weight: bold; font-size: 14px;'>{role_label}:</span> "
+                f"<div style='margin-bottom: 0px; line-height: 1.2;'>{content}</div>"
+                f"</div>"
+            )
+        self.update_conversation_signal.emit(conversation_text)
+
     @Slot(str)
     def clear_conversation_display(self, message: str = ""):
         """Clear conversation history without adding synthetic chat turns."""
         self.conversation_history = []
+        self._active_auto_answer_question = ""
+        self._active_auto_answer_user_index = None
+        self._active_auto_answer_answer_index = None
         if message:
             self.conversation_text.setHtml(
                 f"<div style='color: #FFA500; text-align: center; margin: 10px 0;'>{message}</div>"
@@ -1801,8 +1822,8 @@ class DraggableOverlay(QtWidgets.QWidget):
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error removing suggestion: {e}", flush=True)
 
-    @Slot(str, str)
-    def update_interviewer_qa(self, question, answer):
+    @Slot(str, str, bool)
+    def update_interviewer_qa(self, question, answer, done):
         """Update the stored interviewer Q&A and update the display if needed"""
         # Make sure we have non-empty content
         if not question or not answer:
@@ -1820,11 +1841,32 @@ class DraggableOverlay(QtWidgets.QWidget):
         if self.show_interviewer_suggestions:
             # If auto-answer is on, display the suggestion
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Auto-answering interviewer question", flush=True)
-            suggestion_response = {
-                "user_query": question,
-                "response": answer
-            }
-            self.update_response(suggestion_response)
+            user_index = self._active_auto_answer_user_index
+            answer_index = self._active_auto_answer_answer_index
+            has_active_entry = (
+                self._active_auto_answer_question == question
+                and user_index is not None
+                and answer_index is not None
+                and user_index < len(self.conversation_history)
+                and answer_index < len(self.conversation_history)
+            )
+
+            if has_active_entry:
+                self.conversation_history[user_index] = {"role": "user", "content": question}
+                self.conversation_history[answer_index] = {"role": "assistant", "content": answer}
+                self._render_conversation_history_basic()
+            else:
+                self._active_auto_answer_question = question
+                self._active_auto_answer_user_index = len(self.conversation_history)
+                self.conversation_history.append({"role": "user", "content": question})
+                self._active_auto_answer_answer_index = len(self.conversation_history)
+                self.conversation_history.append({"role": "assistant", "content": answer})
+                self._render_conversation_history_basic()
+
+            if done:
+                self._active_auto_answer_question = ""
+                self._active_auto_answer_user_index = None
+                self._active_auto_answer_answer_index = None
         else:
             # Auto-answer is disabled, just store the Q&A but don't display
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Not auto-answering (feature disabled)", flush=True)

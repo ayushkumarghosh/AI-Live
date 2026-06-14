@@ -1,5 +1,6 @@
 import threading
 import queue
+import time
 from datetime import datetime
 import numpy as np
 
@@ -21,6 +22,7 @@ import soundcard as sc
 import warnings
 from azure_realtime import AudioStreamer
 from azure_realtime import CHUNK_SIZE as AZURE_CHUNK_SIZE
+from azure_realtime import LATENCY_LOG_ENABLED as AUTO_ANSWER_LATENCY_LOG
 from azure_realtime import SAMPLE_RATE as AZURE_SAMPLE_RATE
 from chat import generate_auto_answer
 
@@ -37,8 +39,21 @@ FORMAT = pyaudio.paInt16 if pyaudio else None
 RATE = AZURE_SAMPLE_RATE
 CHUNK = AZURE_CHUNK_SIZE
 
+
+def latency_log(event, start_at=None, **fields):
+    if not AUTO_ANSWER_LATENCY_LOG:
+        return
+
+    elapsed = ""
+    if start_at is not None:
+        elapsed = f" +{(time.perf_counter() - start_at) * 1000:.0f}ms"
+    details = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+    if details:
+        details = f" {details}"
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] latency live_transcription.{event}{elapsed}{details}", flush=True)
+
 class LiveTranscriptionManager:
-    def __init__(self, transcription_callback=None):
+    def __init__(self, transcription_callback=None, auto_answer_callback=None):
         """
         Initialize the transcription manager
         
@@ -46,6 +61,7 @@ class LiveTranscriptionManager:
             transcription_callback: Function to call with transcription results (text, source_type)
         """
         self.transcription_callback = transcription_callback
+        self.auto_answer_callback = auto_answer_callback
         
         # Create separate streamers for mic and desktop
         self.mic_streamer = None
@@ -54,6 +70,8 @@ class LiveTranscriptionManager:
         # Store the last desktop transcription and suggested answer
         self.last_desktop_query = ""
         self.last_desktop_answer = ""
+        self.last_desktop_turn_id = ""
+        self._state_lock = threading.RLock()
         
         # Create flags to control audio capture
         self.mic_capture_running = False
@@ -170,7 +188,10 @@ class LiveTranscriptionManager:
                 
                 # Store the latest transcript immediately for UI display.
                 if text:
-                    self.last_desktop_query = text
+                    with self._state_lock:
+                        self.last_desktop_query = text
+                        self.last_desktop_turn_id = response_data.get("item_id", "")
+                        self.last_desktop_answer = ""
                 
                 # Call the original callback with the transcription text
                 if self.transcription_callback and text:
@@ -179,7 +200,7 @@ class LiveTranscriptionManager:
                 if text and completed:
                     threading.Thread(
                         target=self._generate_desktop_answer,
-                        args=(text,),
+                        args=(text, response_data.get("item_id", ""), response_data.get("timing", {})),
                         daemon=True,
                     ).start()
             
@@ -350,12 +371,49 @@ class LiveTranscriptionManager:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] PyAudio fallback failed: {e}")
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio capture disabled.")
 
-    def _generate_desktop_answer(self, transcript):
+    def _is_current_desktop_turn(self, transcript, turn_id):
+        with self._state_lock:
+            if self.last_desktop_query != transcript:
+                return False
+            if turn_id and self.last_desktop_turn_id and self.last_desktop_turn_id != turn_id:
+                return False
+            return True
+
+    def _publish_desktop_answer(self, transcript, answer, done, turn_id):
+        if not answer or not self._is_current_desktop_turn(transcript, turn_id):
+            return
+        with self._state_lock:
+            self.last_desktop_answer = answer
+        if self.auto_answer_callback:
+            self.auto_answer_callback(transcript, answer, done)
+
+    def _generate_desktop_answer(self, transcript, turn_id="", timing=None):
         """Generate an auto-answer for a completed desktop transcript."""
+        timing = timing or {}
+        request_started_at = time.perf_counter()
+        latency_log(
+            "auto_answer_started",
+            timing.get("completed_at"),
+            item_id=turn_id,
+            chars=len(transcript),
+        )
+
+        first_delta_seen = False
+
+        def handle_delta(_delta, partial_answer):
+            nonlocal first_delta_seen
+            if not self._is_current_desktop_turn(transcript, turn_id):
+                return
+            if not first_delta_seen:
+                first_delta_seen = True
+                latency_log("first_answer_token", request_started_at, item_id=turn_id)
+            self._publish_desktop_answer(transcript, partial_answer, False, turn_id)
+
         try:
-            answer = generate_auto_answer(transcript)
-            if answer and self.last_desktop_query == transcript:
-                self.last_desktop_answer = answer
+            answer = generate_auto_answer(transcript, on_delta=handle_delta)
+            if answer:
+                latency_log("auto_answer_complete", request_started_at, item_id=turn_id, chars=len(answer))
+                self._publish_desktop_answer(transcript, answer, True, turn_id)
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Auto-answer generation failed: {e}", flush=True)
     

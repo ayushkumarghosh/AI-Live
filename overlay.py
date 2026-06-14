@@ -7,6 +7,7 @@ import queue
 import re
 import platform
 import os
+from pathlib import Path
 
 
 def configure_console_encoding():
@@ -67,58 +68,16 @@ def _rgba(hex_color, alpha=255):
     return color
 
 
-SVG_ICONS = {
-    "text": (
-        '<path d="M4 6.5h16a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H8l-4 3v-3H4A1.5 1.5 0 0 1 2.5 16V8A1.5 1.5 0 0 1 4 6.5Z"/>'
-        '<path d="M7.5 10h9M7.5 13.5h6"/>'
-    ),
-    "camera": (
-        '<path d="M4.5 8.5h3l1.5-2h6l1.5 2h3A2.5 2.5 0 0 1 22 11v6.5a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 2 17.5V11a2.5 2.5 0 0 1 2.5-2.5Z"/>'
-        '<circle cx="12" cy="14" r="3.4"/>'
-    ),
-    "trash": (
-        '<path d="M4 6.5h16"/>'
-        '<path d="M9 6.5V4.5h6v2"/>'
-        '<path d="M7 9l.8 10.5A2 2 0 0 0 9.8 21h4.4a2 2 0 0 0 2-1.5L17 9"/>'
-        '<path d="M10.5 11.5v6M13.5 11.5v6"/>'
-    ),
-    "code": '<path d="m8.5 7-5 5 5 5M15.5 7l5 5-5 5M13 4.5 11 19.5"/>',
-    "document": (
-        '<path d="M6.5 3.5h7L18.5 8v12.5h-12Z"/>'
-        '<path d="M13.5 3.5V8h5"/>'
-        '<path d="M9 12h6M9 15h6M9 18h3.5"/>'
-    ),
-    "repeat": (
-        '<path d="M20 7.5h-7.5a5.5 5.5 0 0 0-5.2 3.7"/>'
-        '<path d="m17 4.5 3 3-3 3"/>'
-        '<path d="M4 16.5h7.5a5.5 5.5 0 0 0 5.2-3.7"/>'
-        '<path d="m7 19.5-3-3 3-3"/>'
-    ),
-    "transcript": (
-        '<path d="M7 3.5h10A2.5 2.5 0 0 1 19.5 6v12A2.5 2.5 0 0 1 17 20.5H7A2.5 2.5 0 0 1 4.5 18V6A2.5 2.5 0 0 1 7 3.5Z"/>'
-        '<path d="M8.5 8h7M8.5 12h7M8.5 16h4"/>'
-    ),
-    "auto": (
-        '<path d="M13 3.5 14.8 8l4.7 1.8-4.7 1.8L13 16l-1.8-4.4-4.7-1.8L11.2 8Z"/>'
-        '<path d="M5.5 15.5 6.4 18l2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9Z"/>'
-    ),
-    "more": '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
-    "close": '<path d="M6 6 18 18M18 6 6 18"/>',
-    "fallback": '<circle cx="12" cy="12" r="7"/>',
-}
+ICON_DIR = Path(__file__).resolve().parent / "assets" / "icons"
 
 
 def _icon(kind, color=None, size=22):
-    """Create crisp SVG-backed line icons without external asset files."""
+    """Create crisp SVG-backed line icons from standalone SVG files."""
     color = color or UI["muted"]
-    body = SVG_ICONS.get(kind, SVG_ICONS["fallback"])
-    svg = f"""
-        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
-             viewBox="0 0 24 24" fill="none" stroke="{color}"
-             stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-            {body}
-        </svg>
-    """
+    icon_path = ICON_DIR / f"{kind}.svg"
+    if not icon_path.is_file():
+        icon_path = ICON_DIR / "fallback.svg"
+    svg = icon_path.read_text(encoding="utf-8").replace("currentColor", color)
     renderer = QtSvg.QSvgRenderer(QtCore.QByteArray(svg.encode("utf-8")))
     render_size = max(size * 4, 72)
     pixmap = QtGui.QPixmap(render_size, render_size)
@@ -534,7 +493,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         title_layout.addWidget(self.interviewer_suggestion_button)
 
         self.show_transcription_panel_button = self._create_toolbar_button(
-            "transcript", "Hide live transcription", "accent", checkable=True, checked=True
+            "transcript_panel", "Hide live transcription", "accent", checkable=True, checked=True
         )
         self.show_transcription_panel_button.toggled.connect(self.toggle_transcription_panel)
         title_layout.addWidget(self.show_transcription_panel_button)

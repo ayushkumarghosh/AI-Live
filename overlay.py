@@ -348,55 +348,163 @@ def apply_private_no_focus_window(widget):
     apply_no_activate(widget.winId())
 
 
-def _is_copy_action(action):
-    text = action.text().replace("&", "").split("\t", 1)[0].strip().lower()
-    return text == "copy"
+class PrivateTextContextPopup(QtWidgets.QFrame):
+    def __init__(self, text_edit):
+        super().__init__(None)
+        self.text_edit = text_edit
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.FramelessWindowHint |
+            QtCore.Qt.WindowType.Tool |
+            QtCore.Qt.WindowType.WindowStaysOnTopHint |
+            QtCore.Qt.WindowType.WindowDoesNotAcceptFocus |
+            QtCore.Qt.WindowType.NoDropShadowWindowHint
+        )
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.setObjectName("PrivateTextContextPopup")
+        self.setStyleSheet(f"""
+            QFrame#PrivateTextContextPopup {{
+                background-color: rgba(14, 19, 24, 242);
+                border: 1px solid {UI["border_strong"]};
+                border-radius: 6px;
+            }}
+            QToolButton {{
+                background-color: transparent;
+                color: {UI["text"]};
+                border: none;
+                border-radius: 4px;
+                padding: 6px 10px;
+                text-align: left;
+                font-family: {UI["font"]};
+                font-size: 13px;
+                font-weight: 500;
+            }}
+            QToolButton:hover {{
+                background-color: rgba(255, 255, 255, 24);
+            }}
+            QToolButton:pressed {{
+                background-color: rgba(255, 255, 255, 36);
+            }}
+            QToolButton:disabled {{
+                color: {UI["muted_dim"]};
+            }}
+        """)
 
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(1)
+        self._build_actions(layout)
 
-def _replace_copy_action(menu, text_edit):
-    selected_text = _selected_text_for_clipboard(text_edit)
-    for action in menu.actions():
-        if not _is_copy_action(action):
-            continue
+        self._outside_click_timer = QtCore.QTimer(self)
+        self._outside_click_timer.setInterval(80)
+        self._outside_click_timer.timeout.connect(self._close_on_outside_mouse_press)
 
-        copy_action = QtGui.QAction(action.icon(), action.text(), menu)
-        copy_action.setShortcut(action.shortcut())
-        copy_action.setShortcutVisibleInContextMenu(action.isShortcutVisibleInContextMenu())
-        copy_action.setEnabled(bool(selected_text))
-        copy_action.triggered.connect(lambda _checked=False: copy_selected_text(text_edit))
-        menu.insertAction(action, copy_action)
-        menu.removeAction(action)
-        action.deleteLater()
-        return
+    def _build_actions(self, layout):
+        selected = bool(_selected_text_for_clipboard(self.text_edit))
+        read_only = getattr(self.text_edit, "isReadOnly", lambda: True)()
+        has_text = bool(self.text_edit.toPlainText())
 
-    copy_action = menu.addAction("Copy")
-    copy_action.setEnabled(bool(selected_text))
-    copy_action.triggered.connect(lambda _checked=False: copy_selected_text(text_edit))
+        if not read_only:
+            self._add_action(layout, "Cut", selected, self._cut)
+            self._add_action(layout, "Copy", selected, self._copy)
+            self._add_action(layout, "Paste", bool(QtWidgets.QApplication.clipboard().text()), self._paste)
+            self._add_action(layout, "Delete", selected, self._delete)
+        else:
+            self._add_action(layout, "Copy", selected, self._copy)
+
+        self._add_action(layout, "Select All", has_text, self._select_all)
+
+    def _add_action(self, layout, label, enabled, callback):
+        button = QtWidgets.QToolButton(self)
+        button.setText(label)
+        button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+        button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        button.setMinimumWidth(132)
+        button.setEnabled(enabled)
+        button.clicked.connect(callback)
+        layout.addWidget(button)
+
+    def _copy(self):
+        copy_selected_text(self.text_edit)
+        self.close()
+
+    def _cut(self):
+        if copy_selected_text(self.text_edit):
+            self.text_edit.textCursor().removeSelectedText()
+        self.close()
+
+    def _paste(self):
+        self.text_edit.paste()
+        self.close()
+
+    def _delete(self):
+        self.text_edit.textCursor().removeSelectedText()
+        self.close()
+
+    def _select_all(self):
+        self.text_edit.selectAll()
+        self.close()
+
+    def _close_on_outside_mouse_press(self):
+        if not self.isVisible():
+            return
+        buttons = QtGui.QGuiApplication.mouseButtons()
+        if buttons == QtCore.Qt.MouseButton.NoButton:
+            return
+        if not self.geometry().contains(QtGui.QCursor.pos()):
+            self.close()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        apply_private_no_focus_window(self)
+        self._outside_click_timer.start()
+        QtCore.QTimer.singleShot(0, lambda: apply_private_no_focus_window(self) if self else None)
+
+    def closeEvent(self, event):
+        self._outside_click_timer.stop()
+        app = QtWidgets.QApplication.instance()
+        if app:
+            app.removeEventFilter(self)
+        if getattr(self.text_edit, "_private_context_menu", None) is self:
+            self.text_edit._private_context_menu = None
+        super().closeEvent(event)
+        self.deleteLater()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QtCore.QEvent.Type.MouseButtonPress:
+            global_pos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else QtGui.QCursor.pos()
+            if not self.geometry().contains(global_pos):
+                self.close()
+        elif event.type() == QtCore.QEvent.Type.KeyPress and event.key() == QtCore.Qt.Key.Key_Escape:
+            self.close()
+        return super().eventFilter(watched, event)
+
+    def show_at(self, global_pos):
+        self.adjustSize()
+        screen = QtGui.QGuiApplication.screenAt(global_pos) or QtGui.QGuiApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            x = min(max(global_pos.x(), available.left()), available.right() - self.width())
+            y = min(max(global_pos.y(), available.top()), available.bottom() - self.height())
+            global_pos = QtCore.QPoint(x, y)
+        self.move(global_pos)
+        self.show()
+        apply_private_no_focus_window(self)
+        app = QtWidgets.QApplication.instance()
+        if app:
+            app.installEventFilter(self)
 
 
 def show_private_text_context_menu(text_edit, event):
-    menu = text_edit.createStandardContextMenu(event.pos())
-    if menu is None:
-        event.accept()
-        return
+    existing = getattr(text_edit, "_private_context_menu", None)
+    if existing:
+        existing.close()
 
-    _replace_copy_action(menu, text_edit)
-    apply_private_no_focus_window(menu)
-
-    def refresh_menu_window_settings():
-        if menu:
-            apply_private_no_focus_window(menu)
-
-    def cleanup_menu():
-        if getattr(text_edit, "_private_context_menu", None) is menu:
-            text_edit._private_context_menu = None
-        menu.deleteLater()
-
-    text_edit._private_context_menu = menu
-    menu.aboutToShow.connect(refresh_menu_window_settings)
-    menu.aboutToHide.connect(cleanup_menu)
-    menu.popup(event.globalPos())
-    QtCore.QTimer.singleShot(0, refresh_menu_window_settings)
+    popup = PrivateTextContextPopup(text_edit)
+    text_edit._private_context_menu = popup
+    popup.show_at(event.globalPos())
     event.accept()
 
 

@@ -5,6 +5,40 @@ from live_transcription import LiveTranscriptionManager
 
 
 class LiveTranscriptionManagerTests(unittest.TestCase):
+    def test_mic_transcript_callback_forwards_to_shared_callback(self):
+        forwarded = []
+        created_streamers = []
+
+        class FakeAudioStreamer:
+            def __init__(self, transcription_callback=None, **_kwargs):
+                self.transcription_callback = transcription_callback
+                self.running = False
+                created_streamers.append(self)
+
+            def start(self):
+                self.running = True
+                return True
+
+        class FakeThread:
+            def __init__(self, **_kwargs):
+                pass
+
+            def start(self):
+                pass
+
+        manager = LiveTranscriptionManager(transcription_callback=lambda *args: forwarded.append(args))
+
+        with (
+            patch("live_transcription.AudioStreamer", FakeAudioStreamer),
+            patch("live_transcription.threading.Thread", FakeThread),
+        ):
+            self.assertTrue(manager.start_mic_transcription())
+
+        created_streamers[0].transcription_callback({"transcription": "my spoken answer"}, "mic")
+
+        self.assertEqual(forwarded, [("my spoken answer", "mic")])
+        self.assertTrue(created_streamers[0].running)
+
     def test_stale_auto_answer_is_not_published(self):
         published = []
         manager = LiveTranscriptionManager(auto_answer_callback=lambda *args: published.append(args))

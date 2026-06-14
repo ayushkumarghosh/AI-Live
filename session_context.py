@@ -265,6 +265,10 @@ def build_auto_answer_context(current_input: str, transcript_turns: int = 6, exc
 
     sections = [
         "Answer the latest interviewer question as a software engineering interview candidate.",
+        (
+            "Speaker labels matter: Interviewer turns are questions or follow-ups from desktop audio; "
+            "Interviewee/Candidate turns are microphone transcriptions of what the candidate already said."
+        ),
     ]
 
     if exchanges:
@@ -280,7 +284,7 @@ def build_auto_answer_context(current_input: str, transcript_turns: int = 6, exc
     if transcripts:
         lines = []
         for turn in transcripts:
-            speaker = "Interviewer" if turn.source == "desktop" else "Me"
+            speaker = "Interviewer" if turn.source == "desktop" else "Interviewee/Candidate"
             lines.append(f"{turn.timestamp} {speaker}: {_compact(turn.text, 700)}")
         sections.append("Recent live transcript turns:\n" + "\n".join(lines))
 

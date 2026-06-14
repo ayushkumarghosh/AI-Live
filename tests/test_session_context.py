@@ -157,6 +157,20 @@ class SessionContextTests(unittest.TestCase):
         self.assertIn("answer 4", compact_context)
         self.assertNotIn("answer 0", compact_context)
 
+    def test_auto_answer_context_labels_mic_as_interviewee_candidate(self):
+        session_context.record_transcript("I explained hashing first.", "mic")
+        session_context.record_transcript("How do you handle collisions?", "desktop")
+
+        context = session_context.build_auto_answer_context(
+            "How do you handle collisions?",
+            transcript_turns=2,
+            exchange_count=0,
+        )
+
+        self.assertIn("Interviewee/Candidate: I explained hashing first.", context)
+        self.assertIn("Interviewer: How do you handle collisions?", context)
+        self.assertIn("microphone transcriptions of what the candidate already said", context)
+
 
 if __name__ == "__main__":
     unittest.main()

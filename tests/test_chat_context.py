@@ -187,7 +187,10 @@ class ChatContextTests(unittest.TestCase):
         self.assertEqual(answer, "Use chaining.")
         self.assertIn("My answer mentioned hashing.", request_text)
         self.assertIn("How would you handle collisions?", request_text)
+        self.assertIn("Interviewee/Candidate: My answer mentioned hashing.", request_text)
         self.assertIn(chat.candidate_answer_style_prompt, instructions)
+        self.assertIn("microphone audio is the Interviewee/Candidate", instructions)
+        self.assertIn("not as questions to answer", instructions)
         self.assertEqual(snapshot["exchanges"][0]["mode"], "auto")
         self.assertEqual(snapshot["exchanges"][0]["response"], "Use chaining.")
 

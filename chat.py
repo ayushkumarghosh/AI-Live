@@ -52,7 +52,12 @@ general_analysis_prompt = (
 auto_answer_prompt = (
     "You are helping a software engineering interview candidate. Given the latest "
     "interviewer transcript, write a concise answer the candidate could say out loud. "
-    "Do not mention that you are an AI assistant.\n\n"
+    "Recent transcript context may include both speakers: desktop audio is the "
+    "Interviewer, and microphone audio is the Interviewee/Candidate. Treat microphone "
+    "transcriptions as what the candidate already said, not as questions to answer. "
+    "Use them to understand the candidate's prior answer, then prepare the answer for "
+    "the next/latest question or follow-up asked by the interviewer. Do not mention "
+    "that you are an AI assistant.\n\n"
     + candidate_answer_style_prompt
 )
 

@@ -1,6 +1,8 @@
 import threading
 import queue
 import time
+import sys
+import collections.abc
 from datetime import datetime
 import numpy as np
 
@@ -19,6 +21,7 @@ def _fromstring_compat(data, dtype=float, count=-1, sep="", **kwargs):
 np.fromstring = _fromstring_compat
 
 import soundcard as sc
+import soundcard.mediafoundation as _sc_mediafoundation
 import warnings
 from azure_realtime import AudioStreamer
 from azure_realtime import CHUNK_SIZE as AZURE_CHUNK_SIZE
@@ -33,6 +36,110 @@ except ImportError:
 
 # Filter out SoundcardRuntimeWarning about data discontinuity
 warnings.filterwarnings("ignore", message="data discontinuity in recording", category=sc.mediafoundation.SoundcardRuntimeWarning)
+
+
+def _patch_soundcard_waveformatex_recorder():
+    if not sys.platform.startswith("win"):
+        return
+
+    try:
+        recorder_cls = _sc_mediafoundation._Recorder
+        original_init = recorder_cls.__init__
+        if getattr(original_init, "_ai_live_waveformatex_patch", False):
+            return
+
+        ffi = _sc_mediafoundation._ffi
+        com = _sc_mediafoundation._com
+        ole32 = _sc_mediafoundation._ole32
+
+        def patched_init(self, ptr, samplerate, channels, blocksize, isloopback, exclusive_mode=False):
+            self._ptr = ptr
+
+            if isinstance(channels, int):
+                self.channelmap = list(range(channels))
+            elif isinstance(channels, collections.abc.Iterable):
+                self.channelmap = channels
+            else:
+                raise TypeError("channels must be iterable or integer")
+
+            if list(range(len(set(self.channelmap)))) != sorted(list(set(self.channelmap))):
+                raise TypeError(
+                    "Due to limitations of WASAPI, channel maps on Windows "
+                    "must be a combination of `range(0, x)`."
+                )
+
+            if blocksize is None:
+                blocksize = self.deviceperiod[0] * samplerate
+
+            pp_mix_format = ffi.new("WAVEFORMATEXTENSIBLE**")
+            hr = self._ptr[0][0].lpVtbl.GetMixFormat(self._ptr[0], pp_mix_format)
+            com.check_error(hr)
+
+            fmt = pp_mix_format[0][0].Format
+            is_extensible_float = (
+                fmt.wFormatTag == 0xFFFE
+                and fmt.cbSize == 22
+                and pp_mix_format[0][0].SubFormat.Data1 == 0x100000
+                and pp_mix_format[0][0].SubFormat.Data2 == 0x0080
+                and pp_mix_format[0][0].SubFormat.Data3 == 0xAA00
+                and [int(x) for x in pp_mix_format[0][0].SubFormat.Data4[0:4]]
+                == [0, 56, 155, 113]
+            )
+            is_waveformatex_float = fmt.wFormatTag == 3 and fmt.cbSize == 0 and fmt.wBitsPerSample == 32
+            if not (is_extensible_float or is_waveformatex_float):
+                format_details = f"tag={fmt.wFormatTag} cbSize={fmt.cbSize} bits={fmt.wBitsPerSample}"
+                ole32.CoTaskMemFree(pp_mix_format[0])
+                raise AssertionError(
+                    f"Unsupported WASAPI microphone mix format: {format_details}"
+                )
+
+            channels = len(set(self.channelmap))
+            fmt.nChannels = channels
+            fmt.nSamplesPerSec = int(samplerate)
+            fmt.nAvgBytesPerSec = int(samplerate) * channels * 4
+            fmt.nBlockAlign = channels * 4
+            fmt.wBitsPerSample = 32
+            if is_extensible_float:
+                pp_mix_format[0][0].Samples = dict(wValidBitsPerSample=32)
+
+            sharemode = (
+                ole32.AUDCLNT_SHAREMODE_EXCLUSIVE
+                if exclusive_mode
+                else ole32.AUDCLNT_SHAREMODE_SHARED
+            )
+            streamflags = 0x00100000 | 0x80000000 | 0x08000000 | 0x00080000
+            if isloopback:
+                streamflags |= 0x00020000
+            bufferduration = int(blocksize / samplerate * 10000000)
+
+            try:
+                hr = self._ptr[0][0].lpVtbl.Initialize(
+                    self._ptr[0],
+                    sharemode,
+                    streamflags,
+                    bufferduration,
+                    0,
+                    pp_mix_format[0],
+                    ffi.NULL,
+                )
+                com.check_error(hr)
+            finally:
+                ole32.CoTaskMemFree(pp_mix_format[0])
+
+            self.samplerate = samplerate
+            self._idle_start_time = None
+
+        patched_init._ai_live_waveformatex_patch = True
+        patched_init._ai_live_original_init = original_init
+        recorder_cls.__init__ = patched_init
+    except Exception as exc:
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] Could not apply soundcard microphone compatibility patch: {exc}",
+            flush=True,
+        )
+
+
+_patch_soundcard_waveformatex_recorder()
 
 # Audio parameters
 FORMAT = pyaudio.paInt16 if pyaudio else None
@@ -51,6 +158,19 @@ def latency_log(event, start_at=None, **fields):
     if details:
         details = f" {details}"
     print(f"[{datetime.now().strftime('%H:%M:%S')}] latency live_transcription.{event}{elapsed}{details}", flush=True)
+
+
+def _source_name(source):
+    return getattr(source, "name", "Unknown audio device")
+
+
+def _float_audio_to_pcm16_bytes(audio_data):
+    if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
+        audio_data = np.mean(audio_data, axis=1)
+
+    audio_data = np.asarray(audio_data, dtype=np.float32).flatten()
+    audio_data = np.clip(audio_data, -1.0, 1.0)
+    return (audio_data * 32767).astype(np.int16).tobytes()
 
 class LiveTranscriptionManager:
     def __init__(self, transcription_callback=None, auto_answer_callback=None):
@@ -111,6 +231,10 @@ class LiveTranscriptionManager:
                 chunk_size=CHUNK,
                 source_type="mic"
             )
+
+            if not self.mic_streamer.start():
+                self.mic_streamer = None
+                return False
             
             # Start microphone capture in a separate thread
             self.mic_capture_running = True
@@ -119,63 +243,93 @@ class LiveTranscriptionManager:
                 daemon=True
             )
             mic_thread.start()
-            
-            # Start the mic streamer
-            return self.mic_streamer.start()
+
+            return True
         return False
-        
+
+    def _microphone_candidates(self):
+        candidates = []
+        seen_ids = set()
+
+        def add_candidate(mic):
+            if mic is None or getattr(mic, "isloopback", False):
+                return
+            mic_id = getattr(mic, "id", None) or _source_name(mic)
+            if mic_id in seen_ids:
+                return
+            seen_ids.add(mic_id)
+            candidates.append(mic)
+
+        try:
+            add_candidate(sc.default_microphone())
+        except Exception as exc:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Could not read default microphone: {exc}", flush=True)
+
+        try:
+            for mic in sc.all_microphones(include_loopback=False):
+                add_candidate(mic)
+        except Exception as exc:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Could not enumerate microphones: {exc}", flush=True)
+
+        return candidates
+
     def capture_mic_audio(self):
         """Capture microphone audio and feed it to the mic streamer"""
-        try:
-            # Get the default microphone
-            mic = sc.default_microphone()
-            
-            if mic is None:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] No microphone found. Mic transcription disabled.")
+        microphones = self._microphone_candidates()
+
+        if not microphones:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] No microphone found. Mic transcription disabled.", flush=True)
+            return
+
+        for mic in microphones:
+            if not self.mic_capture_running:
                 return
-                
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Using microphone: {mic.name}")
-            
-            # Use a slightly larger blocksize to reduce discontinuities
-            adjusted_blocksize = CHUNK * 2
-            
-            # Record in a loop until mic_capture_running is False
+            if self._capture_single_microphone(mic):
+                return
+
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] No usable microphone could be opened. Mic transcription disabled.",
+            flush=True,
+        )
+
+    def _capture_single_microphone(self, mic):
+        """Capture one microphone until stopped or until that device fails."""
+        mic_name = _source_name(mic)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Trying microphone: {mic_name}", flush=True)
+
+        adjusted_blocksize = CHUNK * 2
+
+        try:
             with mic.recorder(samplerate=RATE, channels=1, blocksize=adjusted_blocksize) as recorder:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting microphone recording")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Starting microphone recording: {mic_name}", flush=True)
                 consecutive_errors = 0
                 
                 while self.mic_capture_running:
                     try:
                         # Record audio block with try-except to handle discontinuities
                         audio_data = recorder.record(CHUNK)
-                        
-                        # Handle potential multi-dimensional data
-                        if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
-                            audio_data = np.mean(audio_data, axis=1)
-                        
-                        # Make sure it's a flat array
-                        audio_data = audio_data.flatten()
-                        
-                        # Convert to int16 - directly scaling to int16 range
-                        int16_data = np.int16(audio_data * 32767)
-                        
-                        # Convert to raw PCM bytes for Azure realtime transcription
-                        audio_bytes = int16_data.tobytes()
-                        
+
+                        audio_bytes = _float_audio_to_pcm16_bytes(audio_data)
+
                         # Add to mic streamer
                         if self.mic_streamer and self.mic_streamer.running:
                             self.mic_streamer.add_audio_chunk(audio_bytes)
                         consecutive_errors = 0
                     except Exception as e:
                         consecutive_errors += 1
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Skipped mic audio block due to: {e}")
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}] Skipped mic audio block from {mic_name} due to: {e}", flush=True)
                         if consecutive_errors >= 5:
-                            print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone capture disabled after repeated errors.")
-                            self.mic_capture_running = False
-                            break
-                
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone {mic_name} failed after repeated errors.", flush=True)
+                            return False
+
+                return True
         except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone audio capture error: {e}")
+            print(
+                f"[{datetime.now().strftime('%H:%M:%S')}] Microphone {mic_name} failed at {RATE} Hz: "
+                f"{type(e).__name__}: {e}",
+                flush=True,
+            )
+            return False
             
     def start_desktop_transcription(self):
         """Start desktop audio capture and transcription"""
@@ -270,18 +424,8 @@ class LiveTranscriptionManager:
                             print(f"[{datetime.now().strftime('%H:%M:%S')}] Audio data shape: {audio_data.shape}, dtype: {audio_data.dtype}")
                             first_chunk = False
                         
-                        # Handle potential multi-dimensional data
-                        if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
-                            audio_data = np.mean(audio_data, axis=1)
-                        
-                        # Make sure it's a flat array
-                        audio_data = audio_data.flatten()
-                        
-                        # Convert to int16 - directly scaling to int16 range
-                        int16_data = np.int16(audio_data * 32767)
-                        
                         # Convert to raw PCM bytes for Azure realtime transcription
-                        audio_bytes = int16_data.tobytes()
+                        audio_bytes = _float_audio_to_pcm16_bytes(audio_data)
                         
                         # Add to desktop streamer - sending raw PCM data
                         if self.desktop_streamer and self.desktop_streamer.running:

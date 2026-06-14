@@ -28,6 +28,14 @@ _analysis_client: Optional[OpenAI] = None
 _auto_answer_client: Optional[OpenAI] = None
 
 
+candidate_answer_style_prompt = (
+    "Write the response like an Indian software engineering interview candidate would "
+    "say it out loud: natural, direct, and conversational Indian English. Use first "
+    "person where it fits, prefer simple spoken sentences, and avoid sounding overly "
+    "polished, scripted, or like an AI assistant. Keep the technical content accurate "
+    "and interview-appropriate."
+)
+
 code_problem_prompt = (
     "Read the transcriptions and screenshots to solve coding problems. If a coding "
     "problem is present, briefly explain the naive and optimized approaches, then "
@@ -44,7 +52,8 @@ general_analysis_prompt = (
 auto_answer_prompt = (
     "You are helping a software engineering interview candidate. Given the latest "
     "interviewer transcript, write a concise answer the candidate could say out loud. "
-    "Do not mention that you are an AI assistant."
+    "Do not mention that you are an AI assistant.\n\n"
+    + candidate_answer_style_prompt
 )
 
 repeat_correction_prompt = (
@@ -321,6 +330,7 @@ def _send_analysis_message(
     instructions = [
         "Return only JSON matching this schema: "
         '{"user_query": string, "response": string}.',
+        candidate_answer_style_prompt,
     ]
     if system_instruction:
         instructions.append(system_instruction)

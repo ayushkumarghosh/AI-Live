@@ -163,9 +163,11 @@ class ChatContextTests(unittest.TestCase):
             chat.analyze_with_text_input("typed question", [], "jpeg", include_transcripts=False)
 
         request_text = create.call_args.kwargs["input"][0]["content"][0]["text"]
+        instructions = create.call_args.kwargs["instructions"]
 
         self.assertNotIn("Do not include this transcript.", request_text)
         self.assertIn("typed question", request_text)
+        self.assertIn(chat.candidate_answer_style_prompt, instructions)
 
     def test_auto_answer_includes_context_and_records_exchange(self):
         session_context.record_transcript("My answer mentioned hashing.", "mic")
@@ -179,11 +181,13 @@ class ChatContextTests(unittest.TestCase):
             answer = chat.generate_auto_answer("How would you handle collisions?")
 
         request_text = create.call_args.kwargs["input"]
+        instructions = create.call_args.kwargs["instructions"]
         snapshot = session_context.snapshot()
 
         self.assertEqual(answer, "Use chaining.")
         self.assertIn("My answer mentioned hashing.", request_text)
         self.assertIn("How would you handle collisions?", request_text)
+        self.assertIn(chat.candidate_answer_style_prompt, instructions)
         self.assertEqual(snapshot["exchanges"][0]["mode"], "auto")
         self.assertEqual(snapshot["exchanges"][0]["response"], "Use chaining.")
 
@@ -211,6 +215,7 @@ class ChatContextTests(unittest.TestCase):
         self.assertEqual(partials, ["Use ", "Use chaining."])
         self.assertEqual(len(snapshot["exchanges"]), 1)
         self.assertEqual(snapshot["exchanges"][0]["response"], "Use chaining.")
+        self.assertIn(chat.candidate_answer_style_prompt, client.responses.kwargs["instructions"])
         self.assertEqual(client.responses.kwargs["max_output_tokens"], chat.AUTO_ANSWER_MAX_OUTPUT_TOKENS)
 
 

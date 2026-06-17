@@ -1,13 +1,16 @@
 import unittest
 
+import resume_context
 import session_context
 
 
 class SessionContextTests(unittest.TestCase):
     def setUp(self):
+        resume_context.clear_resume_context(remove_cache=False)
         session_context.clear_session_context()
 
     def tearDown(self):
+        resume_context.clear_resume_context(remove_cache=False)
         session_context.clear_session_context()
 
     def test_records_transcripts_in_order(self):
@@ -147,11 +150,9 @@ class SessionContextTests(unittest.TestCase):
                 "general",
             )
 
-        full_context = session_context.build_context("turn 9", "auto", include_transcripts=True)
         compact_context = session_context.build_auto_answer_context("turn 9", transcript_turns=3, exchange_count=1)
 
-        self.assertLess(len(compact_context), len(full_context))
-        self.assertIn("Latest interviewer question:\nturn 9", compact_context)
+        self.assertIn("Latest desktop transcript (context, not automatically the question):\nturn 9", compact_context)
         self.assertIn("turn 9", compact_context)
         self.assertNotIn("turn 0", compact_context)
         self.assertIn("answer 4", compact_context)
@@ -170,6 +171,59 @@ class SessionContextTests(unittest.TestCase):
         self.assertIn("Interviewee/Candidate: I explained hashing first.", context)
         self.assertIn("Interviewer: How do you handle collisions?", context)
         self.assertIn("microphone transcriptions of what the candidate already said", context)
+
+    def test_auto_answer_context_guides_paused_question_and_clarification(self):
+        session_context.record_transcript("Can you explain how you would", "desktop")
+        session_context.record_transcript("Do you mean the API design or scaling part?", "mic")
+        session_context.record_transcript("The scaling part, especially cache invalidation.", "desktop")
+
+        context = session_context.build_auto_answer_context(
+            "The scaling part, especially cache invalidation.",
+            transcript_turns=3,
+            exchange_count=0,
+        )
+
+        self.assertIn("Interviewer: Can you explain how you would", context)
+        self.assertIn("Interviewee/Candidate: Do you mean the API design or scaling part?", context)
+        self.assertIn("Interviewer: The scaling part, especially cache invalidation.", context)
+        self.assertIn("Recent interviewer questions/follow-ups to answer:\n- Can you explain how you would", context)
+        self.assertIn("split across multiple nearby Interviewer turns", context)
+        self.assertIn("asked a clarification", context)
+        self.assertIn("Produce one answer only.", context)
+
+    def test_auto_answer_context_targets_recent_question_not_latest_statement(self):
+        session_context.record_transcript("What tradeoffs would you consider for cache invalidation?", "desktop")
+        session_context.record_transcript("Do you mean distributed cache invalidation?", "mic")
+        session_context.record_transcript("Yes, distributed cache invalidation.", "desktop")
+
+        context = session_context.build_auto_answer_context(
+            "Yes, distributed cache invalidation.",
+            transcript_turns=3,
+            exchange_count=0,
+        )
+        focus_section = context.split("Recent interviewer questions/follow-ups to answer:\n", 1)[1].split("\n\n", 1)[0]
+
+        self.assertIn("- What tradeoffs would you consider for cache invalidation?", focus_section)
+        self.assertNotIn("Yes, distributed cache invalidation.", focus_section)
+        self.assertIn(
+            "Latest desktop transcript (context, not automatically the question):\n"
+            "Yes, distributed cache invalidation.",
+            context,
+        )
+        self.assertIn("use it as context for the recent interviewer question instead", context)
+
+    def test_auto_answer_context_merges_adjacent_interviewer_question_fragments(self):
+        session_context.record_transcript("Can you explain how you would", "desktop")
+        session_context.record_transcript("scale Redis in this system", "desktop")
+
+        context = session_context.build_auto_answer_context(
+            "scale Redis in this system",
+            transcript_turns=2,
+            exchange_count=0,
+        )
+        focus_section = context.split("Recent interviewer questions/follow-ups to answer:\n", 1)[1].split("\n\n", 1)[0]
+
+        self.assertIn("- Can you explain how you would scale Redis in this system", focus_section)
 
 
 if __name__ == "__main__":

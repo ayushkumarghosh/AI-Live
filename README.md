@@ -7,8 +7,9 @@ AI-Live is a Windows desktop overlay for live transcription and manual AI analys
 - Live microphone transcription with Azure OpenAI realtime audio and `whisper-1` transcription
 - Live desktop/loopback transcription with optional suggested interviewer answers from Azure OpenAI `gpt-5.4-nano`
 - Manual screenshot capture and automatic screenshot capture for analysis requests
+- Resume PDF upload with local MarkItDown cache for personalized auto and general answers
 - Manual analysis buttons for coding, general, and follow-up questions using Azure OpenAI `gpt-5.5`
-- Conversation history with rendered Markdown and syntax-highlighted code
+- Single latest-answer display with rendered Markdown and syntax-highlighted code
 - Transparent, draggable PyQt6 overlay that can be excluded from screen capture on Windows
 
 ## Architecture
@@ -54,6 +55,7 @@ The app does not automatically answer spoken queries unless Auto-Answer is enabl
 
 - **Text Input**: ask a typed question, optionally with screenshots enabled.
 - **Screenshot**: queue a screenshot for the next manual analysis request.
+- **Resume**: choose a resume PDF from the file picker. The app converts it to Markdown, caches that converted context locally, and uses it for Auto-Answer and General Analysis when the question calls for personal experience, projects, skills, or examples. Click Resume again to replace or remove the cached resume context.
 - **Code Analysis**: analyze the latest selected or recent transcripts plus screenshot context as a coding problem.
 - **General Analysis**: answer the latest selected or recent transcripts as a non-coding interview question.
 - **Auto-Answer**: when enabled, displays suggested answers generated from completed desktop transcription turns.

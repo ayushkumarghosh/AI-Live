@@ -1,6 +1,9 @@
 numpy==2.4.4
 pillow==12.2.0
 openai>=2.0.0
+markitdown>=0.1.6
+pdfminer-six>=20251230
+pdfplumber>=0.11.9
 PyQt6==6.9.0
 pygments==2.19.1
 soundcard==0.4.4

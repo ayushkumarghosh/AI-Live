@@ -260,7 +260,7 @@ def initialize_live_transcription():
 def stop_processing_and_clear_history():
     global overlay
 
-    print(f"{timestamp()} Clearing conversation history and stopping processing", flush=True)
+    print(f"{timestamp()} Clearing answer context and stopping processing", flush=True)
 
     if overlay:
         if hasattr(overlay, "current_session_id"):
@@ -299,6 +299,15 @@ def main():
     QtWidgets.QApplication.setAttribute(QtCore.Qt.ApplicationAttribute.AA_UseDesktopOpenGL)
 
     app = QtWidgets.QApplication(sys.argv)
+
+    try:
+        from resume_context import load_cached_resume_context
+
+        cached_resume = load_cached_resume_context()
+        if cached_resume:
+            print(f"{timestamp()} Loaded cached resume context: {cached_resume.filename}", flush=True)
+    except Exception as exc:
+        print(f"{timestamp()} Failed to load cached resume context: {exc}", flush=True)
 
     global overlay
     overlay = DraggableOverlay()

@@ -7,6 +7,8 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional
 
+from resume_context import get_resume_context_section, is_resume_context_relevant
+
 
 MAX_TRANSCRIPT_TURNS = 12
 MAX_AI_EXCHANGES = 8
@@ -53,6 +55,104 @@ def _normalize_question(text: str) -> str:
     text = str(text or "").casefold()
     text = re.sub(r"[^a-z0-9_]+", " ", text)
     return " ".join(text.split())
+
+
+def _looks_like_interviewer_question(text: str) -> bool:
+    raw_text = str(text or "").strip()
+    normalized = _normalize_question(raw_text)
+    if not normalized:
+        return False
+
+    if "?" in raw_text:
+        return True
+
+    question_prefixes = (
+        "what ",
+        "why ",
+        "how ",
+        "when ",
+        "where ",
+        "which ",
+        "who ",
+        "can you ",
+        "could you ",
+        "would you ",
+        "will you ",
+        "do you ",
+        "does ",
+        "did ",
+        "is ",
+        "are ",
+        "should ",
+        "tell me ",
+        "explain ",
+        "describe ",
+        "walk me ",
+        "talk about ",
+        "give me ",
+        "show me ",
+        "compare ",
+        "design ",
+        "solve ",
+        "implement ",
+        "optimize ",
+        "debug ",
+        "write ",
+    )
+    followup_prefixes = (
+        "what about ",
+        "how about ",
+        "and if ",
+        "and when ",
+        "now ",
+        "next ",
+        "then ",
+    )
+    return normalized.startswith(question_prefixes + followup_prefixes)
+
+
+def _recent_interviewer_questions(
+    transcripts: List[TranscriptTurn],
+    current_input: str,
+    limit: int = 3,
+) -> List[str]:
+    question_groups: List[List[str]] = []
+    active_group: Optional[List[str]] = None
+    seen = set()
+    previous_source = ""
+
+    for turn in transcripts:
+        if turn.source != "desktop":
+            active_group = None
+            previous_source = turn.source
+            continue
+
+        normalized = _normalize_question(turn.text)
+        if not normalized or normalized in seen:
+            previous_source = turn.source
+            continue
+
+        if _looks_like_interviewer_question(turn.text):
+            active_group = [_compact(turn.text, 700)]
+            question_groups.append(active_group)
+            seen.add(normalized)
+        elif active_group is not None and previous_source == "desktop":
+            active_group.append(_compact(turn.text, 700))
+            seen.add(normalized)
+        previous_source = turn.source
+
+    if current_input and _looks_like_interviewer_question(current_input):
+        normalized = _normalize_question(current_input)
+        if normalized not in seen:
+            question_groups.append([_compact(current_input, 700)])
+            seen.add(normalized)
+    elif current_input and active_group is not None and transcripts and transcripts[-1].source == "desktop":
+        normalized = _normalize_question(current_input)
+        if normalized and normalized not in seen:
+            active_group.append(_compact(current_input, 700))
+
+    questions = [" ".join(group) for group in question_groups if group]
+    return questions[-limit:]
 
 
 def _looks_like_same_question(left: str, right: str) -> bool:
@@ -219,6 +319,12 @@ def build_context(current_input: str, mode: str, include_transcripts: bool = Tru
         f"Current analysis mode: {mode}.",
     ]
 
+    if mode == "general":
+        resume_relevance_text = "\n".join([current_input] + [turn.text for turn in transcripts])
+        resume_section = get_resume_context_section() if is_resume_context_relevant(resume_relevance_text) else ""
+        if resume_section:
+            sections.append(resume_section)
+
     summary_parts = []
     if exchange_summary:
         summary_parts.append("Earlier AI exchanges:\n" + exchange_summary)
@@ -263,13 +369,29 @@ def build_auto_answer_context(current_input: str, transcript_turns: int = 6, exc
         transcripts = list(_transcripts[-transcript_turns:]) if transcript_turns else []
         exchanges = list(_exchanges[-exchange_count:]) if exchange_count else []
 
+    interviewer_questions = _recent_interviewer_questions(transcripts, current_input)
+    resume_relevance_text = "\n".join(interviewer_questions + [current_input])
+    resume_section = get_resume_context_section() if is_resume_context_relevant(resume_relevance_text) else ""
+
     sections = [
-        "Answer the latest interviewer question as a software engineering interview candidate.",
+        "Answer the most recent interviewer question or follow-up as a software engineering interview candidate.",
         (
             "Speaker labels matter: Interviewer turns are questions or follow-ups from desktop audio; "
-            "Interviewee/Candidate turns are microphone transcriptions of what the candidate already said."
+            "Interviewee/Candidate turns are microphone transcriptions of what the candidate already said "
+            "or asked to clarify."
+        ),
+        (
+            "Use the recent transcript as one rolling exchange. If the latest interviewer question is split "
+            "across multiple nearby Interviewer turns because of pauses, combine those turns before answering. "
+            "If the Interviewee/Candidate asked a clarification and the Interviewer replied, use that reply "
+            "to answer the clarified latest question. Do not answer the latest desktop transcript only because "
+            "it is last; if it is a statement, use it as context for the recent interviewer question instead. "
+            "Produce one answer only."
         ),
     ]
+
+    if resume_section:
+        sections.append(resume_section)
 
     if exchanges:
         lines = []
@@ -281,6 +403,10 @@ def build_auto_answer_context(current_input: str, transcript_turns: int = 6, exc
             )
         sections.append("Recent answer context:\n" + "\n\n".join(lines))
 
+    if interviewer_questions:
+        lines = [f"- {question}" for question in interviewer_questions]
+        sections.append("Recent interviewer questions/follow-ups to answer:\n" + "\n".join(lines))
+
     if transcripts:
         lines = []
         for turn in transcripts:
@@ -289,7 +415,7 @@ def build_auto_answer_context(current_input: str, transcript_turns: int = 6, exc
         sections.append("Recent live transcript turns:\n" + "\n".join(lines))
 
     if current_input:
-        sections.append(f"Latest interviewer question:\n{current_input}")
+        sections.append(f"Latest desktop transcript (context, not automatically the question):\n{current_input}")
 
     return "\n\n".join(sections)
 

@@ -46,18 +46,30 @@ code_problem_prompt = (
 general_analysis_prompt = (
     "Respond as if you are the candidate in a software engineering interview. "
     "Prioritize the latest interviewer question in the transcript. Answer first, then "
-    "briefly explain the reasoning. Be concise, professional, and practical."
+    "briefly explain the reasoning. If candidate resume context is provided, use it "
+    "only when the question asks about experience, background, projects, skills, "
+    "achievements, strengths, or when a personalized example is clearly useful. Do "
+    "not invent resume details. Be concise, professional, and practical."
 )
 
 auto_answer_prompt = (
     "You are helping a software engineering interview candidate. Given the latest "
-    "interviewer transcript, write a concise answer the candidate could say out loud. "
+    "interviewer transcript and recent conversation, write one concise answer the "
+    "candidate could say out loud. "
     "Recent transcript context may include both speakers: desktop audio is the "
     "Interviewer, and microphone audio is the Interviewee/Candidate. Treat microphone "
-    "transcriptions as what the candidate already said, not as questions to answer. "
-    "Use them to understand the candidate's prior answer, then prepare the answer for "
-    "the next/latest question or follow-up asked by the interviewer. Do not mention "
-    "that you are an AI assistant.\n\n"
+    "transcriptions as what the candidate already said or clarifying questions they "
+    "asked, not as questions to answer. If the interviewer question was split "
+    "across pauses, combine the latest related interviewer turns. If the candidate "
+    "asked a clarifying question and the interviewer answered it, use that clarified "
+    "context to answer the latest interviewer question or follow-up. When the context "
+    "contains a 'Recent interviewer questions/follow-ups to answer' section, use that "
+    "section as the answer target. Do not answer the latest desktop transcript merely "
+    "because it is last; if it is a statement or confirmation, use it only as context. "
+    "If candidate resume context is provided, use it only when the question asks about "
+    "experience, background, projects, skills, achievements, strengths, or when a "
+    "personalized example is clearly useful. Do not invent resume details. "
+    "Return only the single answer, and do not mention that you are an AI assistant.\n\n"
     + candidate_answer_style_prompt
 )
 
@@ -157,7 +169,7 @@ def get_auto_answer_client() -> OpenAI:
 
 def reset_chat_history():
     clear_session_context()
-    print(f"{timestamp()} Chat history reset")
+    print(f"{timestamp()} Answer context reset")
 
 
 def clear_chat_history():

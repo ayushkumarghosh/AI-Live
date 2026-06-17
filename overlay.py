@@ -6,8 +6,11 @@ from PyQt6.QtCore import pyqtSignal as Signal, pyqtSlot as Slot
 from datetime import datetime
 import queue
 import re
+import shutil
+import subprocess
 import platform
 import os
+import threading
 from pathlib import Path
 
 
@@ -62,6 +65,58 @@ def uninitialize_windows_ole():
 
     ctypes.windll.ole32.OleUninitialize()
     _windows_ole_initialized = False
+
+
+def pick_pdf_file_with_windows_dialog(title="Upload resume PDF") -> str:
+    """Open a Windows file picker in a separate STA PowerShell process."""
+    if platform.system() != "Windows":
+        raise RuntimeError("The resume file picker is only available on Windows.")
+
+    powershell_exe = shutil.which("powershell.exe")
+    if not powershell_exe:
+        system_root = os.getenv("SystemRoot", r"C:\Windows")
+        candidate = Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+        powershell_exe = str(candidate) if candidate.is_file() else ""
+    if not powershell_exe:
+        raise RuntimeError("Windows PowerShell was not found, so the file picker cannot be opened.")
+
+    script = rf"""
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = {json.dumps(title)}
+$dialog.Filter = 'PDF files (*.pdf)|*.pdf'
+$dialog.Multiselect = $false
+$dialog.CheckFileExists = $true
+$dialog.CheckPathExists = $true
+$result = $dialog.ShowDialog()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {{
+    [Console]::Out.Write($dialog.FileName)
+}}
+"""
+    completed = subprocess.run(
+        [
+            powershell_exe,
+            "-NoProfile",
+            "-STA",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=subprocess.CREATE_NO_WINDOW,
+        timeout=None,
+    )
+    if completed.returncode != 0:
+        details = (completed.stderr or completed.stdout or "").strip()
+        if details:
+            raise RuntimeError(details)
+        raise RuntimeError(f"File picker exited with code {completed.returncode}.")
+    return (completed.stdout or "").strip().strip('"')
 
 
 def apply_no_activate(hwnd):
@@ -508,6 +563,165 @@ def show_private_text_context_menu(text_edit, event):
     event.accept()
 
 
+class PrivateResumeMenuPopup(QtWidgets.QFrame):
+    def __init__(self, overlay, filename):
+        super().__init__(None)
+        self.overlay = overlay
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.FramelessWindowHint |
+            QtCore.Qt.WindowType.Tool |
+            QtCore.Qt.WindowType.WindowStaysOnTopHint |
+            QtCore.Qt.WindowType.WindowDoesNotAcceptFocus |
+            QtCore.Qt.WindowType.NoDropShadowWindowHint
+        )
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.setObjectName("PrivateResumeMenuPopup")
+        self.setStyleSheet(f"""
+            QFrame#PrivateResumeMenuPopup {{
+                background-color: rgba(14, 19, 24, 242);
+                border: 1px solid {UI["border_strong"]};
+                border-radius: 6px;
+            }}
+            QLabel#ResumeMenuCurrent {{
+                color: {UI["muted"]};
+                font-family: {UI["font"]};
+                font-size: 12px;
+                font-weight: 600;
+                padding: 6px 10px 5px 10px;
+            }}
+            QFrame#ResumeMenuSeparator {{
+                background-color: rgba(160, 177, 194, 60);
+                border: none;
+                min-height: 1px;
+                max-height: 1px;
+                margin: 3px 6px;
+            }}
+            QToolButton {{
+                background-color: transparent;
+                color: {UI["text"]};
+                border: none;
+                border-radius: 4px;
+                padding: 6px 10px;
+                text-align: left;
+                font-family: {UI["font"]};
+                font-size: 13px;
+                font-weight: 500;
+            }}
+            QToolButton#ResumeMenuDangerButton {{
+                color: {UI["danger"]};
+            }}
+            QToolButton:hover {{
+                background-color: rgba(255, 255, 255, 24);
+            }}
+            QToolButton:pressed {{
+                background-color: rgba(255, 255, 255, 36);
+            }}
+        """)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(1)
+
+        current_label = QtWidgets.QLabel(self._elided_current_label(filename), self)
+        current_label.setObjectName("ResumeMenuCurrent")
+        current_label.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        current_label.setMinimumWidth(190)
+        current_label.setMaximumWidth(320)
+        layout.addWidget(current_label)
+
+        self._add_separator(layout)
+        self._add_action(layout, "Replace resume", overlay._choose_and_load_resume_pdf)
+        self._add_action(layout, "Remove resume", overlay._remove_resume_context, danger=True)
+        self._add_separator(layout)
+        self._add_action(layout, "Cancel")
+
+        self._outside_click_timer = QtCore.QTimer(self)
+        self._outside_click_timer.setInterval(80)
+        self._outside_click_timer.timeout.connect(self._close_on_outside_mouse_press)
+
+    def _elided_current_label(self, filename):
+        text = f"Current: {filename}"
+        metrics = QtGui.QFontMetrics(self.font())
+        return metrics.elidedText(text, QtCore.Qt.TextElideMode.ElideMiddle, 300)
+
+    def _add_separator(self, layout):
+        separator = QtWidgets.QFrame(self)
+        separator.setObjectName("ResumeMenuSeparator")
+        separator.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        layout.addWidget(separator)
+
+    def _add_action(self, layout, label, callback=None, danger=False):
+        button = QtWidgets.QToolButton(self)
+        if danger:
+            button.setObjectName("ResumeMenuDangerButton")
+        button.setText(label)
+        button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        button.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
+        button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        button.setMinimumWidth(190)
+        button.clicked.connect(lambda _checked=False, cb=callback: self._run_action(cb))
+        layout.addWidget(button)
+
+    def _run_action(self, callback):
+        self.close()
+        if callback:
+            QtCore.QTimer.singleShot(0, callback)
+
+    def _close_on_outside_mouse_press(self):
+        if not self.isVisible():
+            return
+        buttons = QtGui.QGuiApplication.mouseButtons()
+        if buttons == QtCore.Qt.MouseButton.NoButton:
+            return
+        if not self.geometry().contains(QtGui.QCursor.pos()):
+            self.close()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        apply_private_no_focus_window(self)
+        self._outside_click_timer.start()
+        QtCore.QTimer.singleShot(0, lambda: apply_private_no_focus_window(self) if self else None)
+
+    def closeEvent(self, event):
+        self._outside_click_timer.stop()
+        app = QtWidgets.QApplication.instance()
+        if app:
+            app.removeEventFilter(self)
+        if getattr(self.overlay, "_resume_menu_popup", None) is self:
+            self.overlay._resume_menu_popup = None
+        super().closeEvent(event)
+        self.deleteLater()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QtCore.QEvent.Type.MouseButtonPress:
+            global_pos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else QtGui.QCursor.pos()
+            if not self.geometry().contains(global_pos):
+                self.close()
+        elif event.type() == QtCore.QEvent.Type.KeyPress and event.key() == QtCore.Qt.Key.Key_Escape:
+            self.close()
+            return True
+        return super().eventFilter(watched, event)
+
+    def show_at(self, global_pos):
+        self.adjustSize()
+        screen = QtGui.QGuiApplication.screenAt(global_pos) or QtGui.QGuiApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            right_bound = max(available.left(), available.right() - self.width())
+            bottom_bound = max(available.top(), available.bottom() - self.height())
+            x = min(max(global_pos.x(), available.left()), right_bound)
+            y = min(max(global_pos.y(), available.top()), bottom_bound)
+            global_pos = QtCore.QPoint(x, y)
+        self.move(global_pos)
+        self.show()
+        apply_private_no_focus_window(self)
+        app = QtWidgets.QApplication.instance()
+        if app:
+            app.installEventFilter(self)
+
+
 # ----------------------------------------------------------------
 # ResizeHandle: used for resizing the overlay.
 class ResizeHandle(QtWidgets.QWidget):
@@ -737,6 +951,7 @@ class InputOverlay(QtWidgets.QWidget):
             self.text_submitted.emit(text)
             self.close()
 
+
 # ----------------------------------------------------------------
 # DraggableOverlay: the main overlay window.
 class DraggableOverlay(QtWidgets.QWidget):
@@ -745,8 +960,10 @@ class DraggableOverlay(QtWidgets.QWidget):
     # New signals for specialized analysis functions
     code_analysis_signal = Signal(str)  # For code problem analysis
     
-    update_conversation_signal = Signal(str)  # New signal for thread-safe updates
-    clear_history_signal = Signal()  # Signal to stop processing and clear history
+    update_conversation_signal = Signal(str)  # Signal for thread-safe answer updates
+    clear_history_signal = Signal()  # Signal to stop processing and clear answer context
+    resume_picker_result_signal = Signal(str, str)
+    resume_upload_result_signal = Signal(bool, str, str)
 
     # New signal for general analysis with no thinking
     general_analysis_no_thinking_signal = Signal(str)
@@ -777,11 +994,10 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.use_transcriptions = True
         self.show_interviewer_suggestions = False
 
+        self.current_answer = ""
         self.last_interviewer_question = ""
         self.last_suggested_answer = ""
         self._active_auto_answer_question = ""
-        self._active_auto_answer_user_index = None
-        self._active_auto_answer_answer_index = None
 
         self.dragging = False
         self.resizing = False
@@ -833,12 +1049,15 @@ class DraggableOverlay(QtWidgets.QWidget):
 
         self.create_resize_handles()
 
-        self.conversation_history = []
         self.transcription_history = []
         self.input_overlay = None
+        self._resume_menu_popup = None
 
         self.update_conversation_signal.connect(self._update_conversation_text)
         self.update_transcription_signal.connect(self._update_transcription_text)
+        self.resume_picker_result_signal.connect(self._handle_resume_picker_result)
+        self.resume_upload_result_signal.connect(self._handle_resume_upload_result)
+        self._sync_resume_button_state()
         self._apply_responsive_layout(force=True)
 
     def _build_opacity_row(self):
@@ -1047,13 +1266,15 @@ class DraggableOverlay(QtWidgets.QWidget):
 
         self.input_button = self._create_action_button("text", "Text Input", "neutral", self.open_input_overlay)
         self.screenshot_button = self._create_action_button("camera", "Screenshot", "warning", self.take_screenshot)
-        self.clear_button = self._create_action_button("trash", "Clear History", "danger", self.clear_history)
+        self.resume_button = self._create_action_button("document", "Resume", "accent", self.upload_resume_pdf)
+        self.clear_button = self._create_action_button("trash", "Clear Context", "danger", self.clear_history)
         self.code_analyze_button = self._create_action_button("code", "Code Analysis", "accent", self.execute_code_analyze)
         self.general_analyze_button_regular = self._create_action_button("document", "General Analysis", "success", self.execute_general_analyze_no_thinking)
 
         self.command_buttons = [
             self.input_button,
             self.screenshot_button,
+            self.resume_button,
             self.clear_button,
             self.code_analyze_button,
             self.general_analyze_button_regular,
@@ -1064,7 +1285,7 @@ class DraggableOverlay(QtWidgets.QWidget):
 
         for index, button in enumerate(self.command_buttons):
             self.command_layout.addWidget(button)
-            if index == 2:
+            if button is self.clear_button:
                 self.command_layout.addWidget(self.command_divider)
 
         self.conversation_stretch = 2
@@ -1105,7 +1326,8 @@ class DraggableOverlay(QtWidgets.QWidget):
         button._short_text = {
             "Text Input": "Input",
             "Screenshot": "Shot",
-            "Clear History": "Clear",
+            "Resume": "Resume",
+            "Clear Context": "Clear",
             "Code Analysis": "Code",
             "General Analysis": "General",
         }.get(label, label)
@@ -1335,17 +1557,12 @@ class DraggableOverlay(QtWidgets.QWidget):
 
     @Slot(dict)
     def update_response(self, response_json: dict):
-        # Expecting response_json to include "user_query" and "response".
-        user_query = response_json.get("user_query", "")
+        # Expecting response_json to include "response".
         ai_response = response_json.get("response", "")
-        if not user_query and not ai_response:
+        if not ai_response:
             return
-        # Append entries to conversation history.
-        if user_query:
-            self.conversation_history.append({"role": "user", "content": user_query})
-        if ai_response:
-            self.conversation_history.append({"role": "assistant", "content": ai_response})
-        # Rebuild conversation text.
+
+        self.current_answer = str(ai_response)
         conversation_text = ""
         
         def escape_html(text):
@@ -1638,35 +1855,22 @@ class DraggableOverlay(QtWidgets.QWidget):
                 
             return '\n'.join(html_lines)
         
-        for entry in self.conversation_history:
-            role_label = "You" if entry["role"] == "user" else "AI"
-            role_color = "#4CAF50" if entry["role"] == "user" else "#2196F3"
-            
-            # Convert markdown to HTML for the content
-            content = entry["content"]
-            content = convert_markdown_to_html(content)
-            
-            # Add proper spacing and styling
-            content = f"<div style='margin-bottom: 0px; line-height: 1.2;'>{content}</div>"
-            
-            conversation_text += (
-                f"<div style='margin-bottom: 0px;'>"
-                f"<span style='color: {role_color}; font-weight: bold; font-size: 14px;'>{role_label}:</span> "
-                f"{content}"
-                f"</div>"
-            )
+        content = convert_markdown_to_html(self.current_answer)
+        content = f"<div style='margin-bottom: 0px; line-height: 1.2;'>{content}</div>"
+        conversation_text += (
+            f"<div style='margin-bottom: 0px;'>"
+            f"{content}"
+            f"</div>"
+        )
         # Use signal to update the UI thread-safely
         self.update_conversation_signal.emit(conversation_text)
 
-    def _render_conversation_history_basic(self):
+    def _render_current_answer_basic(self):
+        content = html.escape(str(getattr(self, "current_answer", ""))).replace("\n", "<br>")
         conversation_text = ""
-        for entry in self.conversation_history:
-            role_label = "You" if entry["role"] == "user" else "AI"
-            role_color = "#4CAF50" if entry["role"] == "user" else "#2196F3"
-            content = html.escape(str(entry.get("content", ""))).replace("\n", "<br>")
-            conversation_text += (
+        if content:
+            conversation_text = (
                 f"<div style='margin-bottom: 0px;'>"
-                f"<span style='color: {role_color}; font-weight: bold; font-size: 14px;'>{role_label}:</span> "
                 f"<div style='margin-bottom: 0px; line-height: 1.2;'>{content}</div>"
                 f"</div>"
             )
@@ -1674,11 +1878,11 @@ class DraggableOverlay(QtWidgets.QWidget):
 
     @Slot(str)
     def clear_conversation_display(self, message: str = ""):
-        """Clear conversation history without adding synthetic chat turns."""
-        self.conversation_history = []
+        """Clear the current answer without adding synthetic turns."""
+        self.current_answer = ""
+        self.last_interviewer_question = ""
+        self.last_suggested_answer = ""
         self._active_auto_answer_question = ""
-        self._active_auto_answer_user_index = None
-        self._active_auto_answer_answer_index = None
         if message:
             self.conversation_text.setHtml(
                 f"<div style='color: #FFA500; text-align: center; margin: 10px 0;'>{message}</div>"
@@ -1844,6 +2048,107 @@ class DraggableOverlay(QtWidgets.QWidget):
             self._flash_button(self.screenshot_button, "success")
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error taking screenshot: {e}", flush=True)
+
+    def upload_resume_pdf(self):
+        """Manage resume context: upload, replace, or remove."""
+        try:
+            from resume_context import get_resume_context
+
+            context = get_resume_context()
+            if context is None:
+                self._choose_and_load_resume_pdf()
+                return
+
+            if self._resume_menu_popup is not None:
+                self._resume_menu_popup.close()
+
+            self._resume_menu_popup = PrivateResumeMenuPopup(self, context.filename)
+            button_rect = self.resume_button.rect()
+            self._resume_menu_popup.show_at(self.resume_button.mapToGlobal(button_rect.bottomLeft()))
+        except Exception as exc:
+            self.update_status("Resume action failed", "#FF0000")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Resume action failed: {exc}", flush=True)
+
+    def _choose_and_load_resume_pdf(self):
+        """Open a PDF file picker outside the Qt process and load the selected resume."""
+        self.resume_button.setEnabled(False)
+        self.update_status("Choose resume PDF...", "#FFA500")
+
+        def picker_thread():
+            try:
+                selected_path = pick_pdf_file_with_windows_dialog("Upload resume PDF")
+                self.resume_picker_result_signal.emit(selected_path, "")
+            except Exception as exc:
+                self.resume_picker_result_signal.emit("", str(exc))
+
+        threading.Thread(target=picker_thread, daemon=True).start()
+
+    @Slot(str, str)
+    def _handle_resume_picker_result(self, file_path: str, error: str):
+        self.resume_button.setEnabled(True)
+        if error:
+            self.update_status("Resume picker failed", "#FF0000")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Resume picker failed: {error}", flush=True)
+            return
+
+        if not file_path:
+            self.update_status("Listening...", "#4CAF50")
+            return
+
+        self._start_resume_load(file_path)
+
+    def _start_resume_load(self, file_path: str):
+        self.resume_button.setEnabled(False)
+        self.update_status("Loading resume...", "#FFA500")
+
+        def load_thread():
+            try:
+                from resume_context import load_resume_pdf
+
+                context = load_resume_pdf(file_path)
+                message = f"Resume loaded: {context.filename} ({len(context.markdown)} chars)"
+                self.resume_upload_result_signal.emit(True, message, context.filename)
+            except Exception as exc:
+                self.resume_upload_result_signal.emit(False, f"Resume upload failed: {exc}", "")
+
+        threading.Thread(target=load_thread, daemon=True).start()
+
+    def _remove_resume_context(self):
+        from resume_context import clear_resume_context
+
+        clear_resume_context(remove_cache=True)
+        self._sync_resume_button_state()
+        self._flash_button(self.resume_button, "danger")
+        self.update_status("Resume removed", "#FFA500")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Resume context removed", flush=True)
+        QtCore.QTimer.singleShot(2000, lambda: self.update_status("Listening...", "#4CAF50"))
+
+    def _sync_resume_button_state(self):
+        try:
+            from resume_context import get_resume_context
+
+            context = get_resume_context()
+        except Exception:
+            context = None
+
+        if context is None:
+            self.resume_button.setToolTip("Upload resume PDF")
+        else:
+            self.resume_button.setToolTip(f"Resume loaded: {context.filename}")
+
+    @Slot(bool, str, str)
+    def _handle_resume_upload_result(self, success: bool, message: str, filename: str):
+        self.resume_button.setEnabled(True)
+        if success:
+            self._sync_resume_button_state()
+            self._flash_button(self.resume_button, "success")
+            self.update_status("Resume loaded", "#4CAF50")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
+            QtCore.QTimer.singleShot(2000, lambda: self.update_status("Listening...", "#4CAF50"))
+        else:
+            self._sync_resume_button_state()
+            self.update_status("Resume upload failed", "#FF0000")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
     
     def execute_code_analyze(self):
         try:
@@ -1868,19 +2173,19 @@ class DraggableOverlay(QtWidgets.QWidget):
 
     def clear_history(self):
         try:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Clearing conversation history", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Clearing answer context", flush=True)
             
-            # Clear local conversation history
-            self.clear_conversation_display("Conversation history cleared")
+            # Clear the visible answer.
+            self.clear_conversation_display("Answer context cleared")
             
-            # Clear the chat models' history
+            # Clear the chat models' context.
             from chat import clear_chat_history
             clear_chat_history()
             
             self._flash_button(self.clear_button)
             
             # Update status
-            self.update_status("History cleared", "#FFA500")
+            self.update_status("Context cleared", "#FFA500")
             # Reset status after 2 seconds
             QtCore.QTimer.singleShot(2000, lambda: self.update_status("Listening...", "#4CAF50"))
             
@@ -1888,8 +2193,8 @@ class DraggableOverlay(QtWidgets.QWidget):
             self.clear_history_signal.emit()
             
         except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error clearing history: {e}", flush=True)
-            self.update_status("Error clearing history", "#FF0000")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error clearing context: {e}", flush=True)
+            self.update_status("Error clearing context", "#FF0000")
 
     def execute_general_analyze_no_thinking(self):
         try:
@@ -2014,48 +2319,12 @@ class DraggableOverlay(QtWidgets.QWidget):
 # This method is now directly in update_interviewer_qa for better flow control
         
     def remove_suggestion_from_display(self):
-        """Remove any interviewer suggestion from the conversation display"""
-        # Since we're now using the standard conversation format,
-        # we need a different approach to remove suggestions
-        
-        # The simplest approach is to rebuild the conversation from history,
-        # excluding the suggestion we added
-        
+        """Remove the visible interviewer suggestion if it is still displayed."""
         try:
-            # If we've added suggestions to the conversation history, remove them
-            if hasattr(self, 'conversation_history'):
-                # Look for entries that match our last suggestion
-                original_length = len(self.conversation_history)
-                
-                # Remove entries that match our Q&A pair (if any)
-                if self.last_interviewer_question and self.last_suggested_answer:
-                    # Create filtered history
-                    self.conversation_history = [
-                        entry for entry in self.conversation_history 
-                        if not (entry.get("role") == "user" and entry.get("content") == self.last_interviewer_question) and
-                           not (entry.get("role") == "assistant" and entry.get("content") == self.last_suggested_answer)
-                    ]
-                    
-                    # If we removed entries, rebuild the conversation display
-                    if len(self.conversation_history) != original_length:
-                        # Rebuild conversation text
-                        conversation_text = ""
-                        
-                        from datetime import datetime
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Removed suggestion from conversation history", flush=True)
-                        
-                        conversation_text = ""
-                        for entry in self.conversation_history:
-                            role_label = "You" if entry["role"] == "user" else "AI"
-                            role_color = "#4CAF50" if entry["role"] == "user" else "#2196F3"
-                            conversation_text += (
-                                f"<div style='margin-bottom: 0px;'>"
-                                f"<span style='color: {role_color}; font-weight: bold; font-size: 14px;'>{role_label}:</span> "
-                                f"<div style='margin-bottom: 0px; line-height: 1.2;'>{entry['content']}</div>"
-                                f"</div>"
-                            )
-                        self.update_conversation_signal.emit(conversation_text)
-            
+            if self.last_suggested_answer and self.current_answer == self.last_suggested_answer:
+                self.current_answer = ""
+                self.update_conversation_signal.emit("")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Removed visible suggestion", flush=True)
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error removing suggestion: {e}", flush=True)
 
@@ -2078,32 +2347,12 @@ class DraggableOverlay(QtWidgets.QWidget):
         if self.show_interviewer_suggestions:
             # If auto-answer is on, display the suggestion
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Auto-answering interviewer question", flush=True)
-            user_index = self._active_auto_answer_user_index
-            answer_index = self._active_auto_answer_answer_index
-            has_active_entry = (
-                self._active_auto_answer_question == question
-                and user_index is not None
-                and answer_index is not None
-                and user_index < len(self.conversation_history)
-                and answer_index < len(self.conversation_history)
-            )
-
-            if has_active_entry:
-                self.conversation_history[user_index] = {"role": "user", "content": question}
-                self.conversation_history[answer_index] = {"role": "assistant", "content": answer}
-                self._render_conversation_history_basic()
-            else:
-                self._active_auto_answer_question = question
-                self._active_auto_answer_user_index = len(self.conversation_history)
-                self.conversation_history.append({"role": "user", "content": question})
-                self._active_auto_answer_answer_index = len(self.conversation_history)
-                self.conversation_history.append({"role": "assistant", "content": answer})
-                self._render_conversation_history_basic()
+            self._active_auto_answer_question = question
+            self.current_answer = str(answer)
+            self._render_current_answer_basic()
 
             if done:
                 self._active_auto_answer_question = ""
-                self._active_auto_answer_user_index = None
-                self._active_auto_answer_answer_index = None
         else:
             # Auto-answer is disabled, just store the Q&A but don't display
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Not auto-answering (feature disabled)", flush=True)

@@ -39,6 +39,49 @@ class LiveTranscriptionManagerTests(unittest.TestCase):
         self.assertEqual(forwarded, [("my spoken answer", "mic")])
         self.assertTrue(created_streamers[0].running)
 
+    def test_completed_desktop_transcript_starts_answer_before_shared_callback(self):
+        events = []
+        created_streamers = []
+
+        class FakeAudioStreamer:
+            def __init__(self, transcription_callback=None, **_kwargs):
+                self.transcription_callback = transcription_callback
+                self.running = False
+                created_streamers.append(self)
+
+            def start(self):
+                self.running = True
+                return True
+
+        class FakeThread:
+            def __init__(self, target=None, **_kwargs):
+                self.target = target
+
+            def start(self):
+                events.append("thread_started")
+
+        manager = LiveTranscriptionManager(
+            transcription_callback=lambda *args: events.append("transcript_callback")
+        )
+
+        with (
+            patch("live_transcription.AudioStreamer", FakeAudioStreamer),
+            patch("live_transcription.threading.Thread", FakeThread),
+        ):
+            self.assertTrue(manager.start_desktop_transcription())
+            events.clear()
+            created_streamers[0].transcription_callback(
+                {
+                    "transcription": "current question",
+                    "completed": True,
+                    "item_id": "turn-1",
+                    "timing": {},
+                },
+                "desktop",
+            )
+
+        self.assertEqual(events, ["thread_started", "transcript_callback"])
+
     def test_stale_auto_answer_is_not_published(self):
         published = []
         manager = LiveTranscriptionManager(auto_answer_callback=lambda *args: published.append(args))

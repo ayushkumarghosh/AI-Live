@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import threading
 import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
@@ -24,10 +25,13 @@ load_env_file()
 ANALYSIS_MODEL = os.getenv("AZURE_OPENAI_ANALYSIS_DEPLOYMENT", "gpt-5.5")
 AUTO_ANSWER_MODEL = os.getenv("AZURE_OPENAI_AUTO_ANSWER_DEPLOYMENT", "gpt-5.4-nano")
 AUTO_ANSWER_STREAMING = os.getenv("AUTO_ANSWER_STREAMING", "true").strip().lower() in {"1", "true", "yes", "on"}
+AUTO_ANSWER_WARMUP = os.getenv("AUTO_ANSWER_WARMUP", "false").strip().lower() in {"1", "true", "yes", "on"}
 AUTO_ANSWER_LATENCY_LOG = os.getenv("AUTO_ANSWER_LATENCY_LOG", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 _analysis_client: Optional[OpenAI] = None
 _auto_answer_client: Optional[OpenAI] = None
+_auto_answer_warmup_started = False
+_auto_answer_warmup_lock = threading.Lock()
 
 
 candidate_answer_style_prompt = (
@@ -38,6 +42,20 @@ candidate_answer_style_prompt = (
     "informal and human, but do not force slang, Hinglish, filler words, or accent-like "
     "wording. Avoid sounding overly polished, scripted, corporate, or like an AI "
     "assistant. Keep the technical content accurate and interview-appropriate."
+)
+
+auto_answer_brevity_prompt = (
+    "Keep the answer concise and no longer than 10 sentences. Avoid expanding with "
+    "long examples, long lists, or code unless the interviewer explicitly asks for them."
+)
+
+auto_answer_revision_brevity_prompt = (
+    "For this update, limit only the new or substantially changed material for the "
+    "latest interviewer turn to no longer than 10 sentences. The complete updated "
+    "visible answer may be longer if it preserves prior correct content. Do not "
+    "shorten or remove correct existing wording just to fit the 10-sentence update "
+    "limit. Avoid adding long examples, long lists, or code unless the interviewer "
+    "explicitly asks for them."
 )
 
 code_problem_prompt = (
@@ -77,6 +95,8 @@ auto_answer_prompt = (
     "experience, background, projects, skills, achievements, strengths, or when a "
     "personalized example is clearly useful. Do not invent resume details. "
     "Return only the single answer, and do not mention that you are an AI assistant.\n\n"
+    + auto_answer_brevity_prompt
+    + "\n\n"
     + candidate_answer_style_prompt
 )
 
@@ -91,6 +111,8 @@ auto_answer_revision_prompt = (
     "turn does not require a change, return the previous visible answer exactly. "
     "Do not explain your edits, do not include JSON, and do not mention that you are "
     "an AI assistant.\n\n"
+    + auto_answer_revision_brevity_prompt
+    + "\n\n"
     + candidate_answer_style_prompt
 )
 
@@ -203,6 +225,46 @@ def get_auto_answer_client() -> OpenAI:
             base_url=_azure_base_url("AZURE_OPENAI_AUTO_ANSWER_ENDPOINT"),
         )
     return _auto_answer_client
+
+
+def warm_auto_answer_client() -> bool:
+    """Move first-request latency off the first real auto-answer."""
+    request_started_at = time.perf_counter()
+    _latency_log("warmup_started")
+
+    try:
+        get_auto_answer_client().responses.create(
+            model=AUTO_ANSWER_MODEL,
+            instructions="Reply with exactly OK.",
+            input="warmup",
+            max_output_tokens=16,
+            reasoning={"effort": "none"},
+            text={"verbosity": "low"},
+        )
+    except Exception as exc:
+        print(
+            f"{timestamp()} Azure OpenAI auto-answer warmup failed for deployment "
+            f"{AUTO_ANSWER_MODEL!r}: {exc}",
+            flush=True,
+        )
+        return False
+
+    _latency_log("warmup_complete", request_started_at)
+    return True
+
+
+def start_auto_answer_warmup() -> bool:
+    global _auto_answer_warmup_started
+    if not AUTO_ANSWER_WARMUP:
+        return False
+
+    with _auto_answer_warmup_lock:
+        if _auto_answer_warmup_started:
+            return False
+        _auto_answer_warmup_started = True
+
+    threading.Thread(target=warm_auto_answer_client, daemon=True).start()
+    return True
 
 
 def reset_chat_history():

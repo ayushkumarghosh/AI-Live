@@ -95,6 +95,15 @@ def latency_log(source_type, event, start_at=None, **fields):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] latency {source_type}.{event}{elapsed}{details}", flush=True)
 
 
+def log_runtime_config(source_type, chunk_size):
+    print(
+        f"[{datetime.now().strftime('%H:%M:%S')}] Azure {source_type} realtime config: "
+        f"chunk_size={chunk_size} vad_silence_ms={VAD_SILENCE_MS} "
+        f"vad_threshold={VAD_THRESHOLD} vad_prefix_padding_ms={VAD_PREFIX_PADDING_MS}",
+        flush=True,
+    )
+
+
 def _required_env(name, fallback_name=None):
     value = os.getenv(name, "").strip()
     if not value and fallback_name:
@@ -408,6 +417,8 @@ class AudioStreamer:
                 flush=True,
             )
             return False
+
+        log_runtime_config(self.source_type, self.chunk_size)
 
         def run_async_loop():
             self.loop = asyncio.new_event_loop()

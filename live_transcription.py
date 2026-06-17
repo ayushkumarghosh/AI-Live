@@ -346,16 +346,16 @@ class LiveTranscriptionManager:
                         self.last_desktop_query = text
                         self.last_desktop_turn_id = response_data.get("item_id", "")
                 
-                # Call the original callback with the transcription text
-                if self.transcription_callback and text:
-                    self.transcription_callback(text, source_type)
-
                 if text and completed:
                     threading.Thread(
                         target=self._generate_desktop_answer,
                         args=(text, response_data.get("item_id", ""), response_data.get("timing", {})),
                         daemon=True,
                     ).start()
+
+                # UI/session transcript handling should not delay the auto-answer request.
+                if self.transcription_callback and text:
+                    self.transcription_callback(text, source_type)
             
             self.desktop_streamer = AudioStreamer(
                 transcription_callback=desktop_callback,

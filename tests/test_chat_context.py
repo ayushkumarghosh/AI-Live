@@ -40,12 +40,29 @@ class FakeStreamingClient:
         self.responses = FakeStreamingResponses(events)
 
 
+class FakeCreateResponses:
+    def __init__(self, output_text="OK"):
+        self.output_text = output_text
+        self.kwargs = None
+
+    def create(self, **kwargs):
+        self.kwargs = kwargs
+        return FakeResponse(self.output_text)
+
+
+class FakeCreateClient:
+    def __init__(self, output_text="OK"):
+        self.responses = FakeCreateResponses(output_text)
+
+
 class ChatContextTests(unittest.TestCase):
     def setUp(self):
+        chat._auto_answer_warmup_started = False
         resume_context.clear_resume_context(remove_cache=False)
         session_context.clear_session_context()
 
     def tearDown(self):
+        chat._auto_answer_warmup_started = False
         resume_context.clear_resume_context(remove_cache=False)
         session_context.clear_session_context()
 
@@ -216,6 +233,8 @@ class ChatContextTests(unittest.TestCase):
         self.assertIn("How would you handle collisions?", request_text)
         self.assertIn("Interviewee/Candidate: My answer mentioned hashing.", request_text)
         self.assertIn(chat.candidate_answer_style_prompt, instructions)
+        self.assertIn(chat.auto_answer_brevity_prompt, instructions)
+        self.assertIn("no longer than 10 sentences", instructions)
         self.assertIn("microphone audio is the Interviewee/Candidate", instructions)
         self.assertIn("not as questions to answer", instructions)
         self.assertIn("Only the latest generated answer is visible", instructions)
@@ -258,8 +277,42 @@ class ChatContextTests(unittest.TestCase):
         )
         self.assertIn("How would you handle collisions?", snapshot["exchanges"][0]["user_query"])
         self.assertIn(chat.candidate_answer_style_prompt, client.responses.kwargs["instructions"])
+        self.assertIn(chat.auto_answer_brevity_prompt, client.responses.kwargs["instructions"])
+        self.assertIn("no longer than 10 sentences", client.responses.kwargs["instructions"])
         self.assertIn("Only the latest generated answer is visible", client.responses.kwargs["instructions"])
         self.assertEqual(client.responses.kwargs["max_output_tokens"], chat.AUTO_ANSWER_MAX_OUTPUT_TOKENS)
+
+    def test_auto_answer_warmup_sends_tiny_unrecorded_request(self):
+        client = FakeCreateClient()
+
+        with patch.object(chat, "get_auto_answer_client", return_value=client):
+            self.assertTrue(chat.warm_auto_answer_client())
+
+        self.assertEqual(client.responses.kwargs["model"], chat.AUTO_ANSWER_MODEL)
+        self.assertEqual(client.responses.kwargs["input"], "warmup")
+        self.assertEqual(client.responses.kwargs["max_output_tokens"], 16)
+        self.assertEqual(client.responses.kwargs["reasoning"], {"effort": "none"})
+        self.assertEqual(client.responses.kwargs["text"], {"verbosity": "low"})
+        self.assertEqual(session_context.snapshot()["exchanges"], [])
+
+    def test_auto_answer_warmup_starts_once_when_enabled(self):
+        started = []
+
+        class FakeThread:
+            def __init__(self, target=None, **_kwargs):
+                self.target = target
+
+            def start(self):
+                started.append("thread")
+
+        with (
+            patch.object(chat, "AUTO_ANSWER_WARMUP", True),
+            patch.object(chat.threading, "Thread", FakeThread),
+        ):
+            self.assertTrue(chat.start_auto_answer_warmup())
+            self.assertFalse(chat.start_auto_answer_warmup())
+
+        self.assertEqual(started, ["thread"])
 
     def test_same_segment_revision_returns_model_output_exactly(self):
         previous = (
@@ -306,6 +359,9 @@ class ChatContextTests(unittest.TestCase):
         self.assertEqual(answer, revised)
         self.assertEqual(partials, [])
         self.assertIn("complete updated visible answer", create.call_args.kwargs["instructions"])
+        self.assertIn(chat.auto_answer_revision_brevity_prompt, create.call_args.kwargs["instructions"])
+        self.assertIn("limit only the new or substantially changed material", create.call_args.kwargs["instructions"])
+        self.assertIn("complete updated visible answer may be longer", create.call_args.kwargs["instructions"])
         self.assertIn("no local patching or post-processing", create.call_args.kwargs["instructions"])
         self.assertNotIn("append_after", create.call_args.kwargs["instructions"])
         self.assertNotIn("replace_block", create.call_args.kwargs["instructions"])

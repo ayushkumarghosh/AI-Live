@@ -34,6 +34,22 @@ class AzureRealtimeConfigTests(unittest.TestCase):
             self.assertEqual(azure_realtime.parse_int_env("AZURE_OPENAI_VAD_SILENCE_MS", 350), 400)
             self.assertEqual(azure_realtime.parse_float_env("AZURE_OPENAI_VAD_THRESHOLD", 0.5), 0.6)
 
+    def test_fast_latency_values_are_accepted(self):
+        with patch.dict(
+            os.environ,
+            {
+                "CHUNK_SIZE": "1024",
+                "AZURE_OPENAI_VAD_SILENCE_MS": "250",
+                "AZURE_OPENAI_VAD_THRESHOLD": "0.5",
+                "AZURE_OPENAI_VAD_PREFIX_PADDING_MS": "300",
+            },
+            clear=True,
+        ):
+            self.assertEqual(azure_realtime.parse_int_env("CHUNK_SIZE", 1024), 1024)
+            self.assertEqual(azure_realtime.parse_int_env("AZURE_OPENAI_VAD_SILENCE_MS", 350), 250)
+            self.assertEqual(azure_realtime.parse_float_env("AZURE_OPENAI_VAD_THRESHOLD", 0.5), 0.5)
+            self.assertEqual(azure_realtime.parse_int_env("AZURE_OPENAI_VAD_PREFIX_PADDING_MS", 300), 300)
+
 
 if __name__ == "__main__":
     unittest.main()

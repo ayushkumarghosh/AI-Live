@@ -16,6 +16,7 @@ from chat import (
     analyze_general_problem_no_thinking,
     analyze_with_text_input,
     clear_chat_history,
+    start_auto_answer_warmup,
 )
 from live_transcription import LiveTranscriptionManager
 from overlay import DraggableOverlay, initialize_windows_ole, uninitialize_windows_ole
@@ -256,6 +257,8 @@ def initialize_live_transcription():
         auto_answer_callback=auto_answer_callback,
     )
     result = transcription_manager.start_transcription()
+    if result:
+        start_auto_answer_warmup()
     print(f"{timestamp()} Live transcription {'started' if result else 'failed to start'}", flush=True)
     return result
 

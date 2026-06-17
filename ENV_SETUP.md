@@ -39,6 +39,7 @@ Edit `.env` and fill in your Azure OpenAI values. The app supports separate Azur
 | `AZURE_OPENAI_VAD_THRESHOLD` | Server VAD speech detection threshold. | `0.5` |
 | `AZURE_OPENAI_VAD_PREFIX_PADDING_MS` | Audio padding retained before detected speech starts. | `300` |
 | `AUTO_ANSWER_STREAMING` | Stream auto-answer deltas to the overlay after final transcription. | `true` |
+| `AUTO_ANSWER_WARMUP` | Send one tiny unrecorded auto-answer request after transcription starts to absorb first-request latency before the first real question. | `false` |
 | `AUTO_ANSWER_MAX_OUTPUT_TOKENS` | Maximum tokens for auto-answer responses. | `500` |
 | `AUTO_ANSWER_CONTEXT_TURNS` | Recent transcript turns included in compact auto-answer context. | `6` |
 | `AUTO_ANSWER_CONTEXT_EXCHANGES` | Recent AI exchanges included in compact auto-answer context. | `2` |
@@ -46,6 +47,30 @@ Edit `.env` and fill in your Azure OpenAI values. The app supports separate Azur
 | `AUTO_ANSWER_SEGMENT_GAP_SECONDS` | Silence gap used with topic overlap to decide when a new auto-answer conversation starts. | `45` |
 | `AUTO_ANSWER_TOPIC_OVERLAP_MIN` | Minimum token overlap to keep a delayed interviewer turn in the same auto-answer segment. | `0.18` |
 | `AUTO_ANSWER_LATENCY_LOG` | Print timing logs for transcription, answer generation, and UI handoff. | `false` |
+
+## Fast Transcript-Finish Preset
+
+To make auto-answer start sooner after the interviewer stops speaking, use:
+
+```env
+CHUNK_SIZE=1024
+AZURE_OPENAI_VAD_SILENCE_MS=250
+AZURE_OPENAI_VAD_THRESHOLD=0.5
+AZURE_OPENAI_VAD_PREFIX_PADDING_MS=300
+AUTO_ANSWER_STREAMING=true
+AUTO_ANSWER_WARMUP=true
+AUTO_ANSWER_MAX_OUTPUT_TOKENS=320
+AUTO_ANSWER_CONTEXT_TURNS=4
+AUTO_ANSWER_CONTEXT_EXCHANGES=1
+AUTO_ANSWER_TARGET_INTERVIEWER_TURNS=3
+AUTO_ANSWER_LATENCY_LOG=true
+```
+
+This keeps audio streaming through Azure OpenAI Realtime WebSockets and uses Azure server VAD for turn completion. Keeping `CHUNK_SIZE=1024` avoids doubling the WebSocket JSON/base64 message rate. The tradeoff is that short interviewer pauses can still be finalized as separate transcript turns. If that happens too often, raise `AZURE_OPENAI_VAD_SILENCE_MS` to `300`; if it remains stable and you want lower latency, try `200`.
+
+The auto-answer values reduce the `gpt-5.4-nano` input/output budget while preserving the existing same-segment revision behavior.
+
+`AUTO_ANSWER_WARMUP=true` shifts first-request connection/deployment latency to app startup. It sends one small unrecorded `gpt-5.4-nano` request, so the first real interviewer answer can reuse a warmed client path.
 
 ## Security
 

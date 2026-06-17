@@ -152,7 +152,7 @@ class ResumeContextTests(unittest.TestCase):
 
         self.assertIn("Candidate resume context:", context)
         self.assertIn("Built observability dashboards", context)
-        self.assertIn("Recent interviewer questions/follow-ups to answer", context)
+        self.assertIn("Interviewer turns to answer together in the single visible response", context)
 
     def test_auto_answer_context_excludes_resume_for_non_personal_question(self):
         resume_context.set_resume_context(

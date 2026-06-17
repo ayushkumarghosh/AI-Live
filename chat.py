@@ -8,7 +8,7 @@ from openai import OpenAI
 
 from env_loader import load_env_file
 from session_context import (
-    build_auto_answer_context,
+    build_auto_answer_context_bundle,
     build_context,
     clear_session_context,
     find_repeated_exchange,
@@ -53,9 +53,11 @@ general_analysis_prompt = (
 )
 
 auto_answer_prompt = (
-    "You are helping a software engineering interview candidate. Given the latest "
-    "interviewer transcript and recent conversation, write one concise answer the "
-    "candidate could say out loud. "
+    "You are helping a software engineering interview candidate. Given the target "
+    "interviewer turns and recent conversation, write one concise answer the candidate "
+    "could say out loud. Only the latest generated answer is visible to the candidate, "
+    "so the response must be self-contained and cover the target interviewer turns "
+    "together. "
     "Recent transcript context may include both speakers: desktop audio is the "
     "Interviewer, and microphone audio is the Interviewee/Candidate. Treat microphone "
     "transcriptions as what the candidate already said or clarifying questions they "
@@ -63,9 +65,10 @@ auto_answer_prompt = (
     "across pauses, combine the latest related interviewer turns. If the candidate "
     "asked a clarifying question and the interviewer answered it, use that clarified "
     "context to answer the latest interviewer question or follow-up. When the context "
-    "contains a 'Recent interviewer questions/follow-ups to answer' section, use that "
-    "section as the answer target. Do not answer the latest desktop transcript merely "
-    "because it is last; if it is a statement or confirmation, use it only as context. "
+    "contains an 'Interviewer turns to answer together in the single visible response' "
+    "section, use that section as the answer target. Treat interviewer statements, "
+    "confirmations, and constraints in that target section as context to fold into the "
+    "same answer. Do not answer the latest desktop transcript merely because it is last. "
     "If candidate resume context is provided, use it only when the question asks about "
     "experience, background, projects, skills, achievements, strengths, or when a "
     "personalized example is clearly useful. Do not invent resume details. "
@@ -109,6 +112,7 @@ def _int_env(name: str, default: int) -> int:
 AUTO_ANSWER_MAX_OUTPUT_TOKENS = _int_env("AUTO_ANSWER_MAX_OUTPUT_TOKENS", 500)
 AUTO_ANSWER_CONTEXT_TURNS = _int_env("AUTO_ANSWER_CONTEXT_TURNS", 6)
 AUTO_ANSWER_CONTEXT_EXCHANGES = _int_env("AUTO_ANSWER_CONTEXT_EXCHANGES", 2)
+AUTO_ANSWER_TARGET_INTERVIEWER_TURNS = _int_env("AUTO_ANSWER_TARGET_INTERVIEWER_TURNS", 5)
 
 
 def _latency_log(event: str, start_at: Optional[float] = None, **fields):
@@ -502,17 +506,23 @@ def generate_auto_answer(transcript: str, on_delta: Optional[Callable[[str, str]
     if not transcript:
         return ""
 
-    context_text = build_auto_answer_context(
+    context_text, target_summary = build_auto_answer_context_bundle(
         transcript,
         transcript_turns=AUTO_ANSWER_CONTEXT_TURNS,
         exchange_count=AUTO_ANSWER_CONTEXT_EXCHANGES,
+        target_interviewer_turns=AUTO_ANSWER_TARGET_INTERVIEWER_TURNS,
     )
 
     if AUTO_ANSWER_STREAMING:
         try:
             answer = _generate_auto_answer_streaming(context_text, on_delta=on_delta)
             if answer:
-                record_exchange(context_text, {"user_query": transcript, "response": answer}, "auto")
+                record_exchange(
+                    context_text,
+                    {"user_query": target_summary, "response": answer},
+                    "auto",
+                    current_input=target_summary,
+                )
             return answer
         except Exception as exc:
             print(
@@ -546,5 +556,10 @@ def generate_auto_answer(transcript: str, on_delta: Optional[Callable[[str, str]
     if answer and on_delta:
         on_delta(answer, answer)
     if answer:
-        record_exchange(context_text, {"user_query": transcript, "response": answer}, "auto")
+        record_exchange(
+            context_text,
+            {"user_query": target_summary, "response": answer},
+            "auto",
+            current_input=target_summary,
+        )
     return answer

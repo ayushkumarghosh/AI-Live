@@ -57,102 +57,38 @@ def _normalize_question(text: str) -> str:
     return " ".join(text.split())
 
 
-def _looks_like_interviewer_question(text: str) -> bool:
-    raw_text = str(text or "").strip()
-    normalized = _normalize_question(raw_text)
-    if not normalized:
-        return False
-
-    if "?" in raw_text:
-        return True
-
-    question_prefixes = (
-        "what ",
-        "why ",
-        "how ",
-        "when ",
-        "where ",
-        "which ",
-        "who ",
-        "can you ",
-        "could you ",
-        "would you ",
-        "will you ",
-        "do you ",
-        "does ",
-        "did ",
-        "is ",
-        "are ",
-        "should ",
-        "tell me ",
-        "explain ",
-        "describe ",
-        "walk me ",
-        "talk about ",
-        "give me ",
-        "show me ",
-        "compare ",
-        "design ",
-        "solve ",
-        "implement ",
-        "optimize ",
-        "debug ",
-        "write ",
-    )
-    followup_prefixes = (
-        "what about ",
-        "how about ",
-        "and if ",
-        "and when ",
-        "now ",
-        "next ",
-        "then ",
-    )
-    return normalized.startswith(question_prefixes + followup_prefixes)
-
-
-def _recent_interviewer_questions(
+def _latest_interviewer_turns(
     transcripts: List[TranscriptTurn],
     current_input: str,
-    limit: int = 3,
+    limit: int = 5,
 ) -> List[str]:
-    question_groups: List[List[str]] = []
-    active_group: Optional[List[str]] = None
-    seen = set()
-    previous_source = ""
+    limit = max(0, int(limit or 0))
+    if limit <= 0:
+        return []
 
+    turns = []
     for turn in transcripts:
         if turn.source != "desktop":
-            active_group = None
-            previous_source = turn.source
             continue
+        text = _compact(turn.text, 700)
+        if text:
+            turns.append(text)
 
-        normalized = _normalize_question(turn.text)
-        if not normalized or normalized in seen:
-            previous_source = turn.source
-            continue
+    current_input = str(current_input or "").strip()
+    current_normalized = _normalize_question(current_input)
+    last_desktop_normalized = _normalize_question(turns[-1]) if turns else ""
+    if current_normalized and current_normalized != last_desktop_normalized:
+        turns.append(_compact(current_input, 700))
 
-        if _looks_like_interviewer_question(turn.text):
-            active_group = [_compact(turn.text, 700)]
-            question_groups.append(active_group)
-            seen.add(normalized)
-        elif active_group is not None and previous_source == "desktop":
-            active_group.append(_compact(turn.text, 700))
-            seen.add(normalized)
-        previous_source = turn.source
+    return turns[-limit:]
 
-    if current_input and _looks_like_interviewer_question(current_input):
-        normalized = _normalize_question(current_input)
-        if normalized not in seen:
-            question_groups.append([_compact(current_input, 700)])
-            seen.add(normalized)
-    elif current_input and active_group is not None and transcripts and transcripts[-1].source == "desktop":
-        normalized = _normalize_question(current_input)
-        if normalized and normalized not in seen:
-            active_group.append(_compact(current_input, 700))
 
-    questions = [" ".join(group) for group in question_groups if group]
-    return questions[-limit:]
+def _format_auto_answer_target(interviewer_turns: List[str]) -> str:
+    lines = [f"{idx}. {turn}" for idx, turn in enumerate(interviewer_turns, start=1)]
+    return (
+        "Interviewer turns to answer together in the single visible response:\n"
+        + "\n".join(lines)
+    )
 
 
 def _looks_like_same_question(left: str, right: str) -> bool:
@@ -360,21 +296,37 @@ def build_context(current_input: str, mode: str, include_transcripts: bool = Tru
     return "\n\n".join(sections)
 
 
-def build_auto_answer_context(current_input: str, transcript_turns: int = 6, exchange_count: int = 2) -> str:
+def build_auto_answer_context_bundle(
+    current_input: str,
+    transcript_turns: int = 6,
+    exchange_count: int = 2,
+    target_interviewer_turns: int = 5,
+) -> tuple[str, str]:
     current_input = str(current_input or "").strip()
     transcript_turns = max(0, int(transcript_turns or 0))
     exchange_count = max(0, int(exchange_count or 0))
+    target_interviewer_turns = max(0, int(target_interviewer_turns or 0))
 
     with _lock:
+        all_transcripts = list(_transcripts)
         transcripts = list(_transcripts[-transcript_turns:]) if transcript_turns else []
         exchanges = list(_exchanges[-exchange_count:]) if exchange_count else []
 
-    interviewer_questions = _recent_interviewer_questions(transcripts, current_input)
-    resume_relevance_text = "\n".join(interviewer_questions + [current_input])
+    interviewer_turns = _latest_interviewer_turns(
+        all_transcripts,
+        current_input,
+        target_interviewer_turns,
+    )
+    target_section = _format_auto_answer_target(interviewer_turns) if interviewer_turns else ""
+    target_summary = target_section or f"Latest desktop transcript:\n{current_input}"
+    resume_relevance_text = "\n".join(interviewer_turns + [current_input])
     resume_section = get_resume_context_section() if is_resume_context_relevant(resume_relevance_text) else ""
 
     sections = [
-        "Answer the most recent interviewer question or follow-up as a software engineering interview candidate.",
+        (
+            "Answer the interviewer turns in the target section as one self-contained "
+            "software engineering interview answer."
+        ),
         (
             "Speaker labels matter: Interviewer turns are questions or follow-ups from desktop audio; "
             "Interviewee/Candidate turns are microphone transcriptions of what the candidate already said "
@@ -384,11 +336,14 @@ def build_auto_answer_context(current_input: str, transcript_turns: int = 6, exc
             "Use the recent transcript as one rolling exchange. If the latest interviewer question is split "
             "across multiple nearby Interviewer turns because of pauses, combine those turns before answering. "
             "If the Interviewee/Candidate asked a clarification and the Interviewer replied, use that reply "
-            "to answer the clarified latest question. Do not answer the latest desktop transcript only because "
-            "it is last; if it is a statement, use it as context for the recent interviewer question instead. "
-            "Produce one answer only."
+            "to answer the clarified latest question. Interviewer statements, confirmations, or constraints "
+            "in the target section must be folded into the same answer instead of ignored. Only the latest "
+            "auto-answer is visible to the candidate, so produce one complete answer only."
         ),
     ]
+
+    if target_section:
+        sections.append(target_section)
 
     if resume_section:
         sections.append(resume_section)
@@ -403,10 +358,6 @@ def build_auto_answer_context(current_input: str, transcript_turns: int = 6, exc
             )
         sections.append("Recent answer context:\n" + "\n\n".join(lines))
 
-    if interviewer_questions:
-        lines = [f"- {question}" for question in interviewer_questions]
-        sections.append("Recent interviewer questions/follow-ups to answer:\n" + "\n".join(lines))
-
     if transcripts:
         lines = []
         for turn in transcripts:
@@ -417,7 +368,22 @@ def build_auto_answer_context(current_input: str, transcript_turns: int = 6, exc
     if current_input:
         sections.append(f"Latest desktop transcript (context, not automatically the question):\n{current_input}")
 
-    return "\n\n".join(sections)
+    return "\n\n".join(sections), target_summary
+
+
+def build_auto_answer_context(
+    current_input: str,
+    transcript_turns: int = 6,
+    exchange_count: int = 2,
+    target_interviewer_turns: int = 5,
+) -> str:
+    context_text, _target_summary = build_auto_answer_context_bundle(
+        current_input,
+        transcript_turns=transcript_turns,
+        exchange_count=exchange_count,
+        target_interviewer_turns=target_interviewer_turns,
+    )
+    return context_text
 
 
 def clear_session_context() -> None:

@@ -193,6 +193,7 @@ class ChatContextTests(unittest.TestCase):
         self.assertIn(chat.candidate_answer_style_prompt, instructions)
 
     def test_auto_answer_includes_context_and_records_exchange(self):
+        session_context.record_transcript("What is hashing?", "desktop")
         session_context.record_transcript("My answer mentioned hashing.", "mic")
         session_context.record_transcript("How would you handle collisions?", "desktop")
 
@@ -209,13 +210,23 @@ class ChatContextTests(unittest.TestCase):
 
         self.assertEqual(answer, "Use chaining.")
         self.assertIn("My answer mentioned hashing.", request_text)
+        self.assertIn("Interviewer turns to answer together in the single visible response:", request_text)
+        self.assertIn("1. What is hashing?", request_text)
+        self.assertIn("2. How would you handle collisions?", request_text)
         self.assertIn("How would you handle collisions?", request_text)
         self.assertIn("Interviewee/Candidate: My answer mentioned hashing.", request_text)
         self.assertIn(chat.candidate_answer_style_prompt, instructions)
         self.assertIn("microphone audio is the Interviewee/Candidate", instructions)
         self.assertIn("not as questions to answer", instructions)
+        self.assertIn("Only the latest generated answer is visible", instructions)
         self.assertEqual(snapshot["exchanges"][0]["mode"], "auto")
         self.assertEqual(snapshot["exchanges"][0]["response"], "Use chaining.")
+        self.assertIn(
+            "Interviewer turns to answer together in the single visible response:",
+            snapshot["exchanges"][0]["user_query"],
+        )
+        self.assertIn("What is hashing?", snapshot["exchanges"][0]["user_query"])
+        self.assertIn("How would you handle collisions?", snapshot["exchanges"][0]["user_query"])
 
     def test_streaming_auto_answer_accumulates_deltas_and_records_once(self):
         client = FakeStreamingClient(
@@ -241,7 +252,13 @@ class ChatContextTests(unittest.TestCase):
         self.assertEqual(partials, ["Use ", "Use chaining."])
         self.assertEqual(len(snapshot["exchanges"]), 1)
         self.assertEqual(snapshot["exchanges"][0]["response"], "Use chaining.")
+        self.assertIn(
+            "Interviewer turns to answer together in the single visible response:",
+            snapshot["exchanges"][0]["user_query"],
+        )
+        self.assertIn("How would you handle collisions?", snapshot["exchanges"][0]["user_query"])
         self.assertIn(chat.candidate_answer_style_prompt, client.responses.kwargs["instructions"])
+        self.assertIn("Only the latest generated answer is visible", client.responses.kwargs["instructions"])
         self.assertEqual(client.responses.kwargs["max_output_tokens"], chat.AUTO_ANSWER_MAX_OUTPUT_TOKENS)
 
 

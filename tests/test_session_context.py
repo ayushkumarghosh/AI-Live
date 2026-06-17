@@ -13,6 +13,12 @@ class SessionContextTests(unittest.TestCase):
         resume_context.clear_resume_context(remove_cache=False)
         session_context.clear_session_context()
 
+    def _auto_answer_target_section(self, context):
+        return context.split(
+            "Interviewer turns to answer together in the single visible response:\n",
+            1,
+        )[1].split("\n\n", 1)[0]
+
     def test_records_transcripts_in_order(self):
         session_context.record_transcript("hello from me", "mic")
         session_context.record_transcript("question from interviewer", "desktop")
@@ -140,9 +146,9 @@ class SessionContextTests(unittest.TestCase):
         self.assertEqual(snapshot["transcript_summary"], "")
         self.assertIn("old answer 0", snapshot["exchange_summary"])
 
-    def test_auto_answer_context_is_compact_and_keeps_latest_question(self):
+    def test_auto_answer_context_targets_latest_five_interviewer_turns(self):
         for idx in range(10):
-            session_context.record_transcript(f"turn {idx}", "desktop")
+            session_context.record_transcript(f"desktop turn {idx}", "desktop")
         for idx in range(5):
             session_context.record_exchange(
                 f"request {idx}",
@@ -150,11 +156,20 @@ class SessionContextTests(unittest.TestCase):
                 "general",
             )
 
-        compact_context = session_context.build_auto_answer_context("turn 9", transcript_turns=3, exchange_count=1)
+        compact_context = session_context.build_auto_answer_context(
+            "desktop turn 9",
+            transcript_turns=3,
+            exchange_count=1,
+            target_interviewer_turns=5,
+        )
+        target_section = self._auto_answer_target_section(compact_context)
+        target_lines = target_section.splitlines()
 
-        self.assertIn("Latest desktop transcript (context, not automatically the question):\nturn 9", compact_context)
-        self.assertIn("turn 9", compact_context)
-        self.assertNotIn("turn 0", compact_context)
+        self.assertEqual(len(target_lines), 5)
+        self.assertEqual(target_lines[0], "1. desktop turn 5")
+        self.assertEqual(target_lines[-1], "5. desktop turn 9")
+        self.assertNotIn("desktop turn 4", target_section)
+        self.assertIn("Latest desktop transcript (context, not automatically the question):\ndesktop turn 9", compact_context)
         self.assertIn("answer 4", compact_context)
         self.assertNotIn("answer 0", compact_context)
 
@@ -171,6 +186,27 @@ class SessionContextTests(unittest.TestCase):
         self.assertIn("Interviewee/Candidate: I explained hashing first.", context)
         self.assertIn("Interviewer: How do you handle collisions?", context)
         self.assertIn("microphone transcriptions of what the candidate already said", context)
+        self.assertNotIn("I explained hashing first.", self._auto_answer_target_section(context))
+
+    def test_auto_answer_context_uses_fewer_than_five_without_duplicating_current_turn(self):
+        session_context.record_transcript("What is your cache strategy?", "desktop")
+        session_context.record_transcript("Assume Redis is available.", "desktop")
+
+        context = session_context.build_auto_answer_context(
+            "Assume Redis is available.",
+            transcript_turns=2,
+            exchange_count=0,
+            target_interviewer_turns=5,
+        )
+        target_lines = self._auto_answer_target_section(context).splitlines()
+
+        self.assertEqual(
+            target_lines,
+            [
+                "1. What is your cache strategy?",
+                "2. Assume Redis is available.",
+            ],
+        )
 
     def test_auto_answer_context_guides_paused_question_and_clarification(self):
         session_context.record_transcript("Can you explain how you would", "desktop")
@@ -186,12 +222,15 @@ class SessionContextTests(unittest.TestCase):
         self.assertIn("Interviewer: Can you explain how you would", context)
         self.assertIn("Interviewee/Candidate: Do you mean the API design or scaling part?", context)
         self.assertIn("Interviewer: The scaling part, especially cache invalidation.", context)
-        self.assertIn("Recent interviewer questions/follow-ups to answer:\n- Can you explain how you would", context)
+        target_section = self._auto_answer_target_section(context)
+        self.assertIn("1. Can you explain how you would", target_section)
+        self.assertIn("2. The scaling part, especially cache invalidation.", target_section)
+        self.assertNotIn("Do you mean the API design or scaling part?", target_section)
         self.assertIn("split across multiple nearby Interviewer turns", context)
         self.assertIn("asked a clarification", context)
-        self.assertIn("Produce one answer only.", context)
+        self.assertIn("Only the latest auto-answer is visible", context)
 
-    def test_auto_answer_context_targets_recent_question_not_latest_statement(self):
+    def test_auto_answer_context_targets_latest_statement_with_recent_question(self):
         session_context.record_transcript("What tradeoffs would you consider for cache invalidation?", "desktop")
         session_context.record_transcript("Do you mean distributed cache invalidation?", "mic")
         session_context.record_transcript("Yes, distributed cache invalidation.", "desktop")
@@ -201,18 +240,18 @@ class SessionContextTests(unittest.TestCase):
             transcript_turns=3,
             exchange_count=0,
         )
-        focus_section = context.split("Recent interviewer questions/follow-ups to answer:\n", 1)[1].split("\n\n", 1)[0]
+        target_section = self._auto_answer_target_section(context)
 
-        self.assertIn("- What tradeoffs would you consider for cache invalidation?", focus_section)
-        self.assertNotIn("Yes, distributed cache invalidation.", focus_section)
+        self.assertIn("1. What tradeoffs would you consider for cache invalidation?", target_section)
+        self.assertIn("2. Yes, distributed cache invalidation.", target_section)
         self.assertIn(
             "Latest desktop transcript (context, not automatically the question):\n"
             "Yes, distributed cache invalidation.",
             context,
         )
-        self.assertIn("use it as context for the recent interviewer question instead", context)
+        self.assertIn("Interviewer statements, confirmations, or constraints", context)
 
-    def test_auto_answer_context_merges_adjacent_interviewer_question_fragments(self):
+    def test_auto_answer_context_keeps_adjacent_interviewer_fragments_in_target_order(self):
         session_context.record_transcript("Can you explain how you would", "desktop")
         session_context.record_transcript("scale Redis in this system", "desktop")
 
@@ -221,9 +260,16 @@ class SessionContextTests(unittest.TestCase):
             transcript_turns=2,
             exchange_count=0,
         )
-        focus_section = context.split("Recent interviewer questions/follow-ups to answer:\n", 1)[1].split("\n\n", 1)[0]
+        target_lines = self._auto_answer_target_section(context).splitlines()
 
-        self.assertIn("- Can you explain how you would scale Redis in this system", focus_section)
+        self.assertEqual(
+            target_lines,
+            [
+                "1. Can you explain how you would",
+                "2. scale Redis in this system",
+            ],
+        )
+        self.assertIn("combine those turns before answering", context)
 
 
 if __name__ == "__main__":

@@ -208,6 +208,79 @@ class SessionContextTests(unittest.TestCase):
             ],
         )
 
+    def test_auto_answer_segment_keeps_short_gap_topic_shift_same_segment(self):
+        session_context.record_transcript("Explain cache invalidation.", "desktop")
+        first = session_context.prepare_auto_answer_turn("Explain cache invalidation.", now=100.0)
+        session_context.commit_auto_answer_turn(first, "- Use TTLs", now=100.0)
+        session_context.record_transcript("What about message queues?", "desktop")
+
+        second = session_context.prepare_auto_answer_turn(
+            "What about message queues?",
+            segment_gap_seconds=45,
+            topic_overlap_min=0.18,
+            now=110.0,
+        )
+
+        self.assertFalse(second["starts_new_segment"])
+        self.assertFalse(second["should_clear_previous_answer"])
+        self.assertEqual(
+            second["target_turns"],
+            ["Explain cache invalidation.", "What about message queues?"],
+        )
+        self.assertIn("Previous visible auto-answer to update", second["context_text"])
+
+    def test_auto_answer_segment_starts_new_on_hard_reset_phrase(self):
+        session_context.record_transcript("Explain cache invalidation.", "desktop")
+        first = session_context.prepare_auto_answer_turn("Explain cache invalidation.", now=100.0)
+        session_context.commit_auto_answer_turn(first, "- Use TTLs", now=100.0)
+        session_context.record_transcript("Next question, explain graph traversal.", "desktop")
+
+        second = session_context.prepare_auto_answer_turn(
+            "Next question, explain graph traversal.",
+            now=110.0,
+        )
+
+        self.assertTrue(second["starts_new_segment"])
+        self.assertTrue(second["should_clear_previous_answer"])
+        self.assertEqual(second["target_turns"], ["Next question, explain graph traversal."])
+        self.assertNotIn("Previous visible auto-answer to update", second["context_text"])
+
+    def test_auto_answer_segment_starts_new_after_gap_with_low_topic_overlap(self):
+        session_context.record_transcript("Explain cache invalidation.", "desktop")
+        first = session_context.prepare_auto_answer_turn("Explain cache invalidation.", now=100.0)
+        session_context.commit_auto_answer_turn(first, "- Use TTLs", now=100.0)
+        session_context.record_transcript("How do you design graph traversal?", "desktop")
+
+        second = session_context.prepare_auto_answer_turn(
+            "How do you design graph traversal?",
+            segment_gap_seconds=45,
+            topic_overlap_min=0.18,
+            now=160.0,
+        )
+
+        self.assertTrue(second["starts_new_segment"])
+        self.assertTrue(second["gap_elapsed"])
+        self.assertLess(second["topic_overlap"], 0.18)
+        self.assertTrue(second["should_clear_previous_answer"])
+
+    def test_auto_answer_segment_keeps_delayed_turn_with_high_topic_overlap(self):
+        session_context.record_transcript("Explain database indexes.", "desktop")
+        first = session_context.prepare_auto_answer_turn("Explain database indexes.", now=100.0)
+        session_context.commit_auto_answer_turn(first, "- Mention B-trees", now=100.0)
+        session_context.record_transcript("How do database indexes handle range queries?", "desktop")
+
+        second = session_context.prepare_auto_answer_turn(
+            "How do database indexes handle range queries?",
+            segment_gap_seconds=45,
+            topic_overlap_min=0.18,
+            now=160.0,
+        )
+
+        self.assertFalse(second["starts_new_segment"])
+        self.assertTrue(second["gap_elapsed"])
+        self.assertGreaterEqual(second["topic_overlap"], 0.18)
+        self.assertFalse(second["should_clear_previous_answer"])
+
     def test_auto_answer_context_guides_paused_question_and_clarification(self):
         session_context.record_transcript("Can you explain how you would", "desktop")
         session_context.record_transcript("Do you mean the API design or scaling part?", "mic")

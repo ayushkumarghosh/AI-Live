@@ -43,6 +43,8 @@ Edit `.env` and fill in your Azure OpenAI values. The app supports separate Azur
 | `AUTO_ANSWER_CONTEXT_TURNS` | Recent transcript turns included in compact auto-answer context. | `6` |
 | `AUTO_ANSWER_CONTEXT_EXCHANGES` | Recent AI exchanges included in compact auto-answer context. | `2` |
 | `AUTO_ANSWER_TARGET_INTERVIEWER_TURNS` | Recent interviewer desktop turns each visible auto-answer should cover together. | `5` |
+| `AUTO_ANSWER_SEGMENT_GAP_SECONDS` | Silence gap used with topic overlap to decide when a new auto-answer conversation starts. | `45` |
+| `AUTO_ANSWER_TOPIC_OVERLAP_MIN` | Minimum token overlap to keep a delayed interviewer turn in the same auto-answer segment. | `0.18` |
 | `AUTO_ANSWER_LATENCY_LOG` | Print timing logs for transcription, answer generation, and UI handoff. | `false` |
 
 ## Security

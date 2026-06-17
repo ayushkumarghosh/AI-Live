@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
@@ -8,10 +9,11 @@ from openai import OpenAI
 
 from env_loader import load_env_file
 from session_context import (
-    build_auto_answer_context_bundle,
     build_context,
+    commit_auto_answer_turn,
     clear_session_context,
     find_repeated_exchange,
+    prepare_auto_answer_turn,
     record_exchange,
 )
 
@@ -76,6 +78,20 @@ auto_answer_prompt = (
     + candidate_answer_style_prompt
 )
 
+auto_answer_revision_prompt = (
+    "You are updating the single interview auto-answer that is already visible for "
+    "the current conversation segment. Return the complete updated visible answer "
+    "only. The app will replace the visible answer with exactly your output, with no "
+    "local patching or post-processing. Keep the previous answer's wording unchanged "
+    "where it is still correct, and only add, remove, or minimally edit text needed "
+    "to account for the latest interviewer turn and the current segment context. "
+    "Do not duplicate the previous answer as a separate paragraph. If the latest "
+    "turn does not require a change, return the previous visible answer exactly. "
+    "Do not explain your edits, do not include JSON, and do not mention that you are "
+    "an AI assistant.\n\n"
+    + candidate_answer_style_prompt
+)
+
 repeat_correction_prompt = (
     "The current request appears to repeat a previous analysis request. Audit the "
     "previous answer for mistakes, omissions, and incorrect assumptions, then provide "
@@ -109,10 +125,26 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        parsed = float(value)
+        if parsed < 0:
+            raise ValueError("must be non-negative")
+        return parsed
+    except ValueError:
+        print(f"{timestamp()} Invalid {name}={value!r}; using {default}", flush=True)
+        return default
+
+
 AUTO_ANSWER_MAX_OUTPUT_TOKENS = _int_env("AUTO_ANSWER_MAX_OUTPUT_TOKENS", 500)
 AUTO_ANSWER_CONTEXT_TURNS = _int_env("AUTO_ANSWER_CONTEXT_TURNS", 6)
 AUTO_ANSWER_CONTEXT_EXCHANGES = _int_env("AUTO_ANSWER_CONTEXT_EXCHANGES", 2)
 AUTO_ANSWER_TARGET_INTERVIEWER_TURNS = _int_env("AUTO_ANSWER_TARGET_INTERVIEWER_TURNS", 5)
+AUTO_ANSWER_SEGMENT_GAP_SECONDS = _float_env("AUTO_ANSWER_SEGMENT_GAP_SECONDS", 45.0)
+AUTO_ANSWER_TOPIC_OVERLAP_MIN = _float_env("AUTO_ANSWER_TOPIC_OVERLAP_MIN", 0.18)
 
 
 def _latency_log(event: str, start_at: Optional[float] = None, **fields):
@@ -471,6 +503,7 @@ def analyze_general_problem_no_thinking(
 def _generate_auto_answer_streaming(
     context_text: str,
     on_delta: Optional[Callable[[str, str], None]] = None,
+    instructions: str = auto_answer_prompt,
 ) -> str:
     request_started_at = time.perf_counter()
     _latency_log("request_started")
@@ -479,7 +512,7 @@ def _generate_auto_answer_streaming(
     first_delta_at = None
     with get_auto_answer_client().responses.stream(
         model=AUTO_ANSWER_MODEL,
-        instructions=auto_answer_prompt,
+        instructions=instructions,
         input=context_text,
         max_output_tokens=AUTO_ANSWER_MAX_OUTPUT_TOKENS,
         reasoning={"effort": "none"},
@@ -501,28 +534,110 @@ def _generate_auto_answer_streaming(
     return answer
 
 
-def generate_auto_answer(transcript: str, on_delta: Optional[Callable[[str, str], None]] = None) -> str:
+def _responses_create_auto_answer(context_text: str, instructions: str) -> str:
+    response = _responses_create_with_retries(
+        get_auto_answer_client(),
+        model=AUTO_ANSWER_MODEL,
+        instructions=instructions,
+        input=context_text,
+        max_output_tokens=AUTO_ANSWER_MAX_OUTPUT_TOKENS,
+        reasoning={"effort": "none"},
+        text={"verbosity": "low"},
+    )
+    return _extract_output_text(response)
+
+
+def _revision_context(context_text: str, previous_answer: str, latest_transcript: str) -> str:
+    return "\n\n".join(
+        [
+            context_text,
+            "Exact previous visible answer for this active conversation segment:",
+            str(previous_answer or ""),
+            "Return the complete updated visible answer. The UI will display exactly what you return.",
+            f"Latest interviewer transcript to incorporate:\n{latest_transcript}",
+        ]
+    )
+
+
+def _is_generation_current(is_current: Optional[Callable[[], bool]]) -> bool:
+    if not is_current:
+        return True
+    try:
+        return bool(is_current())
+    except Exception as exc:
+        print(f"{timestamp()} Auto-answer current-turn check failed: {exc}", flush=True)
+        return False
+
+
+def _commit_auto_answer_if_current(
+    turn_context: Dict[str, object],
+    answer: str,
+    is_current: Optional[Callable[[], bool]],
+) -> bool:
+    if not str(answer or "").strip() or not _is_generation_current(is_current):
+        return False
+
+    commit_auto_answer_turn(turn_context, answer)
+    context_text = str(turn_context.get("context_text") or "")
+    target_summary = str(turn_context.get("target_summary") or "")
+    record_exchange(
+        context_text,
+        {"user_query": target_summary, "response": answer},
+        "auto",
+        current_input=target_summary,
+    )
+    return True
+
+
+def _call_reset_if_needed(
+    turn_context: Dict[str, object],
+    on_reset: Optional[Callable[[], None]],
+    is_current: Optional[Callable[[], bool]],
+) -> None:
+    if not on_reset or not turn_context.get("should_clear_previous_answer"):
+        return
+    if not _is_generation_current(is_current):
+        return
+    on_reset()
+
+
+def generate_auto_answer(
+    transcript: str,
+    on_delta: Optional[Callable[[str, str], None]] = None,
+    previous_answer: Optional[str] = None,
+    on_reset: Optional[Callable[[], None]] = None,
+    is_current: Optional[Callable[[], bool]] = None,
+) -> str:
     transcript = transcript.strip()
     if not transcript:
         return ""
 
-    context_text, target_summary = build_auto_answer_context_bundle(
+    turn_context = prepare_auto_answer_turn(
         transcript,
         transcript_turns=AUTO_ANSWER_CONTEXT_TURNS,
         exchange_count=AUTO_ANSWER_CONTEXT_EXCHANGES,
         target_interviewer_turns=AUTO_ANSWER_TARGET_INTERVIEWER_TURNS,
+        segment_gap_seconds=AUTO_ANSWER_SEGMENT_GAP_SECONDS,
+        topic_overlap_min=AUTO_ANSWER_TOPIC_OVERLAP_MIN,
+        previous_answer=previous_answer,
     )
+    context_text = str(turn_context.get("context_text") or "")
+    prior_answer = str(turn_context.get("previous_answer") or "")
+    is_revision = bool(prior_answer and not turn_context.get("starts_new_segment"))
+    instructions = auto_answer_prompt
 
-    if AUTO_ANSWER_STREAMING:
+    _call_reset_if_needed(turn_context, on_reset, is_current)
+
+    should_stream = bool(AUTO_ANSWER_STREAMING and not is_revision)
+
+    if should_stream:
         try:
-            answer = _generate_auto_answer_streaming(context_text, on_delta=on_delta)
-            if answer:
-                record_exchange(
-                    context_text,
-                    {"user_query": target_summary, "response": answer},
-                    "auto",
-                    current_input=target_summary,
-                )
+            answer = _generate_auto_answer_streaming(
+                context_text,
+                on_delta=on_delta,
+                instructions=instructions,
+            )
+            _commit_auto_answer_if_current(turn_context, answer, is_current)
             return answer
         except Exception as exc:
             print(
@@ -534,14 +649,10 @@ def generate_auto_answer(transcript: str, on_delta: Optional[Callable[[str, str]
     request_started_at = time.perf_counter()
     _latency_log("request_started")
     try:
-        response = _responses_create_with_retries(
-            get_auto_answer_client(),
-            model=AUTO_ANSWER_MODEL,
-            instructions=auto_answer_prompt,
-            input=context_text,
-            max_output_tokens=AUTO_ANSWER_MAX_OUTPUT_TOKENS,
-            reasoning={"effort": "none"},
-            text={"verbosity": "low"},
+        request_text = _revision_context(context_text, prior_answer, transcript) if is_revision else context_text
+        raw_answer = _responses_create_auto_answer(
+            request_text,
+            auto_answer_revision_prompt if is_revision else instructions,
         )
     except Exception as exc:
         print(
@@ -551,15 +662,9 @@ def generate_auto_answer(transcript: str, on_delta: Optional[Callable[[str, str]
         )
         return ""
 
-    answer = _extract_output_text(response).strip()
+    answer = raw_answer
     _latency_log("answer_complete", request_started_at, chars=len(answer))
-    if answer and on_delta:
+    if answer and on_delta and not is_revision:
         on_delta(answer, answer)
-    if answer:
-        record_exchange(
-            context_text,
-            {"user_query": target_summary, "response": answer},
-            "auto",
-            current_input=target_summary,
-        )
+    _commit_auto_answer_if_current(turn_context, answer, is_current)
     return answer

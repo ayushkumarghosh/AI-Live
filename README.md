@@ -58,7 +58,7 @@ The app does not automatically answer spoken queries unless Auto-Answer is enabl
 - **Resume**: choose a resume PDF from the file picker. The app converts it to Markdown, caches that converted context locally, and uses it for Auto-Answer and General Analysis when the question calls for personal experience, projects, skills, or examples. Click Resume again to replace or remove the cached resume context.
 - **Code Analysis**: analyze the latest selected or recent transcripts plus screenshot context as a coding problem.
 - **General Analysis**: answer the latest selected or recent transcripts as a non-coding interview question.
-- **Auto-Answer**: when enabled, displays one suggested answer for the latest fixed bundle of interviewer desktop turns.
+- **Auto-Answer**: when enabled, displays one suggested answer for the active interviewer segment, revising it for follow-ups and clearing only when a new segment is detected.
 
 ## Build Notes
 

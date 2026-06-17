@@ -85,6 +85,25 @@ class OverlaySingleAnswerTests(unittest.TestCase):
         self.assertEqual(overlay.current_answer, "Existing manual answer.")
         self.assertEqual(overlay.update_conversation_signal.values, [])
 
+    def test_auto_answer_reset_metadata_clears_visible_answer(self):
+        overlay = OverlayHarness(show_auto=True)
+        overlay.current_answer = "Existing auto answer."
+        overlay.last_suggested_answer = "Existing auto answer."
+        overlay._active_auto_answer_question = "Old question"
+
+        DraggableOverlay.update_interviewer_qa(
+            overlay,
+            "Next question, explain graphs.",
+            "",
+            False,
+            True,
+        )
+
+        self.assertEqual(overlay.current_answer, "")
+        self.assertEqual(overlay.last_suggested_answer, "")
+        self.assertEqual(overlay._active_auto_answer_question, "")
+        self.assertEqual(overlay.update_conversation_signal.values[-1], "")
+
 
 if __name__ == "__main__":
     unittest.main()

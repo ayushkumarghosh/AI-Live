@@ -261,6 +261,120 @@ class ChatContextTests(unittest.TestCase):
         self.assertIn("Only the latest generated answer is visible", client.responses.kwargs["instructions"])
         self.assertEqual(client.responses.kwargs["max_output_tokens"], chat.AUTO_ANSWER_MAX_OUTPUT_TOKENS)
 
+    def test_same_segment_revision_returns_model_output_exactly(self):
+        previous = (
+            "I would start with chaining because it is simple and predictable.\n\n"
+            "- Keep each bucket as a small list.\n"
+            "- Resize when the load factor grows.\n\n"
+            "```python\n"
+            "def lookup(key):\n"
+            "    return table[key]\n"
+            "```"
+        )
+        revised = (
+            "I would start with chaining because it is simple and predictable.\n\n"
+            "- Keep each bucket as a small list.\n"
+            "- Resize when the load factor grows.\n\n"
+            "```python\n"
+            "def lookup(key):\n"
+            "    return table[key]\n"
+            "```\n\n"
+            "For worst case, I would mention that chaining can degrade to O(n), so I would keep buckets small and monitor hash quality."
+        )
+        session_context.record_transcript("How would you handle collisions?", "desktop")
+        first = session_context.prepare_auto_answer_turn("How would you handle collisions?", now=100.0)
+        session_context.commit_auto_answer_turn(first, previous, now=100.0)
+        session_context.record_transcript("What about worst-case lookup?", "desktop")
+        partials = []
+
+        with (
+            patch.object(chat, "get_auto_answer_client", return_value=object()),
+            patch.object(chat, "AUTO_ANSWER_STREAMING", True),
+            patch.object(chat, "AUTO_ANSWER_SEGMENT_GAP_SECONDS", 1_000_000_000_000.0),
+            patch.object(
+                chat,
+                "_responses_create_with_retries",
+                return_value=FakeResponse(revised),
+            ) as create,
+        ):
+            answer = chat.generate_auto_answer(
+                "What about worst-case lookup?",
+                previous_answer=previous,
+                on_delta=lambda _delta, partial: partials.append(partial),
+            )
+
+        self.assertEqual(answer, revised)
+        self.assertEqual(partials, [])
+        self.assertIn("complete updated visible answer", create.call_args.kwargs["instructions"])
+        self.assertIn("no local patching or post-processing", create.call_args.kwargs["instructions"])
+        self.assertNotIn("append_after", create.call_args.kwargs["instructions"])
+        self.assertNotIn("replace_block", create.call_args.kwargs["instructions"])
+        self.assertIn("Exact previous visible answer", create.call_args.kwargs["input"])
+        self.assertIn(previous, create.call_args.kwargs["input"])
+        self.assertIn("The UI will display exactly what you return", create.call_args.kwargs["input"])
+        self.assertEqual(session_context.snapshot()["auto_answer_segment"]["last_answer"], answer)
+
+    def test_same_segment_revision_does_not_append_or_parse_model_output(self):
+        previous = "Previous visible answer."
+        raw_model_output = '  {"ops":[{"op":"append_after","block_id":1,"text":"new"}]}  '
+        session_context.record_transcript("Initial topic", "desktop")
+        first = session_context.prepare_auto_answer_turn("Initial topic", now=100.0)
+        session_context.commit_auto_answer_turn(first, previous, now=100.0)
+        session_context.record_transcript("Follow-up", "desktop")
+
+        with (
+            patch.object(chat, "get_auto_answer_client", return_value=object()),
+            patch.object(chat, "AUTO_ANSWER_STREAMING", False),
+            patch.object(chat, "AUTO_ANSWER_SEGMENT_GAP_SECONDS", 1_000_000_000_000.0),
+            patch.object(
+                chat,
+                "_responses_create_with_retries",
+                return_value=FakeResponse(raw_model_output),
+            ),
+        ):
+            answer = chat.generate_auto_answer("Follow-up", previous_answer=previous)
+
+        self.assertEqual(answer, raw_model_output)
+
+    def test_stale_auto_answer_does_not_commit_segment_or_exchange_history(self):
+        session_context.record_transcript("How does a cache work?", "desktop")
+
+        with (
+            patch.object(chat, "get_auto_answer_client", return_value=object()),
+            patch.object(chat, "AUTO_ANSWER_STREAMING", False),
+            patch.object(chat, "_responses_create_with_retries", return_value=FakeResponse("Use TTLs.")),
+        ):
+            answer = chat.generate_auto_answer("How does a cache work?", is_current=lambda: False)
+
+        snapshot = session_context.snapshot()
+        self.assertEqual(answer, "Use TTLs.")
+        self.assertEqual(snapshot["exchanges"], [])
+        self.assertEqual(snapshot["auto_answer_segment"]["segment_id"], 0)
+        self.assertEqual(snapshot["auto_answer_segment"]["last_answer"], "")
+
+    def test_stale_new_segment_does_not_clear_previous_answer(self):
+        previous = "- Use TTLs."
+        session_context.record_transcript("Explain cache invalidation.", "desktop")
+        first = session_context.prepare_auto_answer_turn("Explain cache invalidation.", now=100.0)
+        session_context.commit_auto_answer_turn(first, previous, now=100.0)
+        session_context.record_transcript("Next question, explain graph traversal.", "desktop")
+        resets = []
+
+        with (
+            patch.object(chat, "get_auto_answer_client", return_value=object()),
+            patch.object(chat, "AUTO_ANSWER_STREAMING", False),
+            patch.object(chat, "_responses_create_with_retries", return_value=FakeResponse("Use BFS.")),
+        ):
+            chat.generate_auto_answer(
+                "Next question, explain graph traversal.",
+                previous_answer=previous,
+                on_reset=lambda: resets.append("reset"),
+                is_current=lambda: False,
+            )
+
+        self.assertEqual(resets, [])
+        self.assertEqual(session_context.snapshot()["auto_answer_segment"]["last_answer"], previous)
+
 
 if __name__ == "__main__":
     unittest.main()

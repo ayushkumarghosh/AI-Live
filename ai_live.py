@@ -241,12 +241,15 @@ def initialize_live_transcription():
         if overlay:
             _run_on_ui("update_transcription", text, source_type)
 
-    def auto_answer_callback(question, answer, done):
+    def auto_answer_callback(question, answer, done, clear_previous=False):
         if not overlay:
             return
-        _run_on_ui("update_interviewer_qa", question, answer, done)
+        _run_on_ui("update_interviewer_qa", question, answer, done, clear_previous)
         if AUTO_ANSWER_LATENCY_LOG:
-            print(f"{timestamp()} latency ui.auto_answer_update queued done={done}", flush=True)
+            print(
+                f"{timestamp()} latency ui.auto_answer_update queued done={done} clear={clear_previous}",
+                flush=True,
+            )
 
     transcription_manager = LiveTranscriptionManager(
         transcription_callback,

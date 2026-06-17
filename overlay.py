@@ -2329,15 +2329,26 @@ class DraggableOverlay(QtWidgets.QWidget):
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error removing suggestion: {e}", flush=True)
 
     @Slot(str, str, bool)
-    def update_interviewer_qa(self, question, answer, done):
+    @Slot(str, str, bool, bool)
+    def update_interviewer_qa(self, question, answer, done, clear_previous=False):
         """Update the stored interviewer Q&A and update the display if needed"""
         # Make sure we have non-empty content
-        if not question or not answer:
+        if not question or (not answer and not clear_previous):
             print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Skipping empty interviewer Q&A update", flush=True)
             return
             
         # Update the stored values
         self.last_interviewer_question = question
+        if clear_previous:
+            self.last_suggested_answer = ""
+            self._active_auto_answer_question = ""
+            if self.show_interviewer_suggestions:
+                self.current_answer = ""
+                self._render_current_answer_basic()
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🧹 Cleared auto-answer for new segment", flush=True)
+            if not answer:
+                return
+
         self.last_suggested_answer = answer
         
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎙️ Received interviewer Q&A update", flush=True)

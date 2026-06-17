@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 import threading
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional
@@ -33,11 +34,21 @@ class AIExchange:
     current_input: str = ""
 
 
+@dataclass
+class AutoAnswerSegmentState:
+    segment_id: int = 0
+    interviewer_turns: List[str] = field(default_factory=list)
+    last_answer: str = ""
+    last_turn_at: float = 0.0
+    last_target_summary: str = ""
+
+
 _lock = threading.RLock()
 _transcripts: List[TranscriptTurn] = []
 _exchanges: List[AIExchange] = []
 _transcript_summary = ""
 _exchange_summary = ""
+_auto_answer_segment = AutoAnswerSegmentState()
 
 
 def _timestamp() -> str:
@@ -89,6 +100,86 @@ def _format_auto_answer_target(interviewer_turns: List[str]) -> str:
         "Interviewer turns to answer together in the single visible response:\n"
         + "\n".join(lines)
     )
+
+
+def _token_set(text: str) -> set[str]:
+    stopwords = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "but",
+        "by",
+        "can",
+        "could",
+        "do",
+        "does",
+        "for",
+        "from",
+        "how",
+        "i",
+        "if",
+        "in",
+        "is",
+        "it",
+        "me",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "this",
+        "to",
+        "what",
+        "when",
+        "where",
+        "which",
+        "why",
+        "with",
+        "would",
+        "you",
+    }
+    return {token for token in _normalize_question(text).split() if token not in stopwords}
+
+
+def _topic_overlap(left: str, right: str) -> float:
+    left_tokens = _token_set(left)
+    right_tokens = _token_set(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / max(len(left_tokens), 1)
+
+
+def _looks_like_hard_segment_reset(text: str) -> bool:
+    normalized = f" {_normalize_question(text)} "
+    reset_phrases = (
+        " next question ",
+        " new question ",
+        " new problem ",
+        " next problem ",
+        " lets move on ",
+        " let us move on ",
+        " move on ",
+        " switch topics ",
+        " different question ",
+    )
+    return any(phrase in normalized for phrase in reset_phrases)
+
+
+def _append_unique_turn(turns: List[str], text: str) -> List[str]:
+    text = _compact(text, 700)
+    if not text:
+        return list(turns)
+
+    normalized = _normalize_question(text)
+    if not normalized:
+        return list(turns)
+    if turns and _normalize_question(turns[-1]) == normalized:
+        return list(turns)
+    return [*turns, text]
 
 
 def _looks_like_same_question(left: str, right: str) -> bool:
@@ -296,27 +387,14 @@ def build_context(current_input: str, mode: str, include_transcripts: bool = Tru
     return "\n\n".join(sections)
 
 
-def build_auto_answer_context_bundle(
+def _compose_auto_answer_context(
     current_input: str,
-    transcript_turns: int = 6,
-    exchange_count: int = 2,
-    target_interviewer_turns: int = 5,
+    transcripts: List[TranscriptTurn],
+    exchanges: List[AIExchange],
+    interviewer_turns: List[str],
+    previous_answer: str = "",
 ) -> tuple[str, str]:
     current_input = str(current_input or "").strip()
-    transcript_turns = max(0, int(transcript_turns or 0))
-    exchange_count = max(0, int(exchange_count or 0))
-    target_interviewer_turns = max(0, int(target_interviewer_turns or 0))
-
-    with _lock:
-        all_transcripts = list(_transcripts)
-        transcripts = list(_transcripts[-transcript_turns:]) if transcript_turns else []
-        exchanges = list(_exchanges[-exchange_count:]) if exchange_count else []
-
-    interviewer_turns = _latest_interviewer_turns(
-        all_transcripts,
-        current_input,
-        target_interviewer_turns,
-    )
     target_section = _format_auto_answer_target(interviewer_turns) if interviewer_turns else ""
     target_summary = target_section or f"Latest desktop transcript:\n{current_input}"
     resume_relevance_text = "\n".join(interviewer_turns + [current_input])
@@ -345,6 +423,13 @@ def build_auto_answer_context_bundle(
     if target_section:
         sections.append(target_section)
 
+    previous_answer = str(previous_answer or "").strip()
+    if previous_answer:
+        sections.append(
+            "Previous visible auto-answer to update for this same conversation segment:\n"
+            + _compact(previous_answer, 1400)
+        )
+
     if resume_section:
         sections.append(resume_section)
 
@@ -371,6 +456,139 @@ def build_auto_answer_context_bundle(
     return "\n\n".join(sections), target_summary
 
 
+def build_auto_answer_context_bundle(
+    current_input: str,
+    transcript_turns: int = 6,
+    exchange_count: int = 2,
+    target_interviewer_turns: int = 5,
+) -> tuple[str, str]:
+    current_input = str(current_input or "").strip()
+    transcript_turns = max(0, int(transcript_turns or 0))
+    exchange_count = max(0, int(exchange_count or 0))
+    target_interviewer_turns = max(0, int(target_interviewer_turns or 0))
+
+    with _lock:
+        all_transcripts = list(_transcripts)
+        transcripts = list(_transcripts[-transcript_turns:]) if transcript_turns else []
+        exchanges = list(_exchanges[-exchange_count:]) if exchange_count else []
+
+    interviewer_turns = _latest_interviewer_turns(
+        all_transcripts,
+        current_input,
+        target_interviewer_turns,
+    )
+    return _compose_auto_answer_context(
+        current_input,
+        transcripts,
+        exchanges,
+        interviewer_turns,
+    )
+
+
+def prepare_auto_answer_turn(
+    current_input: str,
+    transcript_turns: int = 6,
+    exchange_count: int = 2,
+    target_interviewer_turns: int = 5,
+    segment_gap_seconds: float = 45.0,
+    topic_overlap_min: float = 0.18,
+    previous_answer: Optional[str] = None,
+    now: Optional[float] = None,
+) -> Dict[str, object]:
+    current_input = str(current_input or "").strip()
+    transcript_turns = max(0, int(transcript_turns or 0))
+    exchange_count = max(0, int(exchange_count or 0))
+    target_interviewer_turns = max(0, int(target_interviewer_turns or 0))
+    segment_gap_seconds = max(0.0, float(segment_gap_seconds or 0.0))
+    topic_overlap_min = max(0.0, float(topic_overlap_min or 0.0))
+    now = time.time() if now is None else float(now)
+
+    with _lock:
+        active = AutoAnswerSegmentState(
+            segment_id=_auto_answer_segment.segment_id,
+            interviewer_turns=list(_auto_answer_segment.interviewer_turns),
+            last_answer=_auto_answer_segment.last_answer,
+            last_turn_at=_auto_answer_segment.last_turn_at,
+            last_target_summary=_auto_answer_segment.last_target_summary,
+        )
+        all_transcripts = list(_transcripts)
+        transcripts = list(_transcripts[-transcript_turns:]) if transcript_turns else []
+        exchanges = list(_exchanges[-exchange_count:]) if exchange_count else []
+
+    previous_visible_answer = (
+        str(previous_answer)
+        if previous_answer is not None
+        else str(active.last_answer or "")
+    )
+    has_active_segment = bool(active.interviewer_turns or active.last_answer)
+    segment_text = " ".join(active.interviewer_turns)
+    hard_reset = _looks_like_hard_segment_reset(current_input)
+    gap_elapsed = bool(
+        has_active_segment
+        and active.last_turn_at
+        and now - active.last_turn_at >= segment_gap_seconds
+    )
+    overlap = _topic_overlap(current_input, segment_text) if segment_text else 0.0
+    low_overlap = overlap < topic_overlap_min
+    starts_new_segment = (
+        not has_active_segment
+        or hard_reset
+        or (gap_elapsed and low_overlap)
+    )
+
+    if starts_new_segment:
+        segment_id = active.segment_id + 1
+        if has_active_segment:
+            target_turns = _append_unique_turn([], current_input)[-target_interviewer_turns:]
+        else:
+            target_turns = _latest_interviewer_turns(
+                all_transcripts,
+                current_input,
+                target_interviewer_turns,
+            ) or _append_unique_turn([], current_input)
+        context_previous_answer = ""
+    else:
+        segment_id = active.segment_id or 1
+        target_turns = _append_unique_turn(active.interviewer_turns, current_input)[-target_interviewer_turns:]
+        context_previous_answer = previous_visible_answer
+
+    context_text, target_summary = _compose_auto_answer_context(
+        current_input,
+        transcripts,
+        exchanges,
+        target_turns,
+        previous_answer=context_previous_answer,
+    )
+
+    return {
+        "context_text": context_text,
+        "target_summary": target_summary,
+        "segment_id": segment_id,
+        "starts_new_segment": starts_new_segment,
+        "should_clear_previous_answer": bool(starts_new_segment and previous_visible_answer.strip()),
+        "previous_answer": previous_visible_answer,
+        "target_turns": target_turns,
+        "created_at": now,
+        "hard_reset": hard_reset,
+        "gap_elapsed": gap_elapsed,
+        "topic_overlap": overlap,
+    }
+
+
+def commit_auto_answer_turn(turn_context: Dict[str, object], answer: str, now: Optional[float] = None) -> None:
+    answer = str(answer or "")
+    if not turn_context or not answer.strip():
+        return
+
+    now = time.time() if now is None else float(now)
+    with _lock:
+        _auto_answer_segment.segment_id = int(turn_context.get("segment_id") or 0)
+        _auto_answer_segment.interviewer_turns = list(turn_context.get("target_turns") or [])
+        _auto_answer_segment.last_answer = answer
+        _auto_answer_segment.last_turn_at = now
+        _auto_answer_segment.last_target_summary = str(turn_context.get("target_summary") or "")
+
+
 def build_auto_answer_context(
     current_input: str,
     transcript_turns: int = 6,
@@ -393,6 +611,11 @@ def clear_session_context() -> None:
         _exchanges.clear()
         _transcript_summary = ""
         _exchange_summary = ""
+        _auto_answer_segment.segment_id = 0
+        _auto_answer_segment.interviewer_turns.clear()
+        _auto_answer_segment.last_answer = ""
+        _auto_answer_segment.last_turn_at = 0.0
+        _auto_answer_segment.last_target_summary = ""
 
 
 def clear_transcript_context() -> None:
@@ -415,4 +638,11 @@ def snapshot() -> Dict[str, object]:
             "exchange_summary": _exchange_summary,
             "transcripts": [turn.__dict__.copy() for turn in _transcripts],
             "exchanges": [exchange.__dict__.copy() for exchange in _exchanges],
+            "auto_answer_segment": {
+                "segment_id": _auto_answer_segment.segment_id,
+                "interviewer_turns": list(_auto_answer_segment.interviewer_turns),
+                "last_answer": _auto_answer_segment.last_answer,
+                "last_turn_at": _auto_answer_segment.last_turn_at,
+                "last_target_summary": _auto_answer_segment.last_target_summary,
+            },
         }

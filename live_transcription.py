@@ -345,7 +345,6 @@ class LiveTranscriptionManager:
                     with self._state_lock:
                         self.last_desktop_query = text
                         self.last_desktop_turn_id = response_data.get("item_id", "")
-                        self.last_desktop_answer = ""
                 
                 # Call the original callback with the transcription text
                 if self.transcription_callback and text:
@@ -523,13 +522,15 @@ class LiveTranscriptionManager:
                 return False
             return True
 
-    def _publish_desktop_answer(self, transcript, answer, done, turn_id):
-        if not answer or not self._is_current_desktop_turn(transcript, turn_id):
+    def _publish_desktop_answer(self, transcript, answer, done, turn_id, clear_previous=False):
+        if not clear_previous and not answer:
+            return
+        if not self._is_current_desktop_turn(transcript, turn_id):
             return
         with self._state_lock:
-            self.last_desktop_answer = answer
+            self.last_desktop_answer = "" if clear_previous else answer
         if self.auto_answer_callback:
-            self.auto_answer_callback(transcript, answer, done)
+            self.auto_answer_callback(transcript, answer, done, clear_previous)
 
     def _generate_desktop_answer(self, transcript, turn_id="", timing=None):
         """Generate an auto-answer for a completed desktop transcript."""
@@ -543,10 +544,18 @@ class LiveTranscriptionManager:
         )
 
         first_delta_seen = False
+        with self._state_lock:
+            previous_answer = self.last_desktop_answer
+
+        def is_current():
+            return self._is_current_desktop_turn(transcript, turn_id)
+
+        def handle_reset():
+            self._publish_desktop_answer(transcript, "", False, turn_id, clear_previous=True)
 
         def handle_delta(_delta, partial_answer):
             nonlocal first_delta_seen
-            if not self._is_current_desktop_turn(transcript, turn_id):
+            if not is_current():
                 return
             if not first_delta_seen:
                 first_delta_seen = True
@@ -554,7 +563,13 @@ class LiveTranscriptionManager:
             self._publish_desktop_answer(transcript, partial_answer, False, turn_id)
 
         try:
-            answer = generate_auto_answer(transcript, on_delta=handle_delta)
+            answer = generate_auto_answer(
+                transcript,
+                on_delta=handle_delta,
+                previous_answer=previous_answer,
+                on_reset=handle_reset,
+                is_current=is_current,
+            )
             if answer:
                 latency_log("auto_answer_complete", request_started_at, item_id=turn_id, chars=len(answer))
                 self._publish_desktop_answer(transcript, answer, True, turn_id)

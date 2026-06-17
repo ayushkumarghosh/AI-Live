@@ -45,7 +45,7 @@ class LiveTranscriptionManagerTests(unittest.TestCase):
         manager.last_desktop_query = "old question"
         manager.last_desktop_turn_id = "turn-1"
 
-        def fake_generate(_transcript, on_delta=None):
+        def fake_generate(_transcript, on_delta=None, **_kwargs):
             manager.last_desktop_query = "new question"
             if on_delta:
                 on_delta("old", "old answer")
@@ -63,7 +63,7 @@ class LiveTranscriptionManagerTests(unittest.TestCase):
         manager.last_desktop_query = "current question"
         manager.last_desktop_turn_id = "turn-2"
 
-        def fake_generate(_transcript, on_delta=None):
+        def fake_generate(_transcript, on_delta=None, **_kwargs):
             if on_delta:
                 on_delta("partial", "partial answer")
             return "partial answer final"
@@ -74,11 +74,60 @@ class LiveTranscriptionManagerTests(unittest.TestCase):
         self.assertEqual(
             published,
             [
-                ("current question", "partial answer", False),
-                ("current question", "partial answer final", True),
+                ("current question", "partial answer", False, False),
+                ("current question", "partial answer final", True, False),
             ],
         )
         self.assertEqual(manager.last_desktop_answer, "partial answer final")
+
+    def test_same_segment_revision_keeps_previous_visible_until_final_answer(self):
+        published = []
+        manager = LiveTranscriptionManager(auto_answer_callback=lambda *args: published.append(args))
+        manager.last_desktop_query = "follow up"
+        manager.last_desktop_turn_id = "turn-3"
+        manager.last_desktop_answer = "previous visible answer"
+
+        def fake_generate(_transcript, on_delta=None, previous_answer=None, **_kwargs):
+            self.assertEqual(previous_answer, "previous visible answer")
+            return "revised visible answer"
+
+        with patch("live_transcription.generate_auto_answer", side_effect=fake_generate):
+            manager._generate_desktop_answer("follow up", "turn-3", {"completed_at": None})
+
+        self.assertEqual(
+            published,
+            [
+                ("follow up", "revised visible answer", True, False),
+            ],
+        )
+        self.assertEqual(manager.last_desktop_answer, "revised visible answer")
+
+    def test_new_segment_reset_publishes_clear_before_answer(self):
+        published = []
+        manager = LiveTranscriptionManager(auto_answer_callback=lambda *args: published.append(args))
+        manager.last_desktop_query = "new topic"
+        manager.last_desktop_turn_id = "turn-4"
+        manager.last_desktop_answer = "previous visible answer"
+
+        def fake_generate(_transcript, on_delta=None, on_reset=None, **_kwargs):
+            if on_reset:
+                on_reset()
+            if on_delta:
+                on_delta("new", "new answer")
+            return "new answer"
+
+        with patch("live_transcription.generate_auto_answer", side_effect=fake_generate):
+            manager._generate_desktop_answer("new topic", "turn-4", {"completed_at": None})
+
+        self.assertEqual(
+            published,
+            [
+                ("new topic", "", False, True),
+                ("new topic", "new answer", False, False),
+                ("new topic", "new answer", True, False),
+            ],
+        )
+        self.assertEqual(manager.last_desktop_answer, "new answer")
 
 
 if __name__ == "__main__":

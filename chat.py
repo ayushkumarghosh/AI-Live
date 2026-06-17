@@ -31,11 +31,13 @@ _auto_answer_client: Optional[OpenAI] = None
 
 
 candidate_answer_style_prompt = (
-    "Write the response like an Indian software engineering interview candidate would "
-    "say it out loud: natural, direct, and conversational Indian English. Use first "
-    "person where it fits, prefer simple spoken sentences, and avoid sounding overly "
-    "polished, scripted, or like an AI assistant. Keep the technical content accurate "
-    "and interview-appropriate."
+    "Write the response like an Indian software engineer in an interview would say it "
+    "out loud: practical, direct, and conversational Indian English, close to how we "
+    "chat here. Use first person where it fits, prefer simple spoken sentences, and "
+    "include concrete reasoning without over-explaining. It is okay to sound a little "
+    "informal and human, but do not force slang, Hinglish, filler words, or accent-like "
+    "wording. Avoid sounding overly polished, scripted, corporate, or like an AI "
+    "assistant. Keep the technical content accurate and interview-appropriate."
 )
 
 code_problem_prompt = (

@@ -6,9 +6,18 @@ import resume_context
 import session_context
 
 
+class FakeIncompleteDetails:
+    def __init__(self, reason):
+        self.reason = reason
+
+
 class FakeResponse:
-    def __init__(self, output_text):
+    def __init__(self, output_text, status=None, incomplete_reason=None):
         self.output_text = output_text
+        self.status = status
+        self.incomplete_details = (
+            FakeIncompleteDetails(incomplete_reason) if incomplete_reason else None
+        )
 
 
 class FakeStream:
@@ -233,8 +242,8 @@ class ChatContextTests(unittest.TestCase):
         self.assertIn("How would you handle collisions?", request_text)
         self.assertIn("Interviewee/Candidate: My answer mentioned hashing.", request_text)
         self.assertIn(chat.candidate_answer_style_prompt, instructions)
-        self.assertIn(chat.auto_answer_brevity_prompt, instructions)
-        self.assertIn("no longer than 10 sentences", instructions)
+        self.assertNotIn("no longer than 10 sentences", instructions)
+        self.assertNotIn("max_output_tokens", create.call_args.kwargs)
         self.assertIn("microphone audio is the Interviewee/Candidate", instructions)
         self.assertIn("not as questions to answer", instructions)
         self.assertIn("Only the latest generated answer is visible", instructions)
@@ -277,10 +286,9 @@ class ChatContextTests(unittest.TestCase):
         )
         self.assertIn("How would you handle collisions?", snapshot["exchanges"][0]["user_query"])
         self.assertIn(chat.candidate_answer_style_prompt, client.responses.kwargs["instructions"])
-        self.assertIn(chat.auto_answer_brevity_prompt, client.responses.kwargs["instructions"])
-        self.assertIn("no longer than 10 sentences", client.responses.kwargs["instructions"])
+        self.assertNotIn("no longer than 10 sentences", client.responses.kwargs["instructions"])
         self.assertIn("Only the latest generated answer is visible", client.responses.kwargs["instructions"])
-        self.assertEqual(client.responses.kwargs["max_output_tokens"], chat.AUTO_ANSWER_MAX_OUTPUT_TOKENS)
+        self.assertNotIn("max_output_tokens", client.responses.kwargs)
 
     def test_auto_answer_warmup_sends_tiny_unrecorded_request(self):
         client = FakeCreateClient()
@@ -291,9 +299,29 @@ class ChatContextTests(unittest.TestCase):
         self.assertEqual(client.responses.kwargs["model"], chat.AUTO_ANSWER_MODEL)
         self.assertEqual(client.responses.kwargs["input"], "warmup")
         self.assertEqual(client.responses.kwargs["max_output_tokens"], 16)
-        self.assertEqual(client.responses.kwargs["reasoning"], {"effort": "none"})
-        self.assertEqual(client.responses.kwargs["text"], {"verbosity": "low"})
+        self.assertEqual(client.responses.kwargs["reasoning"], {"effort": "medium"})
+        self.assertEqual(client.responses.kwargs["text"], {"verbosity": "medium"})
         self.assertEqual(session_context.snapshot()["exchanges"], [])
+
+    def test_auto_answer_retries_when_response_hits_token_cap(self):
+        responses = [
+            FakeResponse("Partial answer", status="incomplete", incomplete_reason="max_output_tokens"),
+            FakeResponse("Complete answer."),
+        ]
+
+        with (
+            patch.object(chat, "get_auto_answer_client", return_value=object()),
+            patch.object(chat, "AUTO_ANSWER_STREAMING", False),
+            patch.object(chat, "AUTO_ANSWER_MAX_OUTPUT_TOKENS", 320),
+            patch.object(chat, "AUTO_ANSWER_RETRY_MAX_OUTPUT_TOKENS", 1200),
+            patch.object(chat, "_responses_create_with_retries", side_effect=responses) as create,
+        ):
+            answer = chat.generate_auto_answer("How would you design rate limiting?")
+
+        self.assertEqual(answer, "Complete answer.")
+        self.assertEqual(create.call_args_list[0].kwargs["max_output_tokens"], 320)
+        self.assertEqual(create.call_args_list[1].kwargs["max_output_tokens"], 1200)
+        self.assertEqual(session_context.snapshot()["auto_answer_segment"]["last_answer"], "Complete answer.")
 
     def test_auto_answer_warmup_starts_once_when_enabled(self):
         started = []
@@ -359,9 +387,7 @@ class ChatContextTests(unittest.TestCase):
         self.assertEqual(answer, revised)
         self.assertEqual(partials, [])
         self.assertIn("complete updated visible answer", create.call_args.kwargs["instructions"])
-        self.assertIn(chat.auto_answer_revision_brevity_prompt, create.call_args.kwargs["instructions"])
-        self.assertIn("limit only the new or substantially changed material", create.call_args.kwargs["instructions"])
-        self.assertIn("complete updated visible answer may be longer", create.call_args.kwargs["instructions"])
+        self.assertNotIn("no longer than 10 sentences", create.call_args.kwargs["instructions"])
         self.assertIn("no local patching or post-processing", create.call_args.kwargs["instructions"])
         self.assertNotIn("append_after", create.call_args.kwargs["instructions"])
         self.assertNotIn("replace_block", create.call_args.kwargs["instructions"])

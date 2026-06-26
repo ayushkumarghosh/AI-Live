@@ -27,6 +27,8 @@ AUTO_ANSWER_MODEL = os.getenv("AZURE_OPENAI_AUTO_ANSWER_DEPLOYMENT", "gpt-5.4-na
 AUTO_ANSWER_STREAMING = os.getenv("AUTO_ANSWER_STREAMING", "true").strip().lower() in {"1", "true", "yes", "on"}
 AUTO_ANSWER_WARMUP = os.getenv("AUTO_ANSWER_WARMUP", "false").strip().lower() in {"1", "true", "yes", "on"}
 AUTO_ANSWER_LATENCY_LOG = os.getenv("AUTO_ANSWER_LATENCY_LOG", "false").strip().lower() in {"1", "true", "yes", "on"}
+AUTO_ANSWER_REASONING_EFFORT = os.getenv("AUTO_ANSWER_REASONING_EFFORT", "medium").strip().lower() or "medium"
+AUTO_ANSWER_TEXT_VERBOSITY = os.getenv("AUTO_ANSWER_TEXT_VERBOSITY", "medium").strip().lower() or "medium"
 
 _analysis_client: Optional[OpenAI] = None
 _auto_answer_client: Optional[OpenAI] = None
@@ -42,20 +44,6 @@ candidate_answer_style_prompt = (
     "informal and human, but do not force slang, Hinglish, filler words, or accent-like "
     "wording. Avoid sounding overly polished, scripted, corporate, or like an AI "
     "assistant. Keep the technical content accurate and interview-appropriate."
-)
-
-auto_answer_brevity_prompt = (
-    "Keep the answer concise and no longer than 10 sentences. Avoid expanding with "
-    "long examples, long lists, or code unless the interviewer explicitly asks for them."
-)
-
-auto_answer_revision_brevity_prompt = (
-    "For this update, limit only the new or substantially changed material for the "
-    "latest interviewer turn to no longer than 10 sentences. The complete updated "
-    "visible answer may be longer if it preserves prior correct content. Do not "
-    "shorten or remove correct existing wording just to fit the 10-sentence update "
-    "limit. Avoid adding long examples, long lists, or code unless the interviewer "
-    "explicitly asks for them."
 )
 
 code_problem_prompt = (
@@ -95,8 +83,6 @@ auto_answer_prompt = (
     "experience, background, projects, skills, achievements, strengths, or when a "
     "personalized example is clearly useful. Do not invent resume details. "
     "Return only the single answer, and do not mention that you are an AI assistant.\n\n"
-    + auto_answer_brevity_prompt
-    + "\n\n"
     + candidate_answer_style_prompt
 )
 
@@ -111,8 +97,6 @@ auto_answer_revision_prompt = (
     "turn does not require a change, return the previous visible answer exactly. "
     "Do not explain your edits, do not include JSON, and do not mention that you are "
     "an AI assistant.\n\n"
-    + auto_answer_revision_brevity_prompt
-    + "\n\n"
     + candidate_answer_style_prompt
 )
 
@@ -149,6 +133,20 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _optional_int_env(name: str) -> Optional[int]:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return None
+    try:
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError("must be positive")
+        return parsed
+    except ValueError:
+        print(f"{timestamp()} Invalid {name}={value!r}; leaving unset", flush=True)
+        return None
+
+
 def _float_env(name: str, default: float) -> float:
     value = os.getenv(name)
     if value is None or value == "":
@@ -163,7 +161,8 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
-AUTO_ANSWER_MAX_OUTPUT_TOKENS = _int_env("AUTO_ANSWER_MAX_OUTPUT_TOKENS", 500)
+AUTO_ANSWER_MAX_OUTPUT_TOKENS = _optional_int_env("AUTO_ANSWER_MAX_OUTPUT_TOKENS")
+AUTO_ANSWER_RETRY_MAX_OUTPUT_TOKENS = _optional_int_env("AUTO_ANSWER_RETRY_MAX_OUTPUT_TOKENS")
 AUTO_ANSWER_CONTEXT_TURNS = _int_env("AUTO_ANSWER_CONTEXT_TURNS", 6)
 AUTO_ANSWER_CONTEXT_EXCHANGES = _int_env("AUTO_ANSWER_CONTEXT_EXCHANGES", 2)
 AUTO_ANSWER_TARGET_INTERVIEWER_TURNS = _int_env("AUTO_ANSWER_TARGET_INTERVIEWER_TURNS", 5)
@@ -238,8 +237,8 @@ def warm_auto_answer_client() -> bool:
             instructions="Reply with exactly OK.",
             input="warmup",
             max_output_tokens=16,
-            reasoning={"effort": "none"},
-            text={"verbosity": "low"},
+            reasoning={"effort": AUTO_ANSWER_REASONING_EFFORT},
+            text={"verbosity": AUTO_ANSWER_TEXT_VERBOSITY},
         )
     except Exception as exc:
         print(
@@ -410,6 +409,17 @@ def _extract_output_text(response: Any) -> str:
     return "".join(chunks)
 
 
+def _response_incomplete_reason(response: Any) -> str:
+    if getattr(response, "status", None) != "incomplete":
+        return ""
+    details = getattr(response, "incomplete_details", None)
+    return str(getattr(details, "reason", "") or "incomplete")
+
+
+class AutoAnswerIncompleteError(RuntimeError):
+    pass
+
+
 def _responses_create_with_retries(client: OpenAI, **kwargs):
     last_exc = None
     for retry in range(3):
@@ -434,6 +444,55 @@ def _extract_stream_delta(event: Any) -> str:
     if isinstance(event, dict):
         return str(event.get("delta") or "")
     return str(getattr(event, "delta", "") or "")
+
+
+def _extract_stream_incomplete_reason(event: Any) -> str:
+    event_type = getattr(event, "type", None)
+    if not event_type and isinstance(event, dict):
+        event_type = event.get("type")
+    if event_type != "response.incomplete":
+        return ""
+
+    response = event.get("response") if isinstance(event, dict) else getattr(event, "response", None)
+    return _response_incomplete_reason(response) or "incomplete"
+
+
+def _auto_answer_request_kwargs(
+    context_text: str,
+    instructions: str,
+    max_output_tokens: Optional[int] = None,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {
+        "model": AUTO_ANSWER_MODEL,
+        "instructions": instructions,
+        "input": context_text,
+        "reasoning": {"effort": AUTO_ANSWER_REASONING_EFFORT},
+        "text": {"verbosity": AUTO_ANSWER_TEXT_VERBOSITY},
+    }
+    if max_output_tokens is not None:
+        kwargs["max_output_tokens"] = max_output_tokens
+    return kwargs
+
+
+def _auto_answer_token_limits() -> List[Optional[int]]:
+    if AUTO_ANSWER_MAX_OUTPUT_TOKENS is None:
+        return [None]
+
+    token_limits: List[Optional[int]] = [AUTO_ANSWER_MAX_OUTPUT_TOKENS]
+    if (
+        AUTO_ANSWER_RETRY_MAX_OUTPUT_TOKENS is not None
+        and AUTO_ANSWER_RETRY_MAX_OUTPUT_TOKENS > AUTO_ANSWER_MAX_OUTPUT_TOKENS
+    ):
+        token_limits.append(AUTO_ANSWER_RETRY_MAX_OUTPUT_TOKENS)
+    return token_limits
+
+
+def _format_token_limit(token_limit: Optional[int]) -> str:
+    return (
+        f"max_output_tokens={token_limit}"
+        if token_limit is not None
+        else "no app max_output_tokens"
+    )
 
 
 def _send_analysis_message(
@@ -575,14 +634,17 @@ def _generate_auto_answer_streaming(
     answer_parts = []
     first_delta_at = None
     with get_auto_answer_client().responses.stream(
-        model=AUTO_ANSWER_MODEL,
-        instructions=instructions,
-        input=context_text,
-        max_output_tokens=AUTO_ANSWER_MAX_OUTPUT_TOKENS,
-        reasoning={"effort": "none"},
-        text={"verbosity": "low"},
+        **_auto_answer_request_kwargs(
+            context_text,
+            instructions,
+            AUTO_ANSWER_MAX_OUTPUT_TOKENS,
+        )
     ) as stream:
         for event in stream:
+            incomplete_reason = _extract_stream_incomplete_reason(event)
+            if incomplete_reason:
+                raise AutoAnswerIncompleteError(f"response incomplete: {incomplete_reason}")
+
             delta = _extract_stream_delta(event)
             if not delta:
                 continue
@@ -599,16 +661,31 @@ def _generate_auto_answer_streaming(
 
 
 def _responses_create_auto_answer(context_text: str, instructions: str) -> str:
-    response = _responses_create_with_retries(
-        get_auto_answer_client(),
-        model=AUTO_ANSWER_MODEL,
-        instructions=instructions,
-        input=context_text,
-        max_output_tokens=AUTO_ANSWER_MAX_OUTPUT_TOKENS,
-        reasoning={"effort": "none"},
-        text={"verbosity": "low"},
-    )
-    return _extract_output_text(response)
+    token_limits = _auto_answer_token_limits()
+    response_text = ""
+    for idx, token_limit in enumerate(token_limits):
+        response = _responses_create_with_retries(
+            get_auto_answer_client(),
+            **_auto_answer_request_kwargs(context_text, instructions, token_limit),
+        )
+        response_text = _extract_output_text(response)
+        incomplete_reason = _response_incomplete_reason(response)
+        if incomplete_reason == "max_output_tokens" and idx + 1 < len(token_limits):
+            print(
+                f"{timestamp()} Auto-answer hit {_format_token_limit(token_limit)}; "
+                f"retrying with {_format_token_limit(token_limits[idx + 1])}",
+                flush=True,
+            )
+            continue
+        if incomplete_reason:
+            print(
+                f"{timestamp()} Auto-answer response incomplete "
+                f"({incomplete_reason}) with {_format_token_limit(token_limit)}",
+                flush=True,
+            )
+        return response_text
+
+    return response_text
 
 
 def _revision_context(context_text: str, previous_answer: str, latest_transcript: str) -> str:

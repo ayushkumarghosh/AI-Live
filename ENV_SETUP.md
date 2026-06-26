@@ -40,7 +40,10 @@ Edit `.env` and fill in your Azure OpenAI values. The app supports separate Azur
 | `AZURE_OPENAI_VAD_PREFIX_PADDING_MS` | Audio padding retained before detected speech starts. | `300` |
 | `AUTO_ANSWER_STREAMING` | Stream auto-answer deltas to the overlay after final transcription. | `true` |
 | `AUTO_ANSWER_WARMUP` | Send one tiny unrecorded auto-answer request after transcription starts to absorb first-request latency before the first real question. | `false` |
-| `AUTO_ANSWER_MAX_OUTPUT_TOKENS` | Maximum tokens for auto-answer responses. | `500` |
+| `AUTO_ANSWER_REASONING_EFFORT` | Reasoning effort sent with auto-answer requests. `gpt-5.4-nano` requires `medium`. | `medium` |
+| `AUTO_ANSWER_TEXT_VERBOSITY` | Text verbosity sent with auto-answer requests. `gpt-5.4-nano` requires `medium`. | `medium` |
+| `AUTO_ANSWER_MAX_OUTPUT_TOKENS` | Optional hard cap for auto-answer responses. Leave unset to avoid an app-imposed output cap. | Empty |
+| `AUTO_ANSWER_RETRY_MAX_OUTPUT_TOKENS` | Optional larger retry cap used only when `AUTO_ANSWER_MAX_OUTPUT_TOKENS` is set and Azure returns an incomplete auto-answer because that cap was exhausted. | Empty |
 | `AUTO_ANSWER_CONTEXT_TURNS` | Recent transcript turns included in compact auto-answer context. | `6` |
 | `AUTO_ANSWER_CONTEXT_EXCHANGES` | Recent AI exchanges included in compact auto-answer context. | `2` |
 | `AUTO_ANSWER_TARGET_INTERVIEWER_TURNS` | Recent interviewer desktop turns each visible auto-answer should cover together. | `5` |
@@ -59,7 +62,8 @@ AZURE_OPENAI_VAD_THRESHOLD=0.5
 AZURE_OPENAI_VAD_PREFIX_PADDING_MS=300
 AUTO_ANSWER_STREAMING=true
 AUTO_ANSWER_WARMUP=true
-AUTO_ANSWER_MAX_OUTPUT_TOKENS=320
+AUTO_ANSWER_REASONING_EFFORT=medium
+AUTO_ANSWER_TEXT_VERBOSITY=medium
 AUTO_ANSWER_CONTEXT_TURNS=4
 AUTO_ANSWER_CONTEXT_EXCHANGES=1
 AUTO_ANSWER_TARGET_INTERVIEWER_TURNS=3
@@ -68,7 +72,7 @@ AUTO_ANSWER_LATENCY_LOG=true
 
 This keeps audio streaming through Azure OpenAI Realtime WebSockets and uses Azure server VAD for turn completion. Keeping `CHUNK_SIZE=1024` avoids doubling the WebSocket JSON/base64 message rate. The tradeoff is that short interviewer pauses can still be finalized as separate transcript turns. If that happens too often, raise `AZURE_OPENAI_VAD_SILENCE_MS` to `300`; if it remains stable and you want lower latency, try `200`.
 
-The auto-answer values reduce the `gpt-5.4-nano` input/output budget while preserving the existing same-segment revision behavior.
+The auto-answer values keep the `gpt-5.4-nano` request options compatible while preserving the existing same-segment revision behavior.
 
 `AUTO_ANSWER_WARMUP=true` shifts first-request connection/deployment latency to app startup. It sends one small unrecorded `gpt-5.4-nano` request, so the first real interviewer answer can reuse a warmed client path.
 

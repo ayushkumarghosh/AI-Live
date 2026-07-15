@@ -180,15 +180,16 @@ def _start_manual_analysis(
                 print(f"{timestamp()} Session {session_id} was canceled, discarding result", flush=True)
                 return
 
-            _run_on_ui("update_response", response_json)
+            _run_on_ui("update_analysis_response", response_json, session_prefix)
             _run_on_ui("update_status", "Listening...", "#4CAF50")
         except Exception as exc:
             print(f"{timestamp()} Error in {session_prefix} analysis: {exc}", flush=True)
             if _is_current_session(session_id):
                 _run_on_ui("update_status", "Error", "#FF0000")
                 _run_on_ui(
-                    "update_response",
+                    "update_analysis_response",
                     {"user_query": user_input, "response": f"{error_label}: {exc}"},
+                    session_prefix,
                 )
         finally:
             if _is_current_session(session_id):

@@ -418,6 +418,36 @@ class ChatContextTests(unittest.TestCase):
 
         self.assertEqual(answer, raw_model_output)
 
+    def test_short_acknowledgement_revision_keeps_visible_answer_without_reset(self):
+        previous = "I would use TTLs and explicit invalidation for critical keys."
+        session_context.record_transcript("Explain cache invalidation.", "desktop")
+        first = session_context.prepare_auto_answer_turn("Explain cache invalidation.", now=100.0)
+        session_context.commit_auto_answer_turn(first, previous, now=100.0)
+        session_context.record_transcript("Ok.", "desktop")
+        resets = []
+
+        with (
+            patch.object(chat, "get_auto_answer_client", return_value=object()),
+            patch.object(chat, "AUTO_ANSWER_STREAMING", False),
+            patch.object(chat, "AUTO_ANSWER_SEGMENT_GAP_SECONDS", 45.0),
+            patch.object(
+                chat,
+                "_responses_create_with_retries",
+                return_value=FakeResponse(previous),
+            ) as create,
+        ):
+            answer = chat.generate_auto_answer(
+                "Ok.",
+                previous_answer=previous,
+                on_reset=lambda: resets.append("reset"),
+            )
+
+        self.assertEqual(answer, previous)
+        self.assertEqual(resets, [])
+        self.assertIn("brief acknowledgement or backchannel", create.call_args.kwargs["instructions"])
+        self.assertIn("Previous visible auto-answer to update", create.call_args.kwargs["input"])
+        self.assertIn(previous, create.call_args.kwargs["input"])
+
     def test_stale_auto_answer_does_not_commit_segment_or_exchange_history(self):
         session_context.record_transcript("How does a cache work?", "desktop")
 

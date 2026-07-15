@@ -263,6 +263,113 @@ class SessionContextTests(unittest.TestCase):
         self.assertLess(second["topic_overlap"], 0.18)
         self.assertTrue(second["should_clear_previous_answer"])
 
+    def test_auto_answer_segment_keeps_short_acknowledgements_after_gap(self):
+        for acknowledgement in ("Ok.", "hmm", "uh-huh", "sounds good"):
+            with self.subTest(acknowledgement=acknowledgement):
+                session_context.clear_session_context()
+                session_context.record_transcript("Explain cache invalidation.", "desktop")
+                first = session_context.prepare_auto_answer_turn("Explain cache invalidation.", now=100.0)
+                session_context.commit_auto_answer_turn(first, "- Use TTLs", now=100.0)
+                session_context.record_transcript(acknowledgement, "desktop")
+
+                second = session_context.prepare_auto_answer_turn(
+                    acknowledgement,
+                    segment_gap_seconds=45,
+                    topic_overlap_min=0.18,
+                    now=160.0,
+                )
+
+                self.assertFalse(second["starts_new_segment"])
+                self.assertFalse(second["should_clear_previous_answer"])
+                self.assertTrue(second["short_statement_continuation"])
+                self.assertIn("Previous visible auto-answer to update", second["context_text"])
+
+    def test_auto_answer_segment_keeps_five_word_statement_but_not_longer_statement(self):
+        session_context.record_transcript("Explain cache invalidation.", "desktop")
+        first = session_context.prepare_auto_answer_turn("Explain cache invalidation.", now=100.0)
+        session_context.commit_auto_answer_turn(first, "- Use TTLs", now=100.0)
+        session_context.record_transcript("That works for this case.", "desktop")
+
+        five_word_statement = session_context.prepare_auto_answer_turn(
+            "That works for this case.",
+            segment_gap_seconds=45,
+            topic_overlap_min=0.18,
+            now=160.0,
+        )
+
+        self.assertFalse(five_word_statement["starts_new_segment"])
+        self.assertTrue(five_word_statement["short_statement_continuation"])
+
+        session_context.clear_session_context()
+        session_context.record_transcript("Explain cache invalidation.", "desktop")
+        first = session_context.prepare_auto_answer_turn("Explain cache invalidation.", now=100.0)
+        session_context.commit_auto_answer_turn(first, "- Use TTLs", now=100.0)
+        longer_statement = "That belongs to an entirely different discussion now."
+        session_context.record_transcript(longer_statement, "desktop")
+
+        longer_turn = session_context.prepare_auto_answer_turn(
+            longer_statement,
+            segment_gap_seconds=45,
+            topic_overlap_min=0.18,
+            now=160.0,
+        )
+
+        self.assertTrue(longer_turn["starts_new_segment"])
+        self.assertFalse(longer_turn["short_statement_continuation"])
+        self.assertTrue(longer_turn["should_clear_previous_answer"])
+
+    def test_auto_answer_segment_keeps_short_constraint_for_revision(self):
+        session_context.record_transcript("Explain cache invalidation.", "desktop")
+        first = session_context.prepare_auto_answer_turn("Explain cache invalidation.", now=100.0)
+        session_context.commit_auto_answer_turn(first, "- Use TTLs", now=100.0)
+        session_context.record_transcript("Use Redis instead.", "desktop")
+
+        second = session_context.prepare_auto_answer_turn(
+            "Use Redis instead.",
+            segment_gap_seconds=45,
+            topic_overlap_min=0.18,
+            now=160.0,
+        )
+
+        self.assertFalse(second["starts_new_segment"])
+        self.assertFalse(second["should_clear_previous_answer"])
+        self.assertEqual(
+            second["target_turns"],
+            ["Explain cache invalidation.", "Use Redis instead."],
+        )
+
+    def test_auto_answer_segment_does_not_treat_prefixed_question_as_statement(self):
+        session_context.record_transcript("Explain cache invalidation.", "desktop")
+        first = session_context.prepare_auto_answer_turn("Explain cache invalidation.", now=100.0)
+        session_context.commit_auto_answer_turn(first, "- Use TTLs", now=100.0)
+        question = "Okay, can you explain queues"
+        session_context.record_transcript(question, "desktop")
+
+        second = session_context.prepare_auto_answer_turn(
+            question,
+            segment_gap_seconds=45,
+            topic_overlap_min=0.18,
+            now=160.0,
+        )
+
+        self.assertTrue(second["starts_new_segment"])
+        self.assertFalse(second["short_statement_continuation"])
+        self.assertTrue(second["should_clear_previous_answer"])
+
+    def test_auto_answer_segment_hard_reset_overrides_short_statement(self):
+        session_context.record_transcript("Explain cache invalidation.", "desktop")
+        first = session_context.prepare_auto_answer_turn("Explain cache invalidation.", now=100.0)
+        session_context.commit_auto_answer_turn(first, "- Use TTLs", now=100.0)
+        transition = "Okay, next question."
+        session_context.record_transcript(transition, "desktop")
+
+        second = session_context.prepare_auto_answer_turn(transition, now=110.0)
+
+        self.assertTrue(second["hard_reset"])
+        self.assertFalse(second["short_statement_continuation"])
+        self.assertTrue(second["starts_new_segment"])
+        self.assertTrue(second["should_clear_previous_answer"])
+
     def test_auto_answer_segment_keeps_delayed_turn_with_high_topic_overlap(self):
         session_context.record_transcript("Explain database indexes.", "desktop")
         first = session_context.prepare_auto_answer_turn("Explain database indexes.", now=100.0)
@@ -323,6 +430,7 @@ class SessionContextTests(unittest.TestCase):
             context,
         )
         self.assertIn("Interviewer statements, confirmations, or constraints", context)
+        self.assertIn("brief acknowledgement", context)
 
     def test_auto_answer_context_keeps_adjacent_interviewer_fragments_in_target_order(self):
         session_context.record_transcript("Can you explain how you would", "desktop")

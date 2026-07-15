@@ -15,6 +15,7 @@ MAX_TRANSCRIPT_TURNS = 12
 MAX_AI_EXCHANGES = 8
 MAX_SUMMARY_CHARS = 6000
 MAX_FIELD_CHARS = 1200
+SHORT_INTERVIEWER_STATEMENT_MAX_WORDS = 5
 
 
 @dataclass
@@ -114,25 +115,36 @@ def _token_set(text: str) -> set[str]:
         "but",
         "by",
         "can",
+        "compare",
         "could",
+        "describe",
+        "design",
         "do",
         "does",
+        "explain",
         "for",
         "from",
+        "give",
         "how",
         "i",
         "if",
+        "implement",
         "in",
         "is",
         "it",
         "me",
         "of",
+        "ok",
+        "okay",
         "on",
         "or",
+        "show",
         "that",
         "the",
         "this",
+        "tell",
         "to",
+        "walk",
         "what",
         "when",
         "where",
@@ -140,6 +152,7 @@ def _token_set(text: str) -> set[str]:
         "why",
         "with",
         "would",
+        "write",
         "you",
     }
     return {token for token in _normalize_question(text).split() if token not in stopwords}
@@ -167,6 +180,73 @@ def _looks_like_hard_segment_reset(text: str) -> bool:
         " different question ",
     )
     return any(phrase in normalized for phrase in reset_phrases)
+
+
+def _looks_like_short_non_question_statement(text: str) -> bool:
+    words = _normalize_question(text).split()
+    if not words or len(words) > SHORT_INTERVIEWER_STATEMENT_MAX_WORDS:
+        return False
+    if "?" in str(text or "") or _looks_like_hard_segment_reset(text):
+        return False
+
+    leading_fillers = {
+        "and",
+        "but",
+        "ok",
+        "okay",
+        "please",
+        "right",
+        "so",
+        "then",
+        "well",
+        "yeah",
+        "yes",
+    }
+    question_or_request_starters = {
+        "am",
+        "any",
+        "are",
+        "can",
+        "compare",
+        "could",
+        "describe",
+        "design",
+        "did",
+        "do",
+        "does",
+        "explain",
+        "give",
+        "how",
+        "implement",
+        "is",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "should",
+        "show",
+        "tell",
+        "walk",
+        "was",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "why",
+        "will",
+        "would",
+        "write",
+    }
+
+    meaningful_words = list(words)
+    while len(meaningful_words) > 1 and meaningful_words[0] in leading_fillers:
+        meaningful_words.pop(0)
+
+    return meaningful_words[0] not in question_or_request_starters
 
 
 def _append_unique_turn(turns: List[str], text: str) -> List[str]:
@@ -415,7 +495,10 @@ def _compose_auto_answer_context(
             "across multiple nearby Interviewer turns because of pauses, combine those turns before answering. "
             "If the Interviewee/Candidate asked a clarification and the Interviewer replied, use that reply "
             "to answer the clarified latest question. Interviewer statements, confirmations, or constraints "
-            "in the target section must be folded into the same answer instead of ignored. Only the latest "
+            "in the target section must be folded into the same answer instead of ignored. A brief acknowledgement "
+            "or backchannel such as 'ok', 'hmm', or 'uh-huh' does not need its own answer when it adds no new "
+            "question, constraint, correction, or clarification; preserve the previous visible answer exactly. "
+            "If a brief statement does add information, minimally update the same answer instead. Only the latest "
             "auto-answer is visible to the candidate, so produce one complete answer only."
         ),
     ]
@@ -523,6 +606,10 @@ def prepare_auto_answer_turn(
     has_active_segment = bool(active.interviewer_turns or active.last_answer)
     segment_text = " ".join(active.interviewer_turns)
     hard_reset = _looks_like_hard_segment_reset(current_input)
+    short_statement_continuation = bool(
+        has_active_segment
+        and _looks_like_short_non_question_statement(current_input)
+    )
     gap_elapsed = bool(
         has_active_segment
         and active.last_turn_at
@@ -533,7 +620,7 @@ def prepare_auto_answer_turn(
     starts_new_segment = (
         not has_active_segment
         or hard_reset
-        or (gap_elapsed and low_overlap)
+        or (gap_elapsed and low_overlap and not short_statement_continuation)
     )
 
     if starts_new_segment:
@@ -570,6 +657,7 @@ def prepare_auto_answer_turn(
         "target_turns": target_turns,
         "created_at": now,
         "hard_reset": hard_reset,
+        "short_statement_continuation": short_statement_continuation,
         "gap_elapsed": gap_elapsed,
         "topic_overlap": overlap,
     }

@@ -358,6 +358,307 @@ def _text_edit_style():
     """
 
 
+def _escape_answer_html(text):
+    text = (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+    return (
+        text.replace("\\n", "<br>")
+        .replace("\\t", "&nbsp;&nbsp;&nbsp;&nbsp;")
+        .replace("\\r", "")
+        .replace("\\\\", "&#92;")
+        .replace("\\'", "&#39;")
+        .replace('\\"', "&quot;")
+    )
+
+
+def _process_inline_markdown(text):
+    original_text = text
+
+    text = re.sub(
+        r"\[(.*?)\]\((.*?)\)",
+        r'<a href="\2" style="color: #5B9BD5; text-decoration: none;">\1</a>',
+        text,
+    )
+    text = re.sub(r"(\*\*|__)(.*?)\1", r"<b>\2</b>", text)
+    text = re.sub(r"(?<!\*\s)(\*|_)(.*?)\1", r"<i>\2</i>", text)
+
+    processed_text = _escape_answer_html(text)
+    processed_text = processed_text.replace("&lt;a ", "<a ")
+    processed_text = processed_text.replace("&lt;/a&gt;", "</a>")
+    processed_text = processed_text.replace("&lt;b&gt;", "<b>")
+    processed_text = processed_text.replace("&lt;/b&gt;", "</b>")
+    processed_text = processed_text.replace("&lt;i&gt;", "<i>")
+    processed_text = processed_text.replace("&lt;/i&gt;", "</i>")
+
+    for match in re.finditer(r"`([^`]+)`", original_text):
+        code_content = match.group(1)
+        escaped_code = _escape_answer_html(code_content)
+        formatted_code = (
+            '<code style="background-color: rgba(50, 50, 50, 0.7); '
+            'padding: 2px 4px; border-radius: 3px; font-family: monospace;">'
+            f"{escaped_code}</code>"
+        )
+        code_placeholder = _escape_answer_html(f"`{code_content}`")
+        processed_text = processed_text.replace(code_placeholder, formatted_code, 1)
+
+    return processed_text
+
+
+def convert_markdown_to_html(text):
+    """Convert markdown text to HTML with language-specific syntax highlighting."""
+    from pygments import highlight
+    from pygments.formatters import HtmlFormatter
+    from pygments.lexers import TextLexer, get_lexer_by_name, guess_lexer
+
+    lines = str(text or "").split("\n")
+    html_lines = []
+    in_code_block = False
+    in_list = False
+    in_paragraph = False
+    in_table = False
+    code_language = ""
+    code_block_lines = []
+
+    formatter = HtmlFormatter(noclasses=True, style="monokai", nowrap=True)
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        if line.startswith("```"):
+            if in_paragraph:
+                html_lines.append("</p>")
+                in_paragraph = False
+
+            if not in_code_block:
+                in_code_block = True
+                code_language = line[3:].strip()
+                code_block_lines = []
+            else:
+                code = "\n".join(code_block_lines)
+                if code_language:
+                    try:
+                        lexer = get_lexer_by_name(code_language, stripall=True)
+                    except Exception:
+                        lexer = TextLexer(stripall=True)
+                else:
+                    try:
+                        lexer = guess_lexer(code)
+                    except Exception:
+                        lexer = TextLexer(stripall=True)
+
+                highlighted_html = highlight(code, lexer, formatter)
+                highlighted_html = re.sub(r"^<div[^>]*>", "", highlighted_html)
+                highlighted_html = re.sub(r"</div>\s*$", "", highlighted_html)
+                highlighted_html = highlighted_html.replace("\n", "<br>")
+                html_lines.append(
+                    '<table width="100%" cellspacing="0" cellpadding="0" '
+                    'style="margin-top: 6px; margin-bottom: 6px; border-collapse: collapse;">'
+                    '<tr><td style="background-color: #111922; border: 1px solid #2F3B48; '
+                    'padding: 6px 10px;">'
+                    '<pre style="margin: 0; font-family: Consolas, Cascadia Mono, monospace; '
+                    'font-size: 14px; line-height: 1.18; color: #E8EEF5;">'
+                    f"{highlighted_html}"
+                    "</pre></td></tr></table>"
+                )
+                in_code_block = False
+                code_language = ""
+                code_block_lines = []
+        elif in_code_block:
+            code_block_lines.append(line)
+        else:
+            if "|" in line and (line.strip().startswith("|") or line.strip().endswith("|")):
+                if re.match(r"^\s*\|?\s*[-:]+[-|\s:]*\|?\s*$", line):
+                    i += 1
+                    continue
+
+                if not in_table:
+                    html_lines.append('<table style="border-collapse: collapse; width: 100%; margin: 10px 0;">')
+                    in_table = True
+
+                    if i > 0 and "|" in lines[i - 1]:
+                        cells = [cell.strip() for cell in lines[i - 1].strip("|").split("|")]
+                        html_lines.append("<thead><tr>")
+                        for cell in cells:
+                            html_lines.append(
+                                '<th style="border: 1px solid rgba(100, 100, 100, 0.5); '
+                                'padding: 8px; text-align: left; background-color: rgba(60, 60, 60, 0.5);">'
+                                f"{_process_inline_markdown(cell)}</th>"
+                            )
+                        html_lines.append("</tr></thead><tbody>")
+
+                cells = [cell.strip() for cell in line.strip("|").split("|")]
+                html_lines.append("<tr>")
+                for cell in cells:
+                    html_lines.append(
+                        '<td style="border: 1px solid rgba(100, 100, 100, 0.5); '
+                        f'padding: 8px; text-align: left;">{_process_inline_markdown(cell)}</td>'
+                    )
+                html_lines.append("</tr>")
+
+                if i + 1 >= len(lines) or not (
+                    "|" in lines[i + 1]
+                    and (lines[i + 1].strip().startswith("|") or lines[i + 1].strip().endswith("|"))
+                ):
+                    html_lines.append("</tbody></table>")
+                    in_table = False
+            else:
+                if in_table:
+                    html_lines.append("</tbody></table>")
+                    in_table = False
+
+                if line.startswith("# "):
+                    if in_paragraph:
+                        html_lines.append("</p>")
+                        in_paragraph = False
+                    html_lines.append(
+                        '<h1 style="color: #E0E0E0; font-size: 1.8em; margin: 0.8em 0 0.4em 0;">'
+                        f"{_process_inline_markdown(line[2:])}</h1>"
+                    )
+                elif line.startswith("## "):
+                    if in_paragraph:
+                        html_lines.append("</p>")
+                        in_paragraph = False
+                    html_lines.append(
+                        '<h2 style="color: #E0E0E0; font-size: 1.45em; margin: 0.45em 0 0.25em 0;">'
+                        f"{_process_inline_markdown(line[3:])}</h2>"
+                    )
+                elif line.startswith("### "):
+                    if in_paragraph:
+                        html_lines.append("</p>")
+                        in_paragraph = False
+                    html_lines.append(
+                        '<h3 style="color: #E0E0E0; font-size: 1.4em; margin: 0.6em 0 0.3em 0;">'
+                        f"{_process_inline_markdown(line[4:])}</h3>"
+                    )
+                elif line.startswith("#### "):
+                    if in_paragraph:
+                        html_lines.append("</p>")
+                        in_paragraph = False
+                    html_lines.append(
+                        '<h4 style="color: #E0E0E0; font-size: 1.3em; margin: 0.5em 0 0.25em 0;">'
+                        f"{_process_inline_markdown(line[5:])}</h4>"
+                    )
+                elif line.startswith("##### "):
+                    if in_paragraph:
+                        html_lines.append("</p>")
+                        in_paragraph = False
+                    html_lines.append(
+                        '<h5 style="color: #E0E0E0; font-size: 1.2em; margin: 0.4em 0 0.2em 0;">'
+                        f"{_process_inline_markdown(line[6:])}</h5>"
+                    )
+                elif line.startswith("###### "):
+                    if in_paragraph:
+                        html_lines.append("</p>")
+                        in_paragraph = False
+                    html_lines.append(
+                        '<h6 style="color: #E0E0E0; font-size: 1.1em; margin: 0.3em 0 0.15em 0;">'
+                        f"{_process_inline_markdown(line[7:])}</h6>"
+                    )
+                elif line.strip().startswith("- ") or line.strip().startswith("* "):
+                    if in_paragraph:
+                        html_lines.append("</p>")
+                        in_paragraph = False
+
+                    if not in_list:
+                        html_lines.append('<ul style="margin-top: 0.25em; margin-bottom: 0.25em;">')
+                        in_list = True
+
+                    html_lines.append(f"<li>{_process_inline_markdown(line.strip()[2:])}</li>")
+
+                    if i + 1 >= len(lines) or not (
+                        lines[i + 1].strip().startswith("- ") or lines[i + 1].strip().startswith("* ")
+                    ):
+                        html_lines.append("</ul>")
+                        in_list = False
+                elif line.strip() and line.strip()[0].isdigit() and line.strip().find(". ") > 0:
+                    if in_paragraph:
+                        html_lines.append("</p>")
+                        in_paragraph = False
+
+                    if not in_list:
+                        html_lines.append('<ol style="margin-top: 0.5em; margin-bottom: 0.5em;">')
+                        in_list = True
+
+                    content = line.strip()[line.strip().find(". ") + 2 :]
+                    html_lines.append(f"<li>{_process_inline_markdown(content)}</li>")
+
+                    if i + 1 >= len(lines) or not (
+                        lines[i + 1].strip()
+                        and lines[i + 1].strip()[0].isdigit()
+                        and lines[i + 1].strip().find(". ") > 0
+                    ):
+                        html_lines.append("</ol>")
+                        in_list = False
+                elif line.strip() == "---":
+                    if in_paragraph:
+                        html_lines.append("</p>")
+                        in_paragraph = False
+                    html_lines.append('<hr style="border: 1px solid rgba(100, 100, 100, 0.5); margin: 1em 0;">')
+                elif line.strip().startswith("> "):
+                    if in_paragraph:
+                        html_lines.append("</p>")
+                        in_paragraph = False
+                    html_lines.append(
+                        '<blockquote style="border-left: 3px solid rgba(100, 100, 100, 0.5); '
+                        'padding-left: 10px; margin: 0.5em 0; color: #CCCCCC;">'
+                        f"{_process_inline_markdown(line.strip()[2:])}</blockquote>"
+                    )
+                else:
+                    if not line.strip():
+                        if in_paragraph:
+                            html_lines.append("</p>")
+                            in_paragraph = False
+                    else:
+                        if not in_paragraph:
+                            html_lines.append('<p style="margin: 0 0; line-height: 1.2;">')
+                            in_paragraph = True
+                        html_lines.append(f"{_process_inline_markdown(line)}")
+
+        i += 1
+
+    if in_paragraph:
+        html_lines.append("</p>")
+    if in_table:
+        html_lines.append("</tbody></table>")
+
+    return "\n".join(html_lines)
+
+
+def render_answer_html(answer):
+    content = convert_markdown_to_html(str(answer or ""))
+    content = f"<div style='margin-bottom: 0px; line-height: 1.2;'>{content}</div>"
+    return f"<div style='margin-bottom: 0px;'>{content}</div>"
+
+
+def render_basic_answer_html(answer):
+    content = html.escape(str(answer or "")).replace("\n", "<br>")
+    if not content:
+        return ""
+    return (
+        f"<div style='margin-bottom: 0px;'>"
+        f"<div style='margin-bottom: 0px; line-height: 1.2;'>{content}</div>"
+        f"</div>"
+    )
+
+
+def manual_answer_metadata(mode):
+    mode = str(mode or "").lower()
+    if mode == "code":
+        return "Code Analysis", "code", UI["code"]
+    if mode == "general":
+        return "General Analysis", "document", UI["success"]
+    if mode == "text":
+        return "Text Input", "text", UI["accent"]
+    return "Manual Answer", "document", UI["accent"]
+
+
 def _slider_style():
     return """
         QSlider::groove:horizontal {
@@ -952,6 +1253,277 @@ class InputOverlay(QtWidgets.QWidget):
             self.close()
 
 
+class CodeAnswerOverlay(QtWidgets.QWidget):
+    def __init__(self, owner=None):
+        super().__init__(None)
+        self.owner = owner
+        self.current_answer = ""
+        self.current_mode = ""
+        self.dragging = False
+        self.resizing = False
+        self.resize_position = None
+        self.show_resize_handles = True
+        self._user_resized = False
+        self.offset = QtCore.QPoint()
+
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.FramelessWindowHint |
+            QtCore.Qt.WindowType.WindowStaysOnTopHint |
+            QtCore.Qt.WindowType.Tool |
+            QtCore.Qt.WindowType.WindowDoesNotAcceptFocus |
+            QtCore.Qt.WindowType.NoDropShadowWindowHint
+        )
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.setObjectName("CodeAnswerOverlay")
+        self.setMinimumSize(420, 280)
+        self.resize(720, 480)
+
+        root_layout = QtWidgets.QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        self.panel = QtWidgets.QFrame(self)
+        self.panel.setObjectName("CodeAnswerPanel")
+        root_layout.addWidget(self.panel)
+
+        panel_layout = QtWidgets.QVBoxLayout(self.panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(0)
+
+        self.title_bar = QtWidgets.QFrame(self.panel)
+        self.title_bar.setObjectName("CodeAnswerTitleBar")
+        self.title_bar.setFixedHeight(46)
+        self.title_bar.installEventFilter(self)
+        panel_layout.addWidget(self.title_bar)
+
+        title_layout = QtWidgets.QHBoxLayout(self.title_bar)
+        title_layout.setContentsMargins(14, 0, 10, 0)
+        title_layout.setSpacing(8)
+
+        self.title_icon = QtWidgets.QLabel(self.title_bar)
+        self.title_icon.setFixedSize(24, 24)
+        self.title_icon.setPixmap(_icon("document", UI["accent"], 18).pixmap(QtCore.QSize(18, 18)))
+        self.title_icon.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        title_layout.addWidget(self.title_icon)
+
+        self.title_label = QtWidgets.QLabel("Manual Answer", self.title_bar)
+        self.title_label.setStyleSheet(f"color: {UI['text']}; font-family: {UI['font']}; font-size: 14px; font-weight: 800;")
+        title_layout.addWidget(self.title_label)
+        title_layout.addStretch(1)
+
+        self.close_button = QtWidgets.QToolButton(self.title_bar)
+        self.close_button.setIcon(_icon("close", UI["text"], 18))
+        self.close_button.setIconSize(QtCore.QSize(18, 18))
+        self.close_button.setFixedSize(30, 30)
+        self.close_button.setToolTip("Close manual answer")
+        self.close_button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.close_button.setStyleSheet(_tool_button_style("danger", compact=True))
+        self.close_button.clicked.connect(self.close)
+        title_layout.addWidget(self.close_button)
+
+        self.answer_text = OverlayTextEdit(self.panel)
+        self.answer_text.setReadOnly(True)
+        self.answer_text.setStyleSheet(_text_edit_style())
+        self.answer_text.viewport().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        self.answer_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.answer_text.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.WidgetWidth)
+        panel_layout.addWidget(self.answer_text, 1)
+
+        self.setStyleSheet(f"""
+            QFrame#CodeAnswerPanel {{
+                background-color: {UI["window"]};
+                border: 1px solid rgba(118, 134, 150, 70);
+                border-radius: 8px;
+            }}
+            QFrame#CodeAnswerTitleBar {{
+                background-color: {UI["chrome"]};
+                border-bottom: 1px solid rgba(118, 134, 150, 68);
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+            }}
+        """)
+        self.create_resize_handles()
+
+    def set_response(self, answer, mode=""):
+        self.current_mode = str(mode or "")
+        title, icon_kind, icon_color = manual_answer_metadata(self.current_mode)
+        self.title_label.setText(title)
+        self.title_icon.setPixmap(_icon(icon_kind, icon_color, 18).pixmap(QtCore.QSize(18, 18)))
+        self.current_answer = str(answer or "")
+        self.answer_text.setHtml(render_answer_html(self.current_answer))
+        self.answer_text.verticalScrollBar().setValue(0)
+        self.show_near_owner()
+
+    def clear_and_hide(self):
+        self.current_answer = ""
+        self.answer_text.clear()
+        self.hide()
+
+    def show_near_owner(self):
+        owner = self.owner
+        if owner is not None:
+            if not self._user_resized and not self.isVisible():
+                self.resize(
+                    max(520, min(760, int(owner.width() * 0.58))),
+                    max(360, min(560, int(owner.height() * 0.9))),
+                )
+            owner_geo = owner.geometry()
+            global_pos = QtCore.QPoint(owner_geo.right() + 12, owner_geo.top())
+            screen = QtGui.QGuiApplication.screenAt(owner_geo.center()) or QtGui.QGuiApplication.primaryScreen()
+        else:
+            cursor_pos = QtGui.QCursor.pos()
+            global_pos = QtCore.QPoint(cursor_pos.x() + 12, cursor_pos.y() + 12)
+            screen = QtGui.QGuiApplication.screenAt(cursor_pos) or QtGui.QGuiApplication.primaryScreen()
+
+        if screen:
+            available = screen.availableGeometry()
+            if owner is not None and global_pos.x() + self.width() > available.right():
+                global_pos.setX(owner.geometry().left() - self.width() - 12)
+
+            right_bound = max(available.left(), available.right() - self.width())
+            bottom_bound = max(available.top(), available.bottom() - self.height())
+            global_pos.setX(min(max(global_pos.x(), available.left()), right_bound))
+            global_pos.setY(min(max(global_pos.y(), available.top()), bottom_bound))
+
+        self.move(global_pos)
+        self.show()
+        self.raise_()
+        apply_private_no_focus_window(self)
+
+    def create_resize_handles(self):
+        self.handles = []
+        positions = [
+            "top-left", "top-right", "bottom-left", "bottom-right",
+            "top", "right", "bottom", "left"
+        ]
+        for position in positions:
+            handle = ResizeHandle(self, position)
+            self.handles.append(handle)
+        self.position_resize_handles()
+
+    def position_resize_handles(self):
+        if not hasattr(self, "handles"):
+            return
+        for handle in self.handles:
+            if handle.position == "top-left":
+                handle.move(0, 0)
+            elif handle.position == "top-right":
+                handle.move(self.width() - handle.width(), 0)
+            elif handle.position == "bottom-left":
+                handle.move(0, self.height() - handle.height())
+            elif handle.position == "bottom-right":
+                handle.move(self.width() - handle.width(), self.height() - handle.height())
+            elif handle.position == "top":
+                handle.move(self.width() // 2 - handle.width() // 2, 0)
+            elif handle.position == "right":
+                handle.move(self.width() - handle.width(), self.height() // 2 - handle.height() // 2)
+            elif handle.position == "bottom":
+                handle.move(self.width() // 2 - handle.width() // 2, self.height() - handle.height())
+            elif handle.position == "left":
+                handle.move(0, self.height() // 2 - handle.height() // 2)
+            handle.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.position_resize_handles()
+
+    def start_resize(self, position, global_pos):
+        self.resizing = True
+        self.dragging = False
+        self.resize_position = position
+        self.start_resize_pos = global_pos
+        self.start_resize_geometry = self.geometry()
+
+    def do_resize(self, global_pos):
+        if not self.resizing:
+            return
+        delta = global_pos - self.start_resize_pos
+        start_geo = self.start_resize_geometry
+
+        new_x = start_geo.x()
+        new_y = start_geo.y()
+        new_width = start_geo.width()
+        new_height = start_geo.height()
+
+        if "left" in self.resize_position:
+            new_x = start_geo.x() + delta.x()
+            new_width = start_geo.width() - delta.x()
+        elif "right" in self.resize_position:
+            new_width = start_geo.width() + delta.x()
+
+        if "top" in self.resize_position:
+            new_y = start_geo.y() + delta.y()
+            new_height = start_geo.height() - delta.y()
+        elif "bottom" in self.resize_position:
+            new_height = start_geo.height() + delta.y()
+
+        min_width = self.minimumWidth()
+        min_height = self.minimumHeight()
+
+        if new_width < min_width:
+            if "left" in self.resize_position:
+                new_x = start_geo.x() + start_geo.width() - min_width
+            new_width = min_width
+
+        if new_height < min_height:
+            if "top" in self.resize_position:
+                new_y = start_geo.y() + start_geo.height() - min_height
+            new_height = min_height
+
+        self.setGeometry(QtCore.QRect(new_x, new_y, new_width, new_height))
+
+    def end_resize(self):
+        self.resizing = False
+        self.resize_position = None
+        self._user_resized = True
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        apply_private_no_focus_window(self)
+
+    def closeEvent(self, event):
+        event.accept()
+        self.hide()
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self.dragging = True
+            self.offset = event.position().toPoint()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.dragging:
+            self.move(self.mapToGlobal(event.position().toPoint() - self.offset))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self.dragging = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def eventFilter(self, watched, event):
+        if watched is self.title_bar and event.type() == QtCore.QEvent.Type.MouseButtonPress:
+            if event.button() == QtCore.Qt.MouseButton.LeftButton:
+                self.dragging = True
+                self.offset = self.mapFromGlobal(event.globalPosition().toPoint())
+                return True
+        if watched is self.title_bar and event.type() == QtCore.QEvent.Type.MouseMove and self.dragging:
+            self.move(event.globalPosition().toPoint() - self.offset)
+            return True
+        if watched is self.title_bar and event.type() == QtCore.QEvent.Type.MouseButtonRelease:
+            self.dragging = False
+            return True
+        return super().eventFilter(watched, event)
+
+
 # ----------------------------------------------------------------
 # DraggableOverlay: the main overlay window.
 class DraggableOverlay(QtWidgets.QWidget):
@@ -995,6 +1567,9 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.show_interviewer_suggestions = False
 
         self.current_answer = ""
+        self.current_answer_origin = ""
+        self.current_manual_answer = ""
+        self.current_manual_mode = ""
         self.last_interviewer_question = ""
         self.last_suggested_answer = ""
         self._active_auto_answer_question = ""
@@ -1051,6 +1626,7 @@ class DraggableOverlay(QtWidgets.QWidget):
 
         self.transcription_history = []
         self.input_overlay = None
+        self.code_answer_overlay = None
         self._resume_menu_popup = None
 
         self.update_conversation_signal.connect(self._update_conversation_text)
@@ -1527,12 +2103,32 @@ class DraggableOverlay(QtWidgets.QWidget):
         if checked:
             self.interviewer_suggestion_button.setToolTip("Auto-answer enabled")
             self.interviewer_suggestion_button.setIcon(_icon("auto", UI["success"]))
+            self._move_current_manual_answer_to_secondary_overlay()
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Interviewer questions will be auto-answered", flush=True)
         else:
             self.interviewer_suggestion_button.setToolTip("Auto-answer disabled")
             self.interviewer_suggestion_button.setIcon(_icon("auto", UI["muted_dim"]))
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Interviewer questions will not be auto-answered", flush=True)
         self._apply_button_style(self.interviewer_suggestion_button)
+
+    def _current_answer_is_manual(self):
+        if getattr(self, "current_answer_origin", "") == "manual":
+            return True
+        if getattr(self, "current_answer_origin", "") == "auto":
+            return False
+        answer = str(getattr(self, "current_answer", "") or "").strip()
+        suggested = str(getattr(self, "last_suggested_answer", "") or "").strip()
+        return bool(answer and answer != suggested)
+
+    def _move_current_manual_answer_to_secondary_overlay(self):
+        answer = str(getattr(self, "current_answer", "") or "")
+        if not answer.strip() or not self._current_answer_is_manual():
+            return
+
+        self._show_manual_response(answer, getattr(self, "current_manual_mode", ""))
+        self.current_answer = ""
+        self.current_answer_origin = ""
+        self.update_conversation_signal.emit("")
 
     @Slot(str, str)
     def update_status(self, status: str, color="#4CAF50"):
@@ -1555,6 +2151,39 @@ class DraggableOverlay(QtWidgets.QWidget):
         scrollbar.setValue(current_position)
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Maintained scroll position at {current_position}", flush=True)
 
+    @Slot(dict, str)
+    def update_analysis_response(self, response_json: dict, mode: str = ""):
+        ai_response = response_json.get("response", "") if response_json else ""
+        if not ai_response:
+            return
+
+        if self.show_interviewer_suggestions:
+            self._show_manual_response(ai_response, mode)
+            return
+
+        self._set_main_manual_response(ai_response, mode)
+
+    def _show_manual_response(self, answer, mode=""):
+        self.current_manual_answer = str(answer or "")
+        self.current_manual_mode = str(mode or "")
+        if self.code_answer_overlay is None:
+            self.code_answer_overlay = CodeAnswerOverlay(self)
+        self.code_answer_overlay.set_response(answer, mode)
+
+    def _show_code_response(self, answer):
+        self._show_manual_response(answer, "code")
+
+    def clear_code_answer_overlay(self):
+        if self.code_answer_overlay is not None:
+            self.code_answer_overlay.clear_and_hide()
+
+    def _set_main_manual_response(self, answer, mode=""):
+        self.current_answer = str(answer)
+        self.current_answer_origin = "manual"
+        self.current_manual_answer = self.current_answer
+        self.current_manual_mode = str(mode or "")
+        self.update_conversation_signal.emit(render_answer_html(self.current_answer))
+
     @Slot(dict)
     def update_response(self, response_json: dict):
         # Expecting response_json to include "response".
@@ -1562,7 +2191,9 @@ class DraggableOverlay(QtWidgets.QWidget):
         if not ai_response:
             return
 
-        self.current_answer = str(ai_response)
+        self._set_main_manual_response(ai_response)
+        return
+
         conversation_text = ""
         
         def escape_html(text):
@@ -1866,23 +2497,19 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.update_conversation_signal.emit(conversation_text)
 
     def _render_current_answer_basic(self):
-        content = html.escape(str(getattr(self, "current_answer", ""))).replace("\n", "<br>")
-        conversation_text = ""
-        if content:
-            conversation_text = (
-                f"<div style='margin-bottom: 0px;'>"
-                f"<div style='margin-bottom: 0px; line-height: 1.2;'>{content}</div>"
-                f"</div>"
-            )
-        self.update_conversation_signal.emit(conversation_text)
+        self.update_conversation_signal.emit(render_basic_answer_html(getattr(self, "current_answer", "")))
 
     @Slot(str)
     def clear_conversation_display(self, message: str = ""):
         """Clear the current answer without adding synthetic turns."""
         self.current_answer = ""
+        self.current_answer_origin = ""
+        self.current_manual_answer = ""
+        self.current_manual_mode = ""
         self.last_interviewer_question = ""
         self.last_suggested_answer = ""
         self._active_auto_answer_question = ""
+        self.clear_code_answer_overlay()
         if message:
             self.conversation_text.setHtml(
                 f"<div style='color: #FFA500; text-align: center; margin: 10px 0;'>{message}</div>"
@@ -1994,6 +2621,10 @@ class DraggableOverlay(QtWidgets.QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         apply_private_no_focus_window(self)
+
+    def closeEvent(self, event):
+        self.clear_code_answer_overlay()
+        super().closeEvent(event)
 
     def quit_application(self):
         print("Closing AI Live application...")
@@ -2323,6 +2954,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         try:
             if self.last_suggested_answer and self.current_answer == self.last_suggested_answer:
                 self.current_answer = ""
+                self.current_answer_origin = ""
                 self.update_conversation_signal.emit("")
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Removed visible suggestion", flush=True)
         except Exception as e:
@@ -2344,6 +2976,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             self._active_auto_answer_question = ""
             if self.show_interviewer_suggestions:
                 self.current_answer = ""
+                self.current_answer_origin = ""
                 self._render_current_answer_basic()
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🧹 Cleared auto-answer for new segment", flush=True)
             if not answer:
@@ -2360,6 +2993,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Auto-answering interviewer question", flush=True)
             self._active_auto_answer_question = question
             self.current_answer = str(answer)
+            self.current_answer_origin = "auto"
             self._render_current_answer_basic()
 
             if done:

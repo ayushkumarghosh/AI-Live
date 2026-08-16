@@ -1534,19 +1534,14 @@ class DraggableOverlay(QtWidgets.QWidget):
     
     update_conversation_signal = Signal(str)  # Signal for thread-safe answer updates
     clear_history_signal = Signal()  # Signal to stop processing and clear answer context
+    auto_answer_toggled_signal = Signal(bool)
+    resume_context_changed_signal = Signal()
     resume_picker_result_signal = Signal(str, str)
     resume_upload_result_signal = Signal(bool, str, str)
 
     # New signal for general analysis with no thinking
     general_analysis_no_thinking_signal = Signal(str)
     
-    # Signal for interview answers removed
-    
-    # New signal for updating transcriptions
-    update_transcription_signal = Signal(str, str)
-    
-    # Signal for processing selected transcription removed
-
     def __init__(self):
         super().__init__()
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
@@ -1563,16 +1558,13 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.resize(1200, 600)
 
         self.is_processing = False
-        self.use_transcriptions = True
         self.show_interviewer_suggestions = False
 
         self.current_answer = ""
         self.current_answer_origin = ""
         self.current_manual_answer = ""
         self.current_manual_mode = ""
-        self.last_interviewer_question = ""
         self.last_suggested_answer = ""
-        self._active_auto_answer_question = ""
 
         self.dragging = False
         self.resizing = False
@@ -1580,9 +1572,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.resize_position = None
         self.show_resize_handles = True
         self.responsive_mode = None
-        self.user_transcription_panel_visible = True
-        self.compact_transcription_drawer_visible = False
-        self.is_transcription_collapsed = False
         self._applying_responsive_layout = False
         self._status_text = "Listening..."
         self._status_color = UI["success"]
@@ -1590,26 +1579,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.layout = QtWidgets.QVBoxLayout(self)
         self.layout.setContentsMargins(18, 18, 18, 18)
         self.layout.setSpacing(0)
-
-        class DummyButton:
-            def __init__(self, checked=True):
-                self._checked = checked
-
-            def isChecked(self):
-                return self._checked
-
-            def sizeHint(self):
-                class SizeHint:
-                    def __init__(self):
-                        self.height = 26
-                        self.width = 100
-
-                    def height(self):
-                        return self.height
-                return SizeHint()
-
-        self.desktop_audio_button = DummyButton(checked=True)
-        self.mic_button = DummyButton(checked=True)
 
         self._build_opacity_row()
         self.layout.addWidget(self.opacity_row)
@@ -1624,13 +1593,11 @@ class DraggableOverlay(QtWidgets.QWidget):
 
         self.create_resize_handles()
 
-        self.transcription_history = []
         self.input_overlay = None
         self.code_answer_overlay = None
         self._resume_menu_popup = None
 
         self.update_conversation_signal.connect(self._update_conversation_text)
-        self.update_transcription_signal.connect(self._update_transcription_text)
         self.resume_picker_result_signal.connect(self._handle_resume_picker_result)
         self.resume_upload_result_signal.connect(self._handle_resume_upload_result)
         self._sync_resume_button_state()
@@ -1710,18 +1677,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.screenshot_toggle_button.toggled.connect(self.toggle_screenshots)
         title_layout.addWidget(self.screenshot_toggle_button)
 
-        self.show_transcription_panel_button = self._create_toolbar_button(
-            "transcript_panel", "Hide live transcription", "accent", checkable=True, checked=True
-        )
-        self.show_transcription_panel_button.toggled.connect(self.toggle_transcription_panel)
-        title_layout.addWidget(self.show_transcription_panel_button)
-
-        self.transcription_toggle_button = self._create_toolbar_button(
-            "transcript", "Transcripts included in analysis", "accent", checkable=True, checked=True
-        )
-        self.transcription_toggle_button.toggled.connect(self.toggle_transcriptions)
-        title_layout.addWidget(self.transcription_toggle_button)
-
         self.interviewer_suggestion_button = self._create_toolbar_button(
             "auto", "Auto-answer disabled", "success", checkable=True, checked=False
         )
@@ -1772,58 +1727,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.conversation_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.conversation_text.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.WidgetWidth)
         conversation_layout.addWidget(self.conversation_text)
-        self.content_split_layout.addWidget(self.conversation_panel, 2)
-
-        self.split_divider = QtWidgets.QFrame()
-        self.split_divider.setFixedWidth(1)
-        self.split_divider.setStyleSheet("background-color: rgba(118, 134, 150, 62); border: none;")
-        self.content_split_layout.addWidget(self.split_divider)
-
-        self.transcription_panel = QtWidgets.QWidget()
-        self.transcription_panel.setMinimumWidth(0)
-        transcription_layout = QtWidgets.QVBoxLayout(self.transcription_panel)
-        transcription_layout.setContentsMargins(0, 0, 0, 0)
-        transcription_layout.setSpacing(8)
-        self.transcription_layout = transcription_layout
-
-        transcription_header = QtWidgets.QWidget()
-        transcription_header_layout = QtWidgets.QHBoxLayout(transcription_header)
-        transcription_header_layout.setContentsMargins(0, 0, 0, 0)
-        transcription_header_layout.setSpacing(6)
-
-        self.transcription_title = QtWidgets.QLabel("Live Transcription")
-        self.transcription_title.setStyleSheet(
-            f"color: {UI['text']}; font-family: {UI['font']}; font-weight: 800; font-size: 14px;"
-        )
-        transcription_header_layout.addWidget(self.transcription_title)
-        transcription_header_layout.addStretch(1)
-
-        self.clear_transcription_button = self._create_toolbar_button(
-            "trash", "Clear transcriptions", "danger"
-        )
-        self.clear_transcription_button.setVisible(False)
-        self.clear_transcription_button.clicked.connect(self.clear_transcriptions)
-        transcription_header_layout.addWidget(self.clear_transcription_button)
-        transcription_layout.addWidget(transcription_header)
-
-        self.transcription_text = OverlayTextEdit()
-        self.transcription_text.setReadOnly(True)
-        self.transcription_text.setStyleSheet(_text_edit_style())
-        self.transcription_text.viewport().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-        self.transcription_text.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        self.transcription_text.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.WidgetWidth)
-        self.transcription_text.setTextInteractionFlags(
-            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse |
-            QtCore.Qt.TextInteractionFlag.TextSelectableByKeyboard
-        )
-        transcription_layout.addWidget(self.transcription_text)
-
-        self.compact_drawer = QtWidgets.QWidget()
-        self.compact_drawer_layout = QtWidgets.QVBoxLayout(self.compact_drawer)
-        self.compact_drawer_layout.setContentsMargins(0, 0, 0, 0)
-        self.compact_drawer_layout.setSpacing(0)
-        self.compact_drawer.setVisible(False)
-        content_root.addWidget(self.compact_drawer, 0)
+        self.content_split_layout.addWidget(self.conversation_panel, 1)
 
         self.command_bar = QtWidgets.QFrame()
         self.command_bar.setObjectName("CommandBar")
@@ -1863,10 +1767,6 @@ class DraggableOverlay(QtWidgets.QWidget):
             self.command_layout.addWidget(button)
             if button is self.clear_button:
                 self.command_layout.addWidget(self.command_divider)
-
-        self.conversation_stretch = 2
-        self.transcription_stretch = 1
-        self._attach_transcription_to_split()
 
     def _create_opacity_slider(self, width):
         slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
@@ -1945,30 +1845,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         button.setChecked(checked)
         del blocker
 
-    def _attach_transcription_to_split(self):
-        self.compact_drawer_layout.removeWidget(self.transcription_panel)
-        self.content_split_layout.removeWidget(self.transcription_panel)
-        self.transcription_panel.setParent(self.split_container)
-        self.split_divider.setVisible(True)
-        self.content_split_layout.addWidget(self.transcription_panel, self.transcription_stretch)
-        self.content_split_layout.setStretch(0, self.conversation_stretch)
-        self.content_split_layout.setStretch(1, 0)
-        self.content_split_layout.setStretch(2, self.transcription_stretch)
-
-    def _attach_transcription_to_drawer(self):
-        self.content_split_layout.removeWidget(self.transcription_panel)
-        self.compact_drawer_layout.removeWidget(self.transcription_panel)
-        self.split_divider.setVisible(False)
-        self.transcription_panel.setParent(self.compact_drawer)
-        self.compact_drawer_layout.addWidget(self.transcription_panel)
-
-    def _detach_transcription_panel(self):
-        self.content_split_layout.removeWidget(self.transcription_panel)
-        self.compact_drawer_layout.removeWidget(self.transcription_panel)
-        self.split_divider.setVisible(False)
-        self.transcription_panel.setVisible(False)
-        self.transcription_panel.setParent(None)
-
     def _set_command_bar_mode(self, compact):
         self.command_divider.setVisible(not compact)
         self.command_bar.setFixedHeight(46 if compact else 72)
@@ -1995,18 +1871,6 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.status_label.setText(metrics.elidedText(self._status_text, QtCore.Qt.TextElideMode.ElideRight, max_width))
         self.status_label.setToolTip(self._status_text)
 
-    def _sync_transcription_button(self):
-        compact = self.responsive_mode == "compact"
-        self.show_transcription_panel_button.setVisible(not compact)
-        if compact:
-            checked = False
-            tooltip = "Live transcription is hidden in compact mode"
-        else:
-            checked = self.user_transcription_panel_visible
-            tooltip = "Hide live transcription" if checked else "Show live transcription"
-        self._set_checked_silently(self.show_transcription_panel_button, checked)
-        self.show_transcription_panel_button.setToolTip(tooltip)
-
     def _apply_responsive_layout(self, force=False):
         if (
             not hasattr(self, "opacity_row")
@@ -2031,24 +1895,6 @@ class DraggableOverlay(QtWidgets.QWidget):
             self.header_opacity_label.setVisible(not compact)
             self.header_opacity_slider.setFixedWidth(48 if compact else 92)
             self._set_command_bar_mode(compact)
-
-            if compact:
-                self.compact_transcription_drawer_visible = False
-                self.compact_drawer.setVisible(False)
-                self._detach_transcription_panel()
-                self.is_transcription_collapsed = True
-            else:
-                self.compact_transcription_drawer_visible = False
-                self.compact_drawer.setVisible(False)
-                if self.user_transcription_panel_visible:
-                    self._attach_transcription_to_split()
-                    self.transcription_panel.setVisible(True)
-                    self.is_transcription_collapsed = False
-                else:
-                    self._detach_transcription_panel()
-                    self.is_transcription_collapsed = True
-
-            self._sync_transcription_button()
             self._sync_status_label()
         finally:
             self._applying_responsive_layout = False
@@ -2056,21 +1902,6 @@ class DraggableOverlay(QtWidgets.QWidget):
     @Slot(bool)
     def set_processing(self, processing_state: bool):
         self.is_processing = processing_state
-
-    def toggle_desktop_audio(self, checked):
-        """Stub implementation for desktop audio toggle (button has been removed)"""
-        # Desktop audio is always enabled now
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Desktop audio toggle called (button removed)", flush=True)
-
-    def toggle_microphone(self, checked):
-        """Stub implementation for microphone toggle (button has been removed)"""
-        # Microphone is always enabled now
-        if checked:
-            self.update_status("Listening...", "#4CAF50")
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone toggle called (button removed)", flush=True)
-        else:
-            self.update_status("Microphone Off", "#FF5050")
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Microphone toggle called (button removed)", flush=True)
 
     def toggle_screenshots(self, checked):
         """Handle screenshot toggle button state changes"""
@@ -2084,19 +1915,6 @@ class DraggableOverlay(QtWidgets.QWidget):
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Screenshots disabled for analysis", flush=True)
         self._apply_button_style(self.screenshot_toggle_button)
 
-    def toggle_transcriptions(self, checked):
-        """Handle transcription toggle button state changes"""
-        self.use_transcriptions = checked
-        if checked:
-            self.transcription_toggle_button.setToolTip("Transcripts included in analysis")
-            self.transcription_toggle_button.setIcon(_icon("transcript", UI["accent"]))
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Transcriptions will be included in analysis", flush=True)
-        else:
-            self.transcription_toggle_button.setToolTip("Transcripts excluded from analysis")
-            self.transcription_toggle_button.setIcon(_icon("transcript", UI["muted_dim"]))
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Transcriptions will be excluded from analysis", flush=True)
-        self._apply_button_style(self.transcription_toggle_button)
-            
     def toggle_interviewer_suggestions(self, checked):
         """Handle interviewer auto-answer toggle button state changes"""
         self.show_interviewer_suggestions = checked
@@ -2104,12 +1922,17 @@ class DraggableOverlay(QtWidgets.QWidget):
             self.interviewer_suggestion_button.setToolTip("Auto-answer enabled")
             self.interviewer_suggestion_button.setIcon(_icon("auto", UI["success"]))
             self._move_current_manual_answer_to_secondary_overlay()
+            if self.last_suggested_answer and not str(self.current_answer or "").strip():
+                self.current_answer = self.last_suggested_answer
+                self.current_answer_origin = "auto"
+                self._render_current_answer_basic()
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Interviewer questions will be auto-answered", flush=True)
         else:
             self.interviewer_suggestion_button.setToolTip("Auto-answer disabled")
             self.interviewer_suggestion_button.setIcon(_icon("auto", UI["muted_dim"]))
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Interviewer questions will not be auto-answered", flush=True)
         self._apply_button_style(self.interviewer_suggestion_button)
+        self.auto_answer_toggled_signal.emit(bool(checked))
 
     def _current_answer_is_manual(self):
         if getattr(self, "current_answer_origin", "") == "manual":
@@ -2497,7 +2320,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.update_conversation_signal.emit(conversation_text)
 
     def _render_current_answer_basic(self):
-        self.update_conversation_signal.emit(render_basic_answer_html(getattr(self, "current_answer", "")))
+        self.update_conversation_signal.emit(render_answer_html(getattr(self, "current_answer", "")))
 
     @Slot(str)
     def clear_conversation_display(self, message: str = ""):
@@ -2506,9 +2329,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.current_answer_origin = ""
         self.current_manual_answer = ""
         self.current_manual_mode = ""
-        self.last_interviewer_question = ""
         self.last_suggested_answer = ""
-        self._active_auto_answer_question = ""
         self.clear_code_answer_overlay()
         if message:
             self.conversation_text.setHtml(
@@ -2656,15 +2477,6 @@ class DraggableOverlay(QtWidgets.QWidget):
     def handle_text_submitted(self, text):
         # Emit signal to process the text
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Text submitted: {text}", flush=True)
-        
-        # If text is empty, use selected transcription text or shared session context.
-        if not text.strip():
-            text = self.get_transcriptions()
-            if text:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Using selected transcription as input", flush=True)
-            else:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Using shared session context as input", flush=True)
-                
         self.text_submitted.emit(text)
         # No need to set processing state here as it's set in the process_text_input function
 
@@ -2748,6 +2560,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         from resume_context import clear_resume_context
 
         clear_resume_context(remove_cache=True)
+        self.resume_context_changed_signal.emit()
         self._sync_resume_button_state()
         self._flash_button(self.resume_button, "danger")
         self.update_status("Resume removed", "#FFA500")
@@ -2771,6 +2584,7 @@ class DraggableOverlay(QtWidgets.QWidget):
     def _handle_resume_upload_result(self, success: bool, message: str, filename: str):
         self.resume_button.setEnabled(True)
         if success:
+            self.resume_context_changed_signal.emit()
             self._sync_resume_button_state()
             self._flash_button(self.resume_button, "success")
             self.update_status("Resume loaded", "#4CAF50")
@@ -2784,19 +2598,7 @@ class DraggableOverlay(QtWidgets.QWidget):
     def execute_code_analyze(self):
         try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 Executing code analysis with specialized prompt", flush=True)
-            
-            # Get transcriptions to use for the analysis
-            transcriptions = self.get_transcriptions()
-            
-            # Send the transcriptions directly, no need to append the prompt
-            # since the analyze_code_problem function already handles this
-            if transcriptions:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Including transcriptions in code analysis", flush=True)
-                self.code_analysis_signal.emit(transcriptions)
-            else:
-                # Emit an empty string if no transcriptions
-                self.code_analysis_signal.emit("")
-            
+            self.code_analysis_signal.emit("")
             self._flash_button(self.code_analyze_button)
             
         except Exception as e:
@@ -2830,99 +2632,11 @@ class DraggableOverlay(QtWidgets.QWidget):
     def execute_general_analyze_no_thinking(self):
         try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Executing general analysis with thinking_budget=0", flush=True)
-            
-            # Get transcriptions to use for the analysis
-            transcriptions = self.get_transcriptions()
-            
-            # Send the transcriptions directly, no need to append the prompt
-            # since the analyze_general_problem_no_thinking function already handles this
-            if transcriptions:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔤 Including transcriptions in general analysis (no thinking)", flush=True)
-                self.general_analysis_no_thinking_signal.emit(transcriptions)
-            else:
-                # Emit an empty string if no transcriptions
-                self.general_analysis_no_thinking_signal.emit("")
-            
+            self.general_analysis_no_thinking_signal.emit("")
             self._flash_button(self.general_analyze_button_regular)
             
         except Exception as e:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing general analysis (no thinking): {e}", flush=True)
-
-    # Interview answer method removed
-
-    # Add a new method to clear transcriptions
-    def clear_transcriptions(self):
-        """Clear the transcription history and display"""
-        from session_context import clear_transcript_context
-
-        self.transcription_history = []
-        clear_transcript_context()
-        self.transcription_text.clear()
-        self.transcription_text.append("<div style='color: #FFA500; margin: 10px 0;'>Transcription history cleared</div>")
-        
-        self._flash_button(self.clear_transcription_button)
-        
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Transcription history cleared", flush=True)
-    
-    # Add a new method to update transcriptions
-    @Slot(str, str)
-    def update_transcription(self, text, source_type):
-        """Update the transcription display with new text"""
-        # Add to transcription history
-        self.transcription_history.append({"text": text, "source": source_type})
-        
-        # Use signal to update the UI thread-safely
-        self.update_transcription_signal.emit(text, source_type)
-    
-    # Add a new slot to handle transcription updates
-    @Slot(str, str)
-    def _update_transcription_text(self, text, source_type):
-        """Thread-safe method to update the transcription text"""
-        # Set color based on source
-        source_color = "#4CAF50" if source_type == "mic" else "#2196F3"
-        
-        # Add appropriate prefix based on source type
-        prefix = "Me: " if source_type == "mic" else "Interviewer: "
-        
-        # Format the transcription text with color and prefix
-        formatted_text = (
-            f"<div style='margin-bottom: 10px; color: {source_color};'>"
-            f"{prefix}{text}"
-            f"</div>"
-        )
-        
-        # Add to the transcription text area
-        self.transcription_text.append(formatted_text)
-        
-        # Scroll to the bottom
-        self.transcription_text.moveCursor(QtGui.QTextCursor.MoveOperation.End)
-        self.transcription_text.ensureCursorVisible()
-
-    # Process selected transcription method removed
-    
-    # HTML tag cleaning method removed
-
-    # Add helper method to get transcriptions
-    def get_transcriptions(self):
-        """
-        Get selected transcription text for the current analysis request.
-        Unselected transcript context is supplied by session_context.
-        """
-        # If transcriptions are disabled, return empty string
-        if not self.use_transcriptions:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔇 Transcriptions excluded from analysis by toggle", flush=True)
-            return ""
-            
-        # Check if there's any selected text
-        cursor = self.transcription_text.textCursor()
-        selected_text = cursor.selectedText()
-        
-        if selected_text:
-            # If text is selected, use that
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Using selected transcription text", flush=True)
-            return selected_text
-        
-        return ""
 
     def change_opacity(self, value):
         """Change the opacity of the window based on slider value"""
@@ -2934,73 +2648,44 @@ class DraggableOverlay(QtWidgets.QWidget):
                 slider.setValue(value)
                 del blocker
     
-    def toggle_transcription_panel(self, checked=None):
-        """Toggle the side transcription panel in wide mode."""
-        compact = self.width() < RESPONSIVE_BREAKPOINT
-        if compact:
-            self.compact_transcription_drawer_visible = False
-        else:
-            if checked is None:
-                self.user_transcription_panel_visible = not self.user_transcription_panel_visible
-            else:
-                self.user_transcription_panel_visible = checked
-            self.compact_transcription_drawer_visible = False
-        self._apply_responsive_layout(force=True)
-
-# This method is now directly in update_interviewer_qa for better flow control
-        
-    def remove_suggestion_from_display(self):
-        """Remove the visible interviewer suggestion if it is still displayed."""
-        try:
-            if self.last_suggested_answer and self.current_answer == self.last_suggested_answer:
-                self.current_answer = ""
-                self.current_answer_origin = ""
-                self.update_conversation_signal.emit("")
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🗑️ Removed visible suggestion", flush=True)
-        except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error removing suggestion: {e}", flush=True)
-
-    @Slot(str, str, bool)
-    @Slot(str, str, bool, bool)
-    def update_interviewer_qa(self, question, answer, done, clear_previous=False):
-        """Update the stored interviewer Q&A and update the display if needed"""
-        # Make sure we have non-empty content
-        if not question or (not answer and not clear_previous):
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Skipping empty interviewer Q&A update", flush=True)
+    @Slot(str, str)
+    def apply_realtime_answer_update(self, action, text):
+        """Commit one validated append/reset/no_update operation to the visible answer."""
+        if not self.show_interviewer_suggestions:
+            print(
+                f"[{datetime.now().strftime('%H:%M:%S')}] Ignoring realtime answer while Auto-Answer is disabled",
+                flush=True,
+            )
             return
-            
-        # Update the stored values
-        self.last_interviewer_question = question
-        if clear_previous:
-            self.last_suggested_answer = ""
-            self._active_auto_answer_question = ""
-            if self.show_interviewer_suggestions:
-                self.current_answer = ""
-                self.current_answer_origin = ""
-                self._render_current_answer_basic()
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] 🧹 Cleared auto-answer for new segment", flush=True)
-            if not answer:
+
+        action = str(action or "")
+        text = str(text or "").strip()
+        if action == "no_update":
+            return
+        if action not in {"append", "reset"} or not text:
+            print(
+                f"[{datetime.now().strftime('%H:%M:%S')}] Ignoring invalid realtime UI update",
+                flush=True,
+            )
+            return
+
+        if action == "append":
+            visible_answer = str(self.current_answer or "").strip()
+            if visible_answer and text.startswith(visible_answer):
+                text = text[len(visible_answer):].lstrip()
+            if not text:
                 return
-
-        self.last_suggested_answer = answer
-        
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎙️ Received interviewer Q&A update", flush=True)
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Auto-answer is {'enabled' if self.show_interviewer_suggestions else 'disabled'}", flush=True)
-        
-        # Check if auto-answer is enabled or force-enable for first question
-        if self.show_interviewer_suggestions:
-            # If auto-answer is on, display the suggestion
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Auto-answering interviewer question", flush=True)
-            self._active_auto_answer_question = question
-            self.current_answer = str(answer)
-            self.current_answer_origin = "auto"
-            self._render_current_answer_basic()
-
-            if done:
-                self._active_auto_answer_question = ""
+            self.current_answer = f"{visible_answer}\n\n{text}" if visible_answer else text
         else:
-            # Auto-answer is disabled, just store the Q&A but don't display
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚫 Not auto-answering (feature disabled)", flush=True)
+            self.current_answer = text
+
+        self.current_answer_origin = "auto"
+        self.last_suggested_answer = self.current_answer
+        self._render_current_answer_basic()
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] Applied realtime answer action={action}",
+            flush=True,
+        )
 
 # ----------------------------------------------------------------
 # Main entry point.

@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from azure_realtime import build_realtime_answer_instructions
 import resume_context
 import session_context
 
@@ -136,40 +137,26 @@ class ResumeContextTests(unittest.TestCase):
         self.assertNotIn("Candidate resume context:", context)
         self.assertNotIn("Personal project details", context)
 
-    def test_auto_answer_context_includes_resume_when_loaded(self):
+    def test_realtime_answer_instructions_include_loaded_resume(self):
         resume_context.set_resume_context(
             "resume.pdf",
             "# Candidate\n\nBuilt observability dashboards for payment services.",
             persist=False,
         )
-        session_context.record_transcript("Tell me about a project from your resume.", "desktop")
 
-        context = session_context.build_auto_answer_context(
-            "Tell me about a project from your resume.",
-            transcript_turns=1,
-            exchange_count=0,
+        instructions = build_realtime_answer_instructions(
+            resume_context.get_resume_context_section()
         )
 
-        self.assertIn("Candidate resume context:", context)
-        self.assertIn("Built observability dashboards", context)
-        self.assertIn("Interviewer turns to answer together in the single visible response", context)
+        self.assertIn("Candidate resume context:", instructions)
+        self.assertIn("Built observability dashboards", instructions)
+        self.assertIn("invent resume details", instructions)
 
-    def test_auto_answer_context_excludes_resume_for_non_personal_question(self):
-        resume_context.set_resume_context(
-            "resume.pdf",
-            "# Candidate\n\nBuilt observability dashboards for payment services.",
-            persist=False,
-        )
-        session_context.record_transcript("How does a hash map handle collisions?", "desktop")
+    def test_realtime_answer_instructions_work_without_resume(self):
+        instructions = build_realtime_answer_instructions("")
 
-        context = session_context.build_auto_answer_context(
-            "How does a hash map handle collisions?",
-            transcript_turns=1,
-            exchange_count=0,
-        )
-
-        self.assertNotIn("Candidate resume context:", context)
-        self.assertNotIn("Built observability dashboards", context)
+        self.assertNotIn("Candidate resume context:", instructions)
+        self.assertIn("update_visible_answer exactly once", instructions)
 
 
 if __name__ == "__main__":

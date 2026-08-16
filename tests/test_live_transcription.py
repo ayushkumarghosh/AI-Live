@@ -1,176 +1,112 @@
 import unittest
 from unittest.mock import patch
 
-from live_transcription import LiveTranscriptionManager
+import numpy as np
+
+from live_transcription import LiveAudioManager, _float_audio_to_pcm16_bytes
 
 
-class LiveTranscriptionManagerTests(unittest.TestCase):
-    def test_mic_transcript_callback_forwards_to_shared_callback(self):
-        forwarded = []
-        created_streamers = []
+class FakeRealtimeSession:
+    instances = []
 
-        class FakeAudioStreamer:
-            def __init__(self, transcription_callback=None, **_kwargs):
-                self.transcription_callback = transcription_callback
-                self.running = False
-                created_streamers.append(self)
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.running = False
+        self.enabled_values = []
+        self.refresh_count = 0
+        self.reset_count = 0
+        self.audio_chunks = []
+        self.cleaned = False
+        self.__class__.instances.append(self)
 
-            def start(self):
-                self.running = True
-                return True
+    def start(self):
+        self.running = True
+        return True
 
-        class FakeThread:
-            def __init__(self, **_kwargs):
-                pass
+    def set_auto_answer_enabled(self, enabled):
+        self.enabled_values.append(bool(enabled))
 
-            def start(self):
-                pass
+    def refresh_instructions(self):
+        self.refresh_count += 1
 
-        manager = LiveTranscriptionManager(transcription_callback=lambda *args: forwarded.append(args))
+    def reset_context(self):
+        self.reset_count += 1
 
-        with (
-            patch("live_transcription.AudioStreamer", FakeAudioStreamer),
-            patch("live_transcription.threading.Thread", FakeThread),
-        ):
-            self.assertTrue(manager.start_mic_transcription())
+    def add_audio_chunk(self, chunk):
+        self.audio_chunks.append(chunk)
 
-        created_streamers[0].transcription_callback({"transcription": "my spoken answer"}, "mic")
+    def stop(self):
+        self.running = False
 
-        self.assertEqual(forwarded, [("my spoken answer", "mic")])
-        self.assertTrue(created_streamers[0].running)
+    def cleanup(self):
+        self.cleaned = True
+        self.running = False
 
-    def test_completed_desktop_transcript_starts_answer_before_shared_callback(self):
-        events = []
-        created_streamers = []
 
-        class FakeAudioStreamer:
-            def __init__(self, transcription_callback=None, **_kwargs):
-                self.transcription_callback = transcription_callback
-                self.running = False
-                created_streamers.append(self)
+class FakeThread:
+    def __init__(self, target=None, **_kwargs):
+        self.target = target
+        self.started = False
 
-            def start(self):
-                self.running = True
-                return True
+    def start(self):
+        self.started = True
 
-        class FakeThread:
-            def __init__(self, target=None, **_kwargs):
-                self.target = target
 
-            def start(self):
-                events.append("thread_started")
+class LiveAudioManagerTests(unittest.TestCase):
+    def setUp(self):
+        FakeRealtimeSession.instances = []
 
-        manager = LiveTranscriptionManager(
-            transcription_callback=lambda *args: events.append("transcript_callback")
+    def test_start_creates_one_desktop_realtime_session_and_no_mic_path(self):
+        updates = []
+        manager = LiveAudioManager(
+            answer_update_callback=lambda action, text: updates.append((action, text)),
+            instructions_provider=lambda: "instructions",
         )
 
         with (
-            patch("live_transcription.AudioStreamer", FakeAudioStreamer),
+            patch("live_transcription.AzureRealtimeAnswerSession", FakeRealtimeSession),
             patch("live_transcription.threading.Thread", FakeThread),
         ):
-            self.assertTrue(manager.start_desktop_transcription())
-            events.clear()
-            created_streamers[0].transcription_callback(
-                {
-                    "transcription": "current question",
-                    "completed": True,
-                    "item_id": "turn-1",
-                    "timing": {},
-                },
-                "desktop",
-            )
+            self.assertTrue(manager.start())
 
-        self.assertEqual(events, ["thread_started", "transcript_callback"])
+        self.assertEqual(len(FakeRealtimeSession.instances), 1)
+        session = FakeRealtimeSession.instances[0]
+        self.assertIs(session, manager.realtime_session)
+        self.assertIs(session.kwargs["answer_update_callback"], manager.answer_update_callback)
+        self.assertFalse(hasattr(manager, "mic_streamer"))
+        self.assertTrue(manager.capture_thread.started)
 
-    def test_stale_auto_answer_is_not_published(self):
-        published = []
-        manager = LiveTranscriptionManager(auto_answer_callback=lambda *args: published.append(args))
-        manager.last_desktop_query = "old question"
-        manager.last_desktop_turn_id = "turn-1"
+    def test_manager_forwards_toggle_resume_refresh_and_context_reset(self):
+        manager = LiveAudioManager()
+        manager.realtime_session = FakeRealtimeSession()
 
-        def fake_generate(_transcript, on_delta=None, **_kwargs):
-            manager.last_desktop_query = "new question"
-            if on_delta:
-                on_delta("old", "old answer")
-            return "old answer"
+        manager.set_auto_answer_enabled(True)
+        manager.set_auto_answer_enabled(False)
+        manager.refresh_instructions()
+        manager.reset_context()
 
-        with patch("live_transcription.generate_auto_answer", side_effect=fake_generate):
-            manager._generate_desktop_answer("old question", "turn-1", {"completed_at": None})
+        self.assertEqual(manager.realtime_session.enabled_values, [True, False])
+        self.assertEqual(manager.realtime_session.refresh_count, 1)
+        self.assertEqual(manager.realtime_session.reset_count, 1)
 
-        self.assertEqual(published, [])
-        self.assertEqual(manager.last_desktop_answer, "")
+    def test_cleanup_stops_capture_and_realtime_session(self):
+        manager = LiveAudioManager()
+        session = FakeRealtimeSession()
+        manager.realtime_session = session
+        manager.desktop_capture_running = True
 
-    def test_current_auto_answer_publishes_partial_and_final(self):
-        published = []
-        manager = LiveTranscriptionManager(auto_answer_callback=lambda *args: published.append(args))
-        manager.last_desktop_query = "current question"
-        manager.last_desktop_turn_id = "turn-2"
+        manager.cleanup()
 
-        def fake_generate(_transcript, on_delta=None, **_kwargs):
-            if on_delta:
-                on_delta("partial", "partial answer")
-            return "partial answer final"
+        self.assertFalse(manager.desktop_capture_running)
+        self.assertTrue(session.cleaned)
+        self.assertIsNone(manager.realtime_session)
 
-        with patch("live_transcription.generate_auto_answer", side_effect=fake_generate):
-            manager._generate_desktop_answer("current question", "turn-2", {"completed_at": None})
+    def test_float_desktop_audio_is_converted_to_mono_pcm16(self):
+        stereo = np.array([[1.0, -1.0], [0.5, 0.5]], dtype=np.float32)
 
-        self.assertEqual(
-            published,
-            [
-                ("current question", "partial answer", False, False),
-                ("current question", "partial answer final", True, False),
-            ],
-        )
-        self.assertEqual(manager.last_desktop_answer, "partial answer final")
+        pcm = np.frombuffer(_float_audio_to_pcm16_bytes(stereo), dtype=np.int16)
 
-    def test_same_segment_revision_keeps_previous_visible_until_final_answer(self):
-        published = []
-        manager = LiveTranscriptionManager(auto_answer_callback=lambda *args: published.append(args))
-        manager.last_desktop_query = "follow up"
-        manager.last_desktop_turn_id = "turn-3"
-        manager.last_desktop_answer = "previous visible answer"
-
-        def fake_generate(_transcript, on_delta=None, previous_answer=None, **_kwargs):
-            self.assertEqual(previous_answer, "previous visible answer")
-            return "revised visible answer"
-
-        with patch("live_transcription.generate_auto_answer", side_effect=fake_generate):
-            manager._generate_desktop_answer("follow up", "turn-3", {"completed_at": None})
-
-        self.assertEqual(
-            published,
-            [
-                ("follow up", "revised visible answer", True, False),
-            ],
-        )
-        self.assertEqual(manager.last_desktop_answer, "revised visible answer")
-
-    def test_new_segment_reset_publishes_clear_before_answer(self):
-        published = []
-        manager = LiveTranscriptionManager(auto_answer_callback=lambda *args: published.append(args))
-        manager.last_desktop_query = "new topic"
-        manager.last_desktop_turn_id = "turn-4"
-        manager.last_desktop_answer = "previous visible answer"
-
-        def fake_generate(_transcript, on_delta=None, on_reset=None, **_kwargs):
-            if on_reset:
-                on_reset()
-            if on_delta:
-                on_delta("new", "new answer")
-            return "new answer"
-
-        with patch("live_transcription.generate_auto_answer", side_effect=fake_generate):
-            manager._generate_desktop_answer("new topic", "turn-4", {"completed_at": None})
-
-        self.assertEqual(
-            published,
-            [
-                ("new topic", "", False, True),
-                ("new topic", "new answer", False, False),
-                ("new topic", "new answer", True, False),
-            ],
-        )
-        self.assertEqual(manager.last_desktop_answer, "new answer")
+        self.assertEqual(pcm.tolist(), [0, 16383])
 
 
 if __name__ == "__main__":

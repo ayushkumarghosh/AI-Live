@@ -16,11 +16,10 @@ from chat import (
     analyze_general_problem_no_thinking,
     analyze_with_text_input,
     clear_chat_history,
-    start_auto_answer_warmup,
 )
-from live_transcription import LiveTranscriptionManager
+from azure_realtime import build_realtime_answer_instructions
+from live_transcription import LiveAudioManager
 from overlay import DraggableOverlay, initialize_windows_ole, uninitialize_windows_ole
-from session_context import record_transcript
 
 
 def configure_console_encoding():
@@ -38,7 +37,7 @@ configure_console_encoding()
 
 
 overlay = None
-transcription_manager = None
+audio_manager = None
 
 RATE_LIMIT = 2.0
 last_request_time = 0.0
@@ -163,7 +162,6 @@ def _start_manual_analysis(
         print(f"{timestamp()} Error capturing screenshot: {exc}", flush=True)
         screenshots = []
 
-    include_transcripts = bool(getattr(overlay, "use_transcriptions", True))
     print(f"{timestamp()} Starting {session_prefix} analysis", flush=True)
 
     def api_call_thread():
@@ -173,7 +171,7 @@ def _start_manual_analysis(
                     user_input,
                     screenshots,
                     "jpeg",
-                    include_transcripts=include_transcripts,
+                    include_transcripts=False,
                 )
 
             if not _is_current_session(session_id):
@@ -209,10 +207,10 @@ def process_text_input(text_input):
     )
 
 
-def process_code_analysis(transcription):
+def process_code_analysis(user_input):
     _start_manual_analysis(
         session_prefix="code",
-        user_input=transcription,
+        user_input=user_input,
         status="Analyzing code problem...",
         status_color="#00ADD8",
         analysis_fn=analyze_code_problem,
@@ -220,10 +218,10 @@ def process_code_analysis(transcription):
     )
 
 
-def process_general_analysis_no_thinking(transcription):
+def process_general_analysis_no_thinking(user_input):
     _start_manual_analysis(
         session_prefix="general",
-        user_input=transcription,
+        user_input=user_input,
         status="Processing...",
         status_color="#FFA500",
         analysis_fn=analyze_general_problem_no_thinking,
@@ -231,41 +229,60 @@ def process_general_analysis_no_thinking(transcription):
     )
 
 
-def initialize_live_transcription():
-    global overlay, transcription_manager
+def initialize_live_audio():
+    global overlay, audio_manager
 
     if not overlay:
-        print(f"{timestamp()} Cannot start transcription without overlay", flush=True)
+        print(f"{timestamp()} Cannot start desktop audio without overlay", flush=True)
         return False
 
-    def transcription_callback(text, source_type):
-        record_transcript(text, source_type)
-        if overlay:
-            _run_on_ui("update_transcription", text, source_type)
-
-    def auto_answer_callback(question, answer, done, clear_previous=False):
+    def answer_update_callback(action, text):
         if not overlay:
             return
-        _run_on_ui("update_interviewer_qa", question, answer, done, clear_previous)
+        _run_on_ui("apply_realtime_answer_update", action, text)
         if AUTO_ANSWER_LATENCY_LOG:
             print(
-                f"{timestamp()} latency ui.auto_answer_update queued done={done} clear={clear_previous}",
+                f"{timestamp()} latency ui.realtime_answer_update queued action={action}",
                 flush=True,
             )
 
-    transcription_manager = LiveTranscriptionManager(
-        transcription_callback,
-        auto_answer_callback=auto_answer_callback,
+    def session_reset_callback():
+        _run_on_ui("clear_conversation_display", "Realtime session reconnected. Context was reset.")
+        _run_on_ui("update_status", "Listening...", "#4CAF50")
+
+    def status_callback(status, color):
+        _run_on_ui("update_status", status, color)
+
+    def instructions_provider():
+        from resume_context import get_resume_context_section
+
+        return build_realtime_answer_instructions(get_resume_context_section())
+
+    audio_manager = LiveAudioManager(
+        answer_update_callback=answer_update_callback,
+        session_reset_callback=session_reset_callback,
+        status_callback=status_callback,
+        instructions_provider=instructions_provider,
     )
-    result = transcription_manager.start_transcription()
+    result = audio_manager.start()
     if result:
-        start_auto_answer_warmup()
-    print(f"{timestamp()} Live transcription {'started' if result else 'failed to start'}", flush=True)
+        audio_manager.set_auto_answer_enabled(bool(overlay.show_interviewer_suggestions))
+    print(f"{timestamp()} Live desktop audio {'started' if result else 'failed to start'}", flush=True)
     return result
 
 
+def set_auto_answer_enabled(enabled):
+    if audio_manager:
+        audio_manager.set_auto_answer_enabled(enabled)
+
+
+def refresh_realtime_instructions():
+    if audio_manager:
+        audio_manager.refresh_instructions()
+
+
 def stop_processing_and_clear_history():
-    global overlay
+    global overlay, audio_manager
 
     print(f"{timestamp()} Clearing answer context and stopping processing", flush=True)
 
@@ -277,24 +294,26 @@ def stop_processing_and_clear_history():
         overlay.clear_conversation_display("Ready for new queries.")
 
     clear_chat_history()
+    if audio_manager:
+        audio_manager.reset_context()
 
 
-def cleanup_transcription():
-    global transcription_manager
+def cleanup_audio():
+    global audio_manager
 
-    if transcription_manager:
-        print(f"{timestamp()} Stopping live transcription...", flush=True)
-        transcription_manager.cleanup()
-        transcription_manager = None
+    if audio_manager:
+        print(f"{timestamp()} Stopping live desktop audio...", flush=True)
+        audio_manager.cleanup()
+        audio_manager = None
 
 
 def cleanup_application():
-    cleanup_transcription()
+    cleanup_audio()
     uninitialize_windows_ole()
 
 
 def quit_application():
-    cleanup_transcription()
+    cleanup_audio()
 
     app = QtWidgets.QApplication.instance()
     if app and not QtWidgets.QApplication.closingDown():
@@ -324,9 +343,11 @@ def main():
     overlay.code_analysis_signal.connect(process_code_analysis)
     overlay.general_analysis_no_thinking_signal.connect(process_general_analysis_no_thinking)
     overlay.clear_history_signal.connect(stop_processing_and_clear_history)
+    overlay.auto_answer_toggled_signal.connect(set_auto_answer_enabled)
+    overlay.resume_context_changed_signal.connect(refresh_realtime_instructions)
     app.aboutToQuit.connect(cleanup_application)
 
-    initialize_live_transcription()
+    initialize_live_audio()
     app.exec()
 
 

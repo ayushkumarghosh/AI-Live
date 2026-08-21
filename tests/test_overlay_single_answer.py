@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6 import QtCore, QtWidgets
 
-from overlay import CodeAnswerOverlay, DraggableOverlay
+from overlay import CodeAnswerOverlay, DraggableOverlay, render_answer_html
 
 
 class FakeSignal:
@@ -46,6 +46,7 @@ class OverlayHarness:
     _set_main_manual_response = DraggableOverlay._set_main_manual_response
     _current_answer_is_manual = DraggableOverlay._current_answer_is_manual
     _move_current_manual_answer_to_secondary_overlay = DraggableOverlay._move_current_manual_answer_to_secondary_overlay
+    clear_realtime_answer_display = DraggableOverlay.clear_realtime_answer_display
 
     def __init__(self, show_auto=True):
         self.update_conversation_signal = FakeSignal()
@@ -58,6 +59,8 @@ class OverlayHarness:
         self.current_manual_mode = ""
         self.show_interviewer_suggestions = show_auto
         self.last_suggested_answer = ""
+        self.auto_answer_segments = []
+        self.last_suggested_answer_segments = []
         self.code_overlay_values = []
         self.code_overlay_modes = []
         self.code_overlay_cleared = False
@@ -111,6 +114,26 @@ class OverlaySingleAnswerTests(unittest.TestCase):
             "For invalidation, I would combine TTLs with event-driven eviction.",
         )
         self.assertIn("For invalidation", overlay.update_conversation_signal.values[-1])
+        self.assertIn(
+            'height="4" bgcolor="#77B7FF"',
+            overlay.update_conversation_signal.values[-1],
+        )
+        self.assertEqual(
+            overlay.update_conversation_signal.values[-1].count('height="4" bgcolor="#77B7FF"'),
+            1,
+        )
+
+    def test_reset_has_no_continuation_separator(self):
+        overlay = OverlayHarness(show_auto=True)
+
+        DraggableOverlay.apply_realtime_answer_update(overlay, "reset", "New topic answer.")
+
+        self.assertNotIn('height="4" bgcolor="#77B7FF"', overlay.update_conversation_signal.values[-1])
+
+    def test_rendered_paragraphs_have_visible_spacing(self):
+        rendered = render_answer_html("First paragraph.\n\nSecond paragraph.")
+
+        self.assertEqual(rendered.count('<p style="margin: 0 0 0.7em 0; line-height: 1.2;">'), 2)
 
     def test_same_topic_correction_is_appended_without_rewriting_previous_text(self):
         overlay = OverlayHarness(show_auto=True)
@@ -231,6 +254,16 @@ class OverlaySingleAnswerTests(unittest.TestCase):
         self.assertEqual(overlay.current_answer, "Earlier combined auto answer.")
         self.assertEqual(overlay.current_answer_origin, "auto")
 
+    def test_reenabling_auto_answer_restores_continuation_separators(self):
+        self._qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        overlay = OverlayHarness(show_auto=False)
+        overlay.last_suggested_answer = "First answer.\n\nContinuation."
+        overlay.last_suggested_answer_segments = ["First answer.", "Continuation."]
+
+        DraggableOverlay.toggle_interviewer_suggestions(overlay, True)
+
+        self.assertIn('height="4" bgcolor="#77B7FF"', overlay.update_conversation_signal.values[-1])
+
     def test_clear_conversation_display_clears_main_and_secondary_answers(self):
         overlay = OverlayHarness(show_auto=True)
         overlay.current_answer = "Main answer."
@@ -239,8 +272,41 @@ class OverlaySingleAnswerTests(unittest.TestCase):
         DraggableOverlay.clear_conversation_display(overlay)
 
         self.assertEqual(overlay.current_answer, "")
+        self.assertEqual(overlay.auto_answer_segments, [])
         self.assertTrue(overlay.code_overlay_cleared)
         self.assertTrue(overlay.conversation_text.cleared)
+
+    def test_reconnect_clear_preserves_analyze_results_when_auto_answer_is_enabled(self):
+        overlay = OverlayHarness(show_auto=True)
+        overlay.current_answer = "Automatic answer."
+        overlay.current_answer_origin = "auto"
+        overlay.last_suggested_answer = "Automatic answer."
+        overlay.auto_answer_segments = ["Automatic answer."]
+        overlay.last_suggested_answer_segments = ["Automatic answer."]
+        overlay.current_manual_answer = "Analyze result."
+        overlay.code_overlay_values.append("Analyze result.")
+
+        DraggableOverlay.clear_realtime_answer_display(overlay, "Realtime session reconnected.")
+
+        self.assertEqual(overlay.current_answer, "")
+        self.assertEqual(overlay.last_suggested_answer, "")
+        self.assertEqual(overlay.auto_answer_segments, [])
+        self.assertEqual(overlay.current_manual_answer, "Analyze result.")
+        self.assertEqual(overlay.code_overlay_values, ["Analyze result."])
+        self.assertFalse(overlay.code_overlay_cleared)
+        self.assertIn("Realtime session reconnected.", overlay.conversation_text.html_values[-1])
+
+    def test_reconnect_clear_is_ignored_when_auto_answer_is_disabled(self):
+        overlay = OverlayHarness(show_auto=False)
+        overlay.current_answer = "Analyze result."
+        overlay.current_answer_origin = "manual"
+        overlay.last_suggested_answer = "Older automatic answer."
+
+        DraggableOverlay.clear_realtime_answer_display(overlay, "Realtime session reconnected.")
+
+        self.assertEqual(overlay.current_answer, "Analyze result.")
+        self.assertEqual(overlay.last_suggested_answer, "Older automatic answer.")
+        self.assertEqual(overlay.conversation_text.html_values, [])
 
     def test_code_answer_overlay_has_main_window_resize_handles(self):
         self._qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

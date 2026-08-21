@@ -617,7 +617,10 @@ def convert_markdown_to_html(text):
                             in_paragraph = False
                     else:
                         if not in_paragraph:
-                            html_lines.append('<p style="margin: 0 0; line-height: 1.2;">')
+                            # Preserve a visible gap between Markdown paragraphs. Realtime
+                            # continuations are committed with a blank line, so this keeps
+                            # each newly appended answer visually separated in QTextEdit.
+                            html_lines.append('<p style="margin: 0 0 0.7em 0; line-height: 1.2;">')
                             in_paragraph = True
                         html_lines.append(f"{_process_inline_markdown(line)}")
 
@@ -635,6 +638,18 @@ def render_answer_html(answer):
     content = convert_markdown_to_html(str(answer or ""))
     content = f"<div style='margin-bottom: 0px; line-height: 1.2;'>{content}</div>"
     return f"<div style='margin-bottom: 0px;'>{content}</div>"
+
+
+def render_auto_answer_html(segments):
+    """Render committed auto-answer sections with a divider before continuations."""
+    rendered_segments = [render_answer_html(segment) for segment in segments if str(segment or "").strip()]
+    separator = (
+        '<table width="100%" cellspacing="0" cellpadding="0" '
+        'style="margin-top: 12px; margin-bottom: 12px; border-collapse: collapse;">'
+        f'<tr><td height="4" bgcolor="{UI["accent"]}" '
+        f'style="height: 4px; background-color: {UI["accent"]};"></td></tr></table>'
+    )
+    return separator.join(rendered_segments)
 
 
 def render_basic_answer_html(answer):
@@ -1565,6 +1580,8 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.current_manual_answer = ""
         self.current_manual_mode = ""
         self.last_suggested_answer = ""
+        self.auto_answer_segments = []
+        self.last_suggested_answer_segments = []
 
         self.dragging = False
         self.resizing = False
@@ -1925,6 +1942,10 @@ class DraggableOverlay(QtWidgets.QWidget):
             if self.last_suggested_answer and not str(self.current_answer or "").strip():
                 self.current_answer = self.last_suggested_answer
                 self.current_answer_origin = "auto"
+                self.auto_answer_segments = list(
+                    getattr(self, "last_suggested_answer_segments", None)
+                    or [self.last_suggested_answer]
+                )
                 self._render_current_answer_basic()
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Interviewer questions will be auto-answered", flush=True)
         else:
@@ -2320,6 +2341,11 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.update_conversation_signal.emit(conversation_text)
 
     def _render_current_answer_basic(self):
+        if getattr(self, "current_answer_origin", "") == "auto":
+            segments = list(getattr(self, "auto_answer_segments", None) or [])
+            if segments:
+                self.update_conversation_signal.emit(render_auto_answer_html(segments))
+                return
         self.update_conversation_signal.emit(render_answer_html(getattr(self, "current_answer", "")))
 
     @Slot(str)
@@ -2330,7 +2356,38 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.current_manual_answer = ""
         self.current_manual_mode = ""
         self.last_suggested_answer = ""
+        self.auto_answer_segments = []
+        self.last_suggested_answer_segments = []
         self.clear_code_answer_overlay()
+        if message:
+            self.conversation_text.setHtml(
+                f"<div style='color: #FFA500; text-align: center; margin: 10px 0;'>{message}</div>"
+            )
+        else:
+            self.conversation_text.clear()
+
+    @Slot(str)
+    def clear_realtime_answer_display(self, message: str = ""):
+        """Clear only the auto-answer output after a Realtime reconnect.
+
+        Manual Analyze results live in the main overlay while auto-answer is off
+        and in the secondary overlay while it is on, so neither should be
+        affected by a Realtime-session reset.
+        """
+        if not self.show_interviewer_suggestions:
+            return
+
+        self.last_suggested_answer = ""
+        self.auto_answer_segments = []
+        self.last_suggested_answer_segments = []
+
+        # A manual answer can still be visible during a toggle transition.
+        # Do not replace it with a reconnect notice.
+        if self.current_answer_origin != "auto":
+            return
+
+        self.current_answer = ""
+        self.current_answer_origin = ""
         if message:
             self.conversation_text.setHtml(
                 f"<div style='color: #FFA500; text-align: center; margin: 10px 0;'>{message}</div>"
@@ -2675,12 +2732,19 @@ class DraggableOverlay(QtWidgets.QWidget):
                 text = text[len(visible_answer):].lstrip()
             if not text:
                 return
+            segments = list(getattr(self, "auto_answer_segments", None) or [])
+            if not segments or "\n\n".join(segments).strip() != visible_answer:
+                segments = [visible_answer] if visible_answer else []
+            segments.append(text)
+            self.auto_answer_segments = segments
             self.current_answer = f"{visible_answer}\n\n{text}" if visible_answer else text
         else:
             self.current_answer = text
+            self.auto_answer_segments = [text]
 
         self.current_answer_origin = "auto"
         self.last_suggested_answer = self.current_answer
+        self.last_suggested_answer_segments = list(self.auto_answer_segments)
         self._render_current_answer_basic()
         print(
             f"[{datetime.now().strftime('%H:%M:%S')}] Applied realtime answer action={action}",

@@ -247,7 +247,10 @@ def initialize_live_audio():
             )
 
     def session_reset_callback():
-        _run_on_ui("clear_conversation_display", "Realtime session reconnected. Context was reset.")
+        _run_on_ui(
+            "clear_realtime_answer_display",
+            "Realtime session reconnected. Auto-answer context was reset.",
+        )
         _run_on_ui("update_status", "Listening...", "#4CAF50")
 
     def status_callback(status, color):

@@ -32,6 +32,7 @@ class FakeButton:
     def __init__(self):
         self.tooltip = ""
         self.icon = None
+        self.enabled = True
 
     def setToolTip(self, value):
         self.tooltip = value
@@ -39,24 +40,39 @@ class FakeButton:
     def setIcon(self, value):
         self.icon = value
 
+    def setEnabled(self, value):
+        self.enabled = bool(value)
+
 
 class OverlayHarness:
     _render_current_answer_basic = DraggableOverlay._render_current_answer_basic
     update_response = DraggableOverlay.update_response
+    update_analysis_response = DraggableOverlay.update_analysis_response
+    update_shortened_analysis_response = DraggableOverlay.update_shortened_analysis_response
     _set_main_manual_response = DraggableOverlay._set_main_manual_response
     _current_answer_is_manual = DraggableOverlay._current_answer_is_manual
     _move_current_manual_answer_to_secondary_overlay = DraggableOverlay._move_current_manual_answer_to_secondary_overlay
+    _has_shortenable_manual_answer = DraggableOverlay._has_shortenable_manual_answer
+    _sync_shorten_button_state = DraggableOverlay._sync_shorten_button_state
+    set_processing = DraggableOverlay.set_processing
+    execute_shorten_analysis = DraggableOverlay.execute_shorten_analysis
+    clear_conversation_display = DraggableOverlay.clear_conversation_display
     clear_realtime_answer_display = DraggableOverlay.clear_realtime_answer_display
 
     def __init__(self, show_auto=True):
         self.update_conversation_signal = FakeSignal()
         self.auto_answer_toggled_signal = FakeSignal()
+        self.shorten_analysis_signal = FakeSignal()
         self.conversation_text = FakeConversationText()
         self.interviewer_suggestion_button = FakeButton()
+        self.shorten_button = FakeButton()
+        self.shorten_button.setEnabled(False)
+        self.is_processing = False
         self.current_answer = ""
         self.current_answer_origin = ""
         self.current_manual_answer = ""
         self.current_manual_mode = ""
+        self.current_manual_answer_shortenable = False
         self.show_interviewer_suggestions = show_auto
         self.last_suggested_answer = ""
         self.auto_answer_segments = []
@@ -65,9 +81,13 @@ class OverlayHarness:
         self.code_overlay_modes = []
         self.code_overlay_cleared = False
 
-    def _show_manual_response(self, answer, mode=""):
+    def _show_manual_response(self, answer, mode="", shortenable=False):
+        self.current_manual_answer = str(answer)
+        self.current_manual_mode = str(mode)
+        self.current_manual_answer_shortenable = bool(shortenable)
         self.code_overlay_values.append(answer)
         self.code_overlay_modes.append(mode)
+        self._sync_shorten_button_state()
 
     def _show_code_response(self, answer):
         self._show_manual_response(answer, "code")
@@ -76,6 +96,9 @@ class OverlayHarness:
         self.code_overlay_cleared = True
 
     def _apply_button_style(self, _button):
+        pass
+
+    def _flash_button(self, _button, _tone=None, _duration=500):
         pass
 
 
@@ -227,6 +250,101 @@ class OverlaySingleAnswerTests(unittest.TestCase):
         self.assertEqual(overlay.current_answer, "Use two pointers.")
         self.assertEqual(overlay.current_answer_origin, "manual")
         self.assertIn("Use two pointers.", overlay.update_conversation_signal.values[-1])
+
+    def test_shorten_button_only_enables_for_successful_code_or_general_analysis(self):
+        overlay = OverlayHarness(show_auto=False)
+
+        self.assertFalse(overlay.shorten_button.enabled)
+
+        DraggableOverlay.update_analysis_response(
+            overlay,
+            {"user_query": "Solve this", "response": "Use two pointers."},
+            "code",
+        )
+        self.assertTrue(overlay.shorten_button.enabled)
+
+        DraggableOverlay.update_analysis_response(
+            overlay,
+            {"user_query": "Typed", "response": "Typed answer."},
+            "text",
+        )
+        self.assertFalse(overlay.shorten_button.enabled)
+
+        DraggableOverlay.update_analysis_response(
+            overlay,
+            {"user_query": "Explain", "response": "Error", "_shortenable": False},
+            "general",
+        )
+        self.assertFalse(overlay.shorten_button.enabled)
+
+    def test_shorten_button_reuses_the_immediately_previous_answer(self):
+        overlay = OverlayHarness(show_auto=False)
+        initial_answer = "Use a hash map, then return the matching indices. Explain each step briefly."
+        shortened_answer = "Use a hash map and return the matching indices."
+
+        DraggableOverlay.update_analysis_response(
+            overlay,
+            {"user_query": "Solve two sum", "response": initial_answer},
+            "code",
+        )
+        DraggableOverlay.execute_shorten_analysis(overlay)
+        self.assertEqual(overlay.shorten_analysis_signal.values, [(initial_answer, "code")])
+
+        DraggableOverlay.update_shortened_analysis_response(
+            overlay,
+            {"user_query": "Shorten", "response": shortened_answer},
+            "code",
+        )
+        DraggableOverlay.execute_shorten_analysis(overlay)
+        self.assertEqual(
+            overlay.shorten_analysis_signal.values,
+            [(initial_answer, "code"), (shortened_answer, "code")],
+        )
+
+    def test_shortened_answer_stays_in_secondary_overlay_when_auto_answer_is_enabled(self):
+        overlay = OverlayHarness(show_auto=True)
+
+        DraggableOverlay.update_analysis_response(
+            overlay,
+            {"user_query": "Solve", "response": "Original code answer."},
+            "code",
+        )
+        DraggableOverlay.update_shortened_analysis_response(
+            overlay,
+            {"user_query": "Shorten", "response": "Shorter code answer."},
+            "code",
+        )
+
+        self.assertEqual(overlay.current_answer, "")
+        self.assertEqual(
+            overlay.code_overlay_values,
+            ["Original code answer.", "Shorter code answer."],
+        )
+        self.assertTrue(overlay.shorten_button.enabled)
+
+    def test_shorten_button_is_disabled_while_processing_and_after_clear(self):
+        overlay = OverlayHarness(show_auto=False)
+        DraggableOverlay.update_analysis_response(
+            overlay,
+            {"user_query": "Explain", "response": "A concise general answer."},
+            "general",
+        )
+
+        DraggableOverlay.set_processing(overlay, True)
+        self.assertFalse(overlay.shorten_button.enabled)
+
+        DraggableOverlay.set_processing(overlay, False)
+        self.assertTrue(overlay.shorten_button.enabled)
+
+        DraggableOverlay.clear_conversation_display(overlay)
+        self.assertFalse(overlay.shorten_button.enabled)
+
+    def test_auto_answers_do_not_enable_shortening(self):
+        overlay = OverlayHarness(show_auto=True)
+
+        DraggableOverlay.apply_realtime_answer_update(overlay, "reset", "Automatic answer.")
+
+        self.assertFalse(overlay.shorten_button.enabled)
 
     def test_enabling_auto_answer_moves_manual_answer_and_emits_runtime_toggle(self):
         self._qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

@@ -171,6 +171,22 @@ def record_exchange(
         _prune_locked()
 
 
+def replace_latest_exchange_response(mode: str, previous_response: str, replacement_response: str) -> bool:
+    """Replace the visible version of the latest matching manual answer in-place."""
+    mode = str(mode or "").strip()
+    previous_response = str(previous_response or "").strip()
+    replacement_response = str(replacement_response or "").strip()
+    if not mode or not previous_response or not replacement_response:
+        return False
+
+    with _lock:
+        for exchange in reversed(_exchanges):
+            if exchange.mode == mode and exchange.response == previous_response:
+                exchange.response = replacement_response
+                return True
+    return False
+
+
 def find_repeated_exchange(current_input: str, mode: str) -> Optional[Dict[str, str]]:
     current_input = str(current_input or "").strip()
     if not current_input:

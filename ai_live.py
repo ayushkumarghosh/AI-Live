@@ -16,7 +16,9 @@ from chat import (
     analyze_general_problem_no_thinking,
     analyze_with_text_input,
     clear_chat_history,
+    shorten_analysis_answer,
 )
+from session_context import replace_latest_exchange_response
 from azure_realtime import build_realtime_answer_instructions
 from live_transcription import LiveAudioManager
 from overlay import DraggableOverlay, initialize_windows_ole, uninitialize_windows_ole
@@ -186,7 +188,11 @@ def _start_manual_analysis(
                 _run_on_ui("update_status", "Error", "#FF0000")
                 _run_on_ui(
                     "update_analysis_response",
-                    {"user_query": user_input, "response": f"{error_label}: {exc}"},
+                    {
+                        "user_query": user_input,
+                        "response": f"{error_label}: {exc}",
+                        "_shortenable": False,
+                    },
                     session_prefix,
                 )
         finally:
@@ -227,6 +233,60 @@ def process_general_analysis_no_thinking(user_input):
         analysis_fn=analyze_general_problem_no_thinking,
         error_label="Error in general analysis",
     )
+
+
+def process_shorten_analysis(previous_answer: str, mode: str):
+    """Shorten a successful Code or General analysis without changing its source context."""
+    global overlay
+
+    previous_answer = str(previous_answer or "")
+    mode = str(mode or "").strip().lower()
+    if mode not in {"code", "general"} or not previous_answer.strip():
+        print(f"{timestamp()} Ignoring shorten request without an eligible manual answer", flush=True)
+        return
+    if overlay and overlay.is_processing:
+        print(f"{timestamp()} Already processing another request, ignoring shorten", flush=True)
+        return
+
+    session_id = f"shorten_{datetime.now().strftime('%H%M%S')}_{hash(previous_answer)}"
+    if overlay:
+        _mark_processing(session_id, "Shortening answer...", "#FFA500")
+
+    def api_call_thread():
+        try:
+            with _with_rate_limit():
+                response_json = shorten_analysis_answer(previous_answer, mode)
+
+            if not _is_current_session(session_id):
+                print(f"{timestamp()} Session {session_id} was canceled, discarding shortened answer", flush=True)
+                return
+
+            replaced = replace_latest_exchange_response(
+                mode,
+                previous_answer,
+                response_json.get("response", ""),
+            )
+            if not replaced:
+                print(f"{timestamp()} No matching session answer found to replace after shortening", flush=True)
+            _run_on_ui("update_shortened_analysis_response", response_json, mode)
+            _run_on_ui("update_status", "Listening...", "#4CAF50")
+        except Exception as exc:
+            print(f"{timestamp()} Error shortening {mode} analysis: {exc}", flush=True)
+            if _is_current_session(session_id):
+                already_concise = isinstance(exc, ValueError) and any(
+                    phrase in str(exc).lower()
+                    for phrase in ("minimum length", "already too concise")
+                )
+                _run_on_ui(
+                    "update_status",
+                    "Answer already concise" if already_concise else "Could not shorten answer",
+                    "#FFA500" if already_concise else "#FF0000",
+                )
+        finally:
+            if _is_current_session(session_id):
+                _run_on_ui("set_processing", False)
+
+    threading.Thread(target=api_call_thread, daemon=True).start()
 
 
 def initialize_live_audio():
@@ -345,6 +405,7 @@ def main():
     overlay.text_submitted.connect(process_text_input)
     overlay.code_analysis_signal.connect(process_code_analysis)
     overlay.general_analysis_no_thinking_signal.connect(process_general_analysis_no_thinking)
+    overlay.shorten_analysis_signal.connect(process_shorten_analysis)
     overlay.clear_history_signal.connect(stop_processing_and_clear_history)
     overlay.auto_answer_toggled_signal.connect(set_auto_answer_enabled)
     overlay.resume_context_changed_signal.connect(refresh_realtime_instructions)

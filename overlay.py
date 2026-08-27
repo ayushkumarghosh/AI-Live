@@ -324,6 +324,10 @@ def _command_button_style(tone="neutral", active=False):
         QToolButton:pressed {{
             background-color: rgba(255, 255, 255, 28);
         }}
+        QToolButton:disabled {{
+            color: {UI["muted_dim"]};
+            background-color: transparent;
+        }}
     """
 
 
@@ -1554,8 +1558,9 @@ class DraggableOverlay(QtWidgets.QWidget):
     resume_picker_result_signal = Signal(str, str)
     resume_upload_result_signal = Signal(bool, str, str)
 
-    # New signal for general analysis with no thinking
+    # Signal for general analysis with low reasoning effort
     general_analysis_no_thinking_signal = Signal(str)
+    shorten_analysis_signal = Signal(str, str)
     
     def __init__(self):
         super().__init__()
@@ -1579,6 +1584,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.current_answer_origin = ""
         self.current_manual_answer = ""
         self.current_manual_mode = ""
+        self.current_manual_answer_shortenable = False
         self.last_suggested_answer = ""
         self.auto_answer_segments = []
         self.last_suggested_answer_segments = []
@@ -1767,6 +1773,8 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.clear_button = self._create_action_button("trash", "Clear Context", "danger", self.clear_history)
         self.code_analyze_button = self._create_action_button("code", "Code Analysis", "accent", self.execute_code_analyze)
         self.general_analyze_button_regular = self._create_action_button("document", "General Analysis", "success", self.execute_general_analyze_no_thinking)
+        self.shorten_button = self._create_action_button("shorter", "Shorter", "neutral", self.execute_shorten_analysis)
+        self.shorten_button.setEnabled(False)
 
         self.command_buttons = [
             self.input_button,
@@ -1775,6 +1783,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             self.clear_button,
             self.code_analyze_button,
             self.general_analyze_button_regular,
+            self.shorten_button,
         ]
         self.command_divider = QtWidgets.QFrame()
         self.command_divider.setFixedWidth(1)
@@ -1823,6 +1832,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             "Clear Context": "Clear",
             "Code Analysis": "Code",
             "General Analysis": "General",
+            "Shorter": "Shorter",
         }.get(label, label)
         button.setText(label)
         button.setToolTip(label)
@@ -1919,6 +1929,7 @@ class DraggableOverlay(QtWidgets.QWidget):
     @Slot(bool)
     def set_processing(self, processing_state: bool):
         self.is_processing = processing_state
+        self._sync_shorten_button_state()
 
     def toggle_screenshots(self, checked):
         """Handle screenshot toggle button state changes"""
@@ -1953,6 +1964,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             self.interviewer_suggestion_button.setIcon(_icon("auto", UI["muted_dim"]))
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Interviewer questions will not be auto-answered", flush=True)
         self._apply_button_style(self.interviewer_suggestion_button)
+        self._sync_shorten_button_state()
         self.auto_answer_toggled_signal.emit(bool(checked))
 
     def _current_answer_is_manual(self):
@@ -1969,10 +1981,33 @@ class DraggableOverlay(QtWidgets.QWidget):
         if not answer.strip() or not self._current_answer_is_manual():
             return
 
-        self._show_manual_response(answer, getattr(self, "current_manual_mode", ""))
+        self._show_manual_response(
+            answer,
+            getattr(self, "current_manual_mode", ""),
+            getattr(self, "current_manual_answer_shortenable", False),
+        )
         self.current_answer = ""
         self.current_answer_origin = ""
         self.update_conversation_signal.emit("")
+
+    def _has_shortenable_manual_answer(self):
+        return bool(
+            getattr(self, "current_manual_answer_shortenable", False)
+            and str(getattr(self, "current_manual_mode", "") or "") in {"code", "general"}
+            and str(getattr(self, "current_manual_answer", "") or "").strip()
+        )
+
+    def _sync_shorten_button_state(self):
+        button = getattr(self, "shorten_button", None)
+        if button is None:
+            return
+        enabled = self._has_shortenable_manual_answer() and not getattr(self, "is_processing", False)
+        button.setEnabled(enabled)
+        button.setToolTip(
+            "Make the latest Analyze answer slightly shorter"
+            if enabled
+            else "Generate a Code or General Analysis answer first"
+        )
 
     @Slot(str, str)
     def update_status(self, status: str, color="#4CAF50"):
@@ -2001,18 +2036,38 @@ class DraggableOverlay(QtWidgets.QWidget):
         if not ai_response:
             return
 
+        shortenable = bool(
+            response_json.get("_shortenable", mode in {"code", "general"})
+            if response_json
+            else False
+        )
+
         if self.show_interviewer_suggestions:
-            self._show_manual_response(ai_response, mode)
+            self._show_manual_response(ai_response, mode, shortenable)
             return
 
-        self._set_main_manual_response(ai_response, mode)
+        self._set_main_manual_response(ai_response, mode, shortenable)
 
-    def _show_manual_response(self, answer, mode=""):
+    @Slot(dict, str)
+    def update_shortened_analysis_response(self, response_json: dict, mode: str = ""):
+        ai_response = response_json.get("response", "") if response_json else ""
+        if not ai_response or mode not in {"code", "general"}:
+            return
+
+        if self.show_interviewer_suggestions:
+            self._show_manual_response(ai_response, mode, True)
+            return
+
+        self._set_main_manual_response(ai_response, mode, True)
+
+    def _show_manual_response(self, answer, mode="", shortenable=False):
         self.current_manual_answer = str(answer or "")
         self.current_manual_mode = str(mode or "")
+        self.current_manual_answer_shortenable = bool(shortenable)
         if self.code_answer_overlay is None:
             self.code_answer_overlay = CodeAnswerOverlay(self)
         self.code_answer_overlay.set_response(answer, mode)
+        self._sync_shorten_button_state()
 
     def _show_code_response(self, answer):
         self._show_manual_response(answer, "code")
@@ -2021,12 +2076,14 @@ class DraggableOverlay(QtWidgets.QWidget):
         if self.code_answer_overlay is not None:
             self.code_answer_overlay.clear_and_hide()
 
-    def _set_main_manual_response(self, answer, mode=""):
+    def _set_main_manual_response(self, answer, mode="", shortenable=False):
         self.current_answer = str(answer)
         self.current_answer_origin = "manual"
         self.current_manual_answer = self.current_answer
         self.current_manual_mode = str(mode or "")
+        self.current_manual_answer_shortenable = bool(shortenable)
         self.update_conversation_signal.emit(render_answer_html(self.current_answer))
+        self._sync_shorten_button_state()
 
     @Slot(dict)
     def update_response(self, response_json: dict):
@@ -2035,7 +2092,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         if not ai_response:
             return
 
-        self._set_main_manual_response(ai_response)
+        self._set_main_manual_response(ai_response, shortenable=False)
         return
 
         conversation_text = ""
@@ -2355,6 +2412,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.current_answer_origin = ""
         self.current_manual_answer = ""
         self.current_manual_mode = ""
+        self.current_manual_answer_shortenable = False
         self.last_suggested_answer = ""
         self.auto_answer_segments = []
         self.last_suggested_answer_segments = []
@@ -2365,6 +2423,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             )
         else:
             self.conversation_text.clear()
+        self._sync_shorten_button_state()
 
     @Slot(str)
     def clear_realtime_answer_display(self, message: str = ""):
@@ -2688,12 +2747,23 @@ class DraggableOverlay(QtWidgets.QWidget):
 
     def execute_general_analyze_no_thinking(self):
         try:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Executing general analysis with thinking_budget=0", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Executing general analysis with reasoning_effort=low", flush=True)
             self.general_analysis_no_thinking_signal.emit("")
             self._flash_button(self.general_analyze_button_regular)
             
         except Exception as e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing general analysis (no thinking): {e}", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Error executing general analysis: {e}", flush=True)
+
+    def execute_shorten_analysis(self):
+        if self.is_processing or not self._has_shortenable_manual_answer():
+            self._sync_shorten_button_state()
+            return
+
+        previous_answer = str(self.current_manual_answer)
+        mode = str(self.current_manual_mode)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Shortening latest {mode} analysis answer", flush=True)
+        self.shorten_analysis_signal.emit(previous_answer, mode)
+        self._flash_button(self.shorten_button, "neutral")
 
     def change_opacity(self, value):
         """Change the opacity of the window based on slider value"""

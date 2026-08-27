@@ -34,6 +34,7 @@ class ChatContextTests(unittest.TestCase):
 
         request_text = create.call_args.kwargs["input"][0]["content"][0]["text"]
         self.assertEqual(result["response"], "latest answer")
+        self.assertEqual(create.call_args.kwargs["reasoning"], {"effort": "low"})
         self.assertIn("Current analysis mode: general.", request_text)
         self.assertIn("Interviewer: Tell me about indexes.", request_text)
         self.assertEqual(session_context.snapshot()["exchanges"][0]["mode"], "general")
@@ -91,6 +92,7 @@ class ChatContextTests(unittest.TestCase):
 
         request_text = create.call_args.kwargs["input"][0]["content"][0]["text"]
         instructions = create.call_args.kwargs["instructions"]
+        self.assertEqual(create.call_args.kwargs["reasoning"], {"effort": "medium"})
         self.assertIn("Automatic repeat correction:", request_text)
         self.assertIn("Prior answer:\nUse recursion only.", request_text)
         self.assertIn("visible compiler, runtime, test, editor, or UI errors", instructions)
@@ -119,6 +121,72 @@ class ChatContextTests(unittest.TestCase):
         request_text = create.call_args.kwargs["input"][0]["content"][0]["text"]
         self.assertNotIn("Do not include this transcript.", request_text)
         self.assertIn("typed question", request_text)
+
+    def test_shorten_analysis_uses_only_previous_answer_and_does_not_record_exchange(self):
+        previous_answer = " ".join(f"word{index}" for index in range(20))
+        shortened_answer = " ".join(f"word{index}" for index in range(17))
+
+        with (
+            patch.object(chat, "get_analysis_client", return_value=object()),
+            patch.object(
+                chat,
+                "_responses_create_with_retries",
+                return_value=self._mock_response(
+                    '{"user_query":"Shorten","response":"' + shortened_answer + '"}'
+                ),
+            ) as create,
+        ):
+            result = chat.shorten_analysis_answer(previous_answer, "code")
+
+        request = create.call_args.kwargs
+        request_text = request["input"][0]["content"][0]["text"]
+        self.assertEqual(result["response"], shortened_answer)
+        self.assertIn(previous_answer, request_text)
+        self.assertNotIn("Session context", request_text)
+        self.assertIn("Aim for 17 non-whitespace tokens.", request["instructions"])
+        self.assertIn("complete, runnable", request["instructions"])
+        self.assertEqual(request["text"]["verbosity"], "low")
+        self.assertEqual(session_context.snapshot()["exchanges"], [])
+
+    def test_shorten_analysis_retries_once_when_first_output_is_not_shorter(self):
+        previous_answer = " ".join(f"word{index}" for index in range(20))
+        shortened_answer = " ".join(f"word{index}" for index in range(17))
+        responses = [
+            self._mock_response('{"user_query":"Shorten","response":"' + previous_answer + '"}'),
+            self._mock_response('{"user_query":"Shorten","response":"' + shortened_answer + '"}'),
+        ]
+
+        with (
+            patch.object(chat, "get_analysis_client", return_value=object()),
+            patch.object(chat, "_responses_create_with_retries", side_effect=responses) as create,
+        ):
+            result = chat.shorten_analysis_answer(previous_answer, "general")
+
+        self.assertEqual(result["response"], shortened_answer)
+        self.assertEqual(create.call_count, 2)
+        self.assertIn("This is a retry", create.call_args.kwargs["instructions"])
+
+    def test_shorten_analysis_rejects_two_outputs_outside_the_allowed_range(self):
+        previous_answer = " ".join(f"word{index}" for index in range(20))
+
+        with (
+            patch.object(chat, "get_analysis_client", return_value=object()),
+            patch.object(
+                chat,
+                "_responses_create_with_retries",
+                return_value=self._mock_response(
+                    '{"user_query":"Shorten","response":"' + previous_answer + '"}'
+                ),
+            ) as create,
+        ):
+            with self.assertRaisesRegex(ValueError, "10–20%"):
+                chat.shorten_analysis_answer(previous_answer, "general")
+
+        self.assertEqual(create.call_count, 2)
+
+    def test_shorten_analysis_does_not_over_shorten_a_very_short_answer(self):
+        with self.assertRaisesRegex(ValueError, "already too concise"):
+            chat.shorten_analysis_answer("one two three", "general")
 
 
 if __name__ == "__main__":

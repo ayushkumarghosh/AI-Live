@@ -83,6 +83,43 @@ class SessionContextTests(unittest.TestCase):
     def test_find_repeated_exchange_ignores_empty_input(self):
         self.assertIsNone(session_context.find_repeated_exchange("", "code"))
 
+    def test_replace_latest_exchange_response_updates_only_latest_matching_mode(self):
+        session_context.record_exchange(
+            "first code request",
+            {"user_query": "first code", "response": "Original answer."},
+            "code",
+        )
+        session_context.record_exchange(
+            "general request",
+            {"user_query": "general", "response": "Original answer."},
+            "general",
+        )
+        session_context.record_exchange(
+            "latest code request",
+            {"user_query": "latest code", "response": "Original answer."},
+            "code",
+        )
+
+        replaced = session_context.replace_latest_exchange_response(
+            "code",
+            "Original answer.",
+            "Shorter answer.",
+        )
+        snapshot = session_context.snapshot()
+
+        self.assertTrue(replaced)
+        self.assertEqual(
+            [exchange["response"] for exchange in snapshot["exchanges"]],
+            ["Original answer.", "Original answer.", "Shorter answer."],
+        )
+        self.assertFalse(
+            session_context.replace_latest_exchange_response(
+                "code",
+                "Missing answer.",
+                "Replacement.",
+            )
+        )
+
     def test_rolls_older_context_into_summary(self):
         for index in range(session_context.MAX_TRANSCRIPT_TURNS + 2):
             session_context.record_transcript(f"transcript {index}", "desktop")

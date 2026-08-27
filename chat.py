@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 import time
@@ -20,6 +21,8 @@ load_env_file()
 
 
 ANALYSIS_MODEL = os.getenv("AZURE_OPENAI_ANALYSIS_DEPLOYMENT", "gpt-5.5")
+SHORTENABLE_ANALYSIS_MODES = {"code", "general"}
+ANALYSIS_REASONING_EFFORTS = {"code": "medium", "general": "low"}
 
 _analysis_client: Optional[OpenAI] = None
 
@@ -122,6 +125,31 @@ def _response_schema():
         },
         "required": ["user_query", "response"],
     }
+
+
+def _non_whitespace_token_count(text: str) -> int:
+    return len(re.findall(r"\S+", str(text or "")))
+
+
+def _shortening_bounds(previous_answer: str) -> tuple[int, int, int]:
+    """Return the target and accepted token-count range for one small rewrite."""
+    previous_tokens = _non_whitespace_token_count(previous_answer)
+    if previous_tokens < 2:
+        raise ValueError("Answer is already at its minimum length.")
+
+    minimum_tokens = max(1, math.ceil(previous_tokens * 0.80))
+    maximum_tokens = min(previous_tokens - 1, math.floor(previous_tokens * 0.90))
+    if minimum_tokens > maximum_tokens:
+        raise ValueError("Answer is already too concise to shorten by 10–20%.")
+
+    target_tokens = round(previous_tokens * 0.85)
+    target_tokens = min(max(target_tokens, minimum_tokens), maximum_tokens)
+    return target_tokens, minimum_tokens, maximum_tokens
+
+
+def _is_valid_shortened_answer(candidate: str, minimum_tokens: int, maximum_tokens: int) -> bool:
+    candidate_tokens = _non_whitespace_token_count(candidate)
+    return bool(str(candidate or "").strip()) and minimum_tokens <= candidate_tokens <= maximum_tokens
 
 
 def _parse_json_response(response_text: str, fallback_query: str) -> Dict[str, str]:
@@ -275,6 +303,8 @@ def _send_analysis_message(
     if system_instruction:
         instructions.append(system_instruction)
 
+    reasoning_effort = ANALYSIS_REASONING_EFFORTS.get(mode, "none")
+
     try:
         response = _responses_create_with_retries(
             get_analysis_client(),
@@ -282,7 +312,7 @@ def _send_analysis_message(
             instructions="\n\n".join(instructions),
             input=[{"role": "user", "content": content_parts}],
             max_output_tokens=12000,
-            reasoning={"effort": "none"},
+            reasoning={"effort": reasoning_effort},
             text={
                 "format": {
                     "type": "json_schema",
@@ -296,13 +326,100 @@ def _send_analysis_message(
     except Exception as exc:
         raise RuntimeError(
             f"Azure OpenAI analysis request failed for deployment {ANALYSIS_MODEL!r} "
-            "with reasoning effort disabled (reasoning.effort='none'). "
+            f"with reasoning effort {reasoning_effort!r}. "
             f"Original error: {exc}"
         ) from exc
 
     response_json = _parse_json_response(_extract_output_text(response), text_input)
     record_exchange(content_text, response_json, mode, current_input=current_input or text_input)
     return response_json
+
+
+def shorten_analysis_answer(previous_answer: str, mode: str) -> Dict[str, str]:
+    """Rewrite the immediately preceding manual analysis answer by about 15%."""
+    mode = str(mode or "").strip().lower()
+    previous_answer = str(previous_answer or "")
+    if mode not in SHORTENABLE_ANALYSIS_MODES:
+        raise ValueError("Only Code Analysis and General Analysis answers can be shortened.")
+
+    target_tokens, minimum_tokens, maximum_tokens = _shortening_bounds(previous_answer)
+    mode_label = "Code Analysis" if mode == "code" else "General Analysis"
+    content = [
+        {
+            "type": "input_text",
+            "text": (
+                f"Analysis mode: {mode_label}.\n\n"
+                "Rewrite only this previous answer:\n"
+                "---\n"
+                f"{previous_answer}\n"
+                "---"
+            ),
+        }
+    ]
+
+    for attempt in range(2):
+        strict_bounds = (
+            "This is a retry because the prior rewrite missed the requested size. "
+            if attempt
+            else ""
+        )
+        instructions = [
+            "Return only JSON matching this schema: "
+            '{"user_query": string, "response": string}.',
+            candidate_answer_style_prompt,
+            (
+                f"Rewrite the supplied {mode_label} answer so it keeps the same meaning, "
+                "technical correctness, and essential details while being only slightly shorter. "
+                "Do not answer the original question again, add new information, mention the "
+                "rewrite, or refer to a previous answer. Preserve useful Markdown structure. "
+                f"Aim for {target_tokens} non-whitespace tokens. {strict_bounds}"
+                f"The response must contain between {minimum_tokens} and {maximum_tokens} "
+                "non-whitespace tokens."
+            ),
+        ]
+        if mode == "code":
+            instructions.append(
+                "You may condense prose and code, but any code in the rewritten answer must "
+                "remain complete, runnable, technically correct, and preserve required "
+                "signatures and interfaces."
+            )
+
+        try:
+            response = _responses_create_with_retries(
+                get_analysis_client(),
+                model=ANALYSIS_MODEL,
+                instructions="\n\n".join(instructions),
+                input=[{"role": "user", "content": content}],
+                max_output_tokens=12000,
+                reasoning={"effort": "none"},
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "shortened_analysis_response",
+                        "schema": _response_schema(),
+                        "strict": True,
+                    },
+                    "verbosity": "low",
+                },
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Azure OpenAI answer-shortening request failed for deployment {ANALYSIS_MODEL!r} "
+                "with reasoning effort disabled (reasoning.effort='none'). "
+                f"Original error: {exc}"
+            ) from exc
+
+        response_json = _parse_json_response(_extract_output_text(response), "Shorten previous analysis answer")
+        candidate = str(response_json.get("response", "")).strip()
+        if _is_valid_shortened_answer(candidate, minimum_tokens, maximum_tokens):
+            return {
+                "user_query": str(response_json.get("user_query", "Shorten previous analysis answer")),
+                "response": candidate,
+            }
+
+    raise ValueError(
+        "Could not create a slightly shorter answer within the requested 10–20% range."
+    )
 
 
 def analyze_with_text_input(

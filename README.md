@@ -82,6 +82,7 @@ Desktop audio streams continuously, but the model creates answers only while Aut
 - **Screenshot**: queue a screenshot for the next manual request.
 - **Resume**: upload, replace, or remove resume context.
 - **Code Analysis** and **General Analysis**: run explicit manual-analysis requests.
+- **Shorter**: rewrite the latest Code Analysis or General Analysis answer to be about 15% shorter. It can be used repeatedly; Text Input and Auto-Answer results are not eligible.
 - **Clear Context**: clear the visible answers, manual history, and restart the Realtime conversation.
 
 ## Verification

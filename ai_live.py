@@ -1,3 +1,11 @@
+import sys
+
+# Stdio helper entry point must precede all GUI, audio and environment setup.
+if __name__ == '__main__' and len(sys.argv) == 3 and sys.argv[1] == '--project-guide-mcp':
+    from project_guide.mcp import main as project_reader_main
+    project_reader_main(sys.argv[2])
+    raise SystemExit(0)
+
 import base64
 import io
 import os
@@ -40,6 +48,7 @@ configure_console_encoding()
 
 overlay = None
 audio_manager = None
+project_guide = None
 
 RATE_LIMIT = 2.0
 last_request_time = 0.0
@@ -319,7 +328,9 @@ def initialize_live_audio():
     def instructions_provider():
         from resume_context import get_resume_context_section
 
-        return build_realtime_answer_instructions(get_resume_context_section())
+        from project_guide.context import get_project_guide_context_section
+        return build_realtime_answer_instructions(
+            get_resume_context_section(), get_project_guide_context_section())
 
     audio_manager = LiveAudioManager(
         answer_update_callback=answer_update_callback,
@@ -357,6 +368,8 @@ def stop_processing_and_clear_history():
         overlay.clear_conversation_display("Ready for new queries.")
 
     clear_chat_history()
+    if project_guide:
+        project_guide.clear()
     if audio_manager:
         audio_manager.reset_context()
 
@@ -371,6 +384,8 @@ def cleanup_audio():
 
 
 def cleanup_application():
+    if project_guide:
+        project_guide.close()
     cleanup_audio()
     uninitialize_windows_ole()
 
@@ -401,6 +416,12 @@ def main():
     global overlay
     overlay = DraggableOverlay()
     overlay.show()
+
+    from project_guide.controller import ProjectGuideController
+    global project_guide
+    project_guide = ProjectGuideController(overlay)
+    project_guide.context_changed.connect(refresh_realtime_instructions)
+    overlay.project_guide_signal.connect(project_guide.show)
 
     overlay.text_submitted.connect(process_text_input)
     overlay.code_analysis_signal.connect(process_code_analysis)

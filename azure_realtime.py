@@ -166,7 +166,7 @@ async def _connect_websocket(url, api_key):
         return await websockets.connect(url, extra_headers=headers, max_size=None)
 
 
-def build_realtime_answer_instructions(resume_section=""):
+def build_realtime_answer_instructions(resume_section="", project_section=""):
     instructions = """
 You are a realtime interview answer assistant for a software engineering candidate.
 You hear only the interviewer's desktop audio. Understand the audio directly and decide
@@ -199,6 +199,9 @@ invent resume details.
     resume_section = str(resume_section or "").strip()
     if resume_section:
         instructions += f"\n\n{resume_section}"
+    project_section = str(project_section or "").strip()
+    if project_section:
+        instructions += f"\n\n{project_section}"
     return instructions
 
 

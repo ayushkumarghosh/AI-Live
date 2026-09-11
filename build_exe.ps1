@@ -2,6 +2,7 @@ param(
     [switch]$SkipInstall,
     [switch]$SkipTests,
     [switch]$SkipSmoke,
+    [switch]$SkipCompanion,
     [switch]$CopyEnv
 )
 
@@ -75,6 +76,7 @@ if (-not $SkipInstall) {
 if (-not $SkipTests) {
     Write-Step "Running unit tests"
     & $VenvPython -m unittest discover -s tests
+    if ($LASTEXITCODE -ne 0) { throw "Tests failed" }
 }
 
 Stop-AILiveDistProcesses
@@ -88,6 +90,22 @@ Write-Step "Building one-file Windows executable"
     --name AI-Live `
     --add-data "assets;assets" `
     ai_live.py
+
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }
+
+if (-not $SkipCompanion) {
+    Write-Step "Building VS Code Project Guide companion"
+    Push-Location (Join-Path $Root "vscode-project-guide")
+    try {
+        & npm ci --ignore-scripts
+        if ($LASTEXITCODE -ne 0) { throw "Companion dependency installation failed" }
+        & npm test
+        if ($LASTEXITCODE -ne 0) { throw "Companion tests failed" }
+        & npm run package
+        if ($LASTEXITCODE -ne 0) { throw "Companion packaging failed" }
+        Copy-Item -LiteralPath "ai-live-project-guide-0.1.0.vsix" -Destination (Join-Path $Root "dist") -Force
+    } finally { Pop-Location }
+}
 
 if (-not (Test-Path $DistExe)) {
     throw "Build completed without producing $DistExe"
@@ -104,7 +122,7 @@ if ($CopyEnv) {
 
 if (-not $SkipSmoke) {
     Write-Step "Smoke launching executable"
-    $started = Start-Process -FilePath $DistExe -PassThru
+    $started = Start-Process -FilePath $DistExe -PassThru -WindowStyle Hidden
     Start-Sleep -Seconds 15
 
     $running = Get-AILiveDistProcesses

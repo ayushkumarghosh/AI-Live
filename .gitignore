@@ -178,3 +178,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# VS Code companion build artifacts
+vscode-project-guide/node_modules/
+vscode-project-guide/out/
+*.vsix

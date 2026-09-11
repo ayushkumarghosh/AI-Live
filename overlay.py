@@ -1547,6 +1547,7 @@ class CodeAnswerOverlay(QtWidgets.QWidget):
 # DraggableOverlay: the main overlay window.
 class DraggableOverlay(QtWidgets.QWidget):
     text_submitted = Signal(str)
+    project_guide_signal = Signal()
     
     # New signals for specialized analysis functions
     code_analysis_signal = Signal(str)  # For code problem analysis
@@ -1772,6 +1773,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.resume_button = self._create_action_button("document", "Resume", "accent", self.upload_resume_pdf)
         self.clear_button = self._create_action_button("trash", "Clear Context", "danger", self.clear_history)
         self.code_analyze_button = self._create_action_button("code", "Code Analysis", "accent", self.execute_code_analyze)
+        self.project_guide_button = self._create_action_button("code", "Project Guide", "accent", self.project_guide_signal.emit)
         self.general_analyze_button_regular = self._create_action_button("document", "General Analysis", "success", self.execute_general_analyze_no_thinking)
         self.shorten_button = self._create_action_button("shorter", "Shorter", "neutral", self.execute_shorten_analysis)
         self.shorten_button.setEnabled(False)
@@ -1782,6 +1784,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             self.resume_button,
             self.clear_button,
             self.code_analyze_button,
+            self.project_guide_button,
             self.general_analyze_button_regular,
             self.shorten_button,
         ]

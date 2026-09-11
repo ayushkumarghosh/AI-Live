@@ -723,6 +723,14 @@ def apply_private_no_focus_window(widget):
     apply_no_activate(widget.winId())
 
 
+def register_overlay_opacity(widget):
+    """Opt an overlay into the application's shared opacity setting."""
+    app = QtWidgets.QApplication.instance()
+    value = app.property("overlay_opacity_percent")
+    widget.setProperty("uses_overlay_opacity", True)
+    widget.setWindowOpacity((90 if value is None else value) / 100.0)
+
+
 class PrivateTextContextPopup(QtWidgets.QFrame):
     def __init__(self, text_edit):
         super().__init__(None)
@@ -737,6 +745,7 @@ class PrivateTextContextPopup(QtWidgets.QFrame):
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.setObjectName("PrivateTextContextPopup")
+        register_overlay_opacity(self)
         self.setStyleSheet(f"""
             QFrame#PrivateTextContextPopup {{
                 background-color: rgba(14, 19, 24, 242);
@@ -897,6 +906,7 @@ class PrivateResumeMenuPopup(QtWidgets.QFrame):
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.setObjectName("PrivateResumeMenuPopup")
+        register_overlay_opacity(self)
         self.setStyleSheet(f"""
             QFrame#PrivateResumeMenuPopup {{
                 background-color: rgba(14, 19, 24, 242);
@@ -1140,6 +1150,7 @@ class InputOverlay(QtWidgets.QWidget):
             QtCore.Qt.WindowType.Tool
         )
         self.setObjectName("InputOverlay")
+        register_overlay_opacity(self)
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         parent_width = parent.width() if parent else 560
@@ -1296,6 +1307,7 @@ class CodeAnswerOverlay(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.setObjectName("CodeAnswerOverlay")
+        register_overlay_opacity(self)
         self.setMinimumSize(420, 280)
         self.resize(720, 480)
 
@@ -1574,7 +1586,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             QtCore.Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setWindowOpacity(0.9)
+        register_overlay_opacity(self)
         self.setMinimumSize(MIN_OVERLAY_WIDTH, MIN_OVERLAY_HEIGHT)
         self.resize(1200, 600)
 
@@ -1801,7 +1813,8 @@ class DraggableOverlay(QtWidgets.QWidget):
         slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         slider.setMinimum(20)
         slider.setMaximum(100)
-        slider.setValue(90)
+        value = QtWidgets.QApplication.instance().property("overlay_opacity_percent")
+        slider.setValue(90 if value is None else value)
         slider.setFixedWidth(width)
         slider.setStyleSheet(_slider_style())
         slider.valueChanged.connect(self.change_opacity)
@@ -2769,9 +2782,13 @@ class DraggableOverlay(QtWidgets.QWidget):
         self._flash_button(self.shorten_button, "neutral")
 
     def change_opacity(self, value):
-        """Change the opacity of the window based on slider value"""
+        """Apply the slider value to existing and future app overlays."""
+        app = QtWidgets.QApplication.instance()
+        app.setProperty("overlay_opacity_percent", value)
         opacity = value / 100.0
-        self.setWindowOpacity(opacity)
+        for window in app.topLevelWidgets():
+            if window.property("uses_overlay_opacity"):
+                window.setWindowOpacity(opacity)
         for slider in (getattr(self, "opacity_slider", None), getattr(self, "header_opacity_slider", None)):
             if slider and slider.value() != value:
                 blocker = QtCore.QSignalBlocker(slider)

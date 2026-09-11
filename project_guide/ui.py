@@ -1,6 +1,24 @@
 """Guide presentation: selectable actions only, no editable prompt surface."""
 from PyQt6 import QtCore, QtWidgets
-from overlay import CodeAnswerOverlay
+from overlay import CodeAnswerOverlay, render_basic_answer_html
+from pygments import highlight
+from pygments.formatters import HtmlFormatter
+from pygments.lexers import get_lexer_for_filename, TextLexer
+from pygments.util import ClassNotFound
+
+
+def render_guide_code(code, path):
+    """Match the main overlay's Monokai code cards without parsing code as Markdown."""
+    try:
+        lexer = get_lexer_for_filename(path, stripnl=False, ensurenl=False)
+    except ClassNotFound:
+        lexer = TextLexer(stripnl=False, ensurenl=False)
+    content = highlight(code, lexer, HtmlFormatter(noclasses=True, style='monokai', nowrap=True))
+    return (
+        '<table width="100%" cellspacing="0" cellpadding="0"><tr><td '
+        'style="background-color:#111922;border:1px solid #2F3B48;padding:6px 10px;">'
+        '<pre style="margin:0;font-family:Consolas, Cascadia Mono, monospace;'
+        'font-size:14px;color:#E8EEF5;">' + content + '</pre></td></tr></table>')
 
 
 class ProjectGuidePanel(CodeAnswerOverlay):
@@ -64,7 +82,12 @@ class ProjectGuidePanel(CodeAnswerOverlay):
             text += (f'Step {session.index + 1} of {len(data["steps"])} — {step["operation"].upper()}\n'
                      f'{step["path"]} · line {step["line"]}\n'
                      f'Location: {step["anchor"] or "New file — create it manually"}\n\n'
-                     f'{step["code"]}\n\n{step["explanation"]}\n\n')
+                     )
+        content = render_basic_answer_html(text)
+        if step:
+            content += render_guide_code(step['code'], step['path'])
+            content += render_basic_answer_html('\n' + step['explanation'] + '\n\n')
+        text = ''
         if data['verdict'] != 'not_reviewed':
             text += data['verdict'].replace('_', ' ').capitalize() + '\n' + data['findings'] + '\n\n'
         text += 'Code review only. Tests have not been run.\n'
@@ -81,6 +104,7 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         actions += [('Check my changes', 'review', None), ('Final review', 'final', None),
                     ('Change problem', 'files', None), ('Change project', 'projects', None)]
         self.present(text, actions)
+        self.answer_text.setHtml(content + render_basic_answer_html(text))
 
     def closeEvent(self, event):
         self.action.emit('cancel', None)

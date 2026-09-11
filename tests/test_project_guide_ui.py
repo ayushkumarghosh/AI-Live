@@ -24,6 +24,21 @@ class GuideUITests(unittest.TestCase):
         self.assertEqual(self.panel.findChildren(QtWidgets.QLineEdit), [])
         self.assertTrue(all(edit.isReadOnly() for edit in self.panel.findChildren(QtWidgets.QTextEdit)))
 
+    def test_code_is_highlighted_and_literal_markup_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'README.md').write_text('task')
+            session = GuideSession(directory, 'README.md', 'one')
+            session.result = result()
+            code = 'def hello():\n    return "<tag> & ```"'
+            session.step['code'] = code
+            self.panel.show_step(session)
+            self.assertIn(code, self.panel.answer_text.toPlainText())
+            rendered = self.panel.answer_text.toHtml().lower()
+            self.assertIn('#111922', rendered)
+            self.assertIn('consolas', rendered)
+            self.assertIn('#66d9ef', rendered)
+            self.assertEqual(session.step['code'], code)
+
     def test_picker_uses_available_height_and_restores_preview(self):
         options = [(f'file{i}.md', 'preview', str(i)) for i in range(25)]
         self.panel.present('Select a problem file', [], options, selection=True)

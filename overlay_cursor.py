@@ -90,6 +90,7 @@ class WindowsInput:
         self.handle = None
         self.callback = self.callback_type(self._hook)
         self.windows = set()
+        self.hit_tests = {}
         self.error = ''
         self.routing = MouseRouting(self)
 
@@ -146,7 +147,9 @@ class WindowsInput:
                 rect = wintypes.RECT()
                 if (self.api.GetWindowRect(hwnd, ctypes.byref(rect))
                         and rect.left <= point.x < rect.right and rect.top <= point.y < rect.bottom):
-                    return hwnd
+                    hit_test = self.hit_tests.get(hwnd)
+                    if hit_test is None or hit_test(point, rect):
+                        return hwnd
             if hwnd == actual:
                 break
             hwnd = self.api.GetWindow(hwnd, 2)
@@ -201,9 +204,10 @@ class WindowsInput:
 class OverlayCursorMode(QtCore.QObject):
     changed = QtCore.pyqtSignal(bool)
 
-    def __init__(self, app, backend=None):
+    def __init__(self, app, backend=None, windows_provider=None):
         super().__init__(app)
         self.app, self.backend = app, backend
+        self.windows_provider = windows_provider
         self.enabled = False
         self.last_error = ''
         self.last_refresh = None
@@ -246,8 +250,13 @@ class OverlayCursorMode(QtCore.QObject):
             self.last_refresh = now
             if self.backend.error:
                 raise OSError(self.backend.error)
-            windows = {int(window.winId()) for window in self.app.topLevelWidgets()
-                       if window.isVisible() and not window.isMinimized() and window.property('uses_overlay_opacity')}
+            candidates = (self.windows_provider() if self.windows_provider else
+                          [w for w in self.app.topLevelWidgets()
+                           if w.property('uses_overlay_opacity') and not w.property('fitted_input_routing')])
+            visible = [w for w in candidates if w.isVisible() and not w.isMinimized()]
+            windows = {int(w.winId()) for w in visible}
+            self.backend.hit_tests = {int(w.winId()): w.fitted_native_hit_test for w in visible
+                                      if w.property('fitted_input_routing')}
             self.backend.update(windows)
         except (OSError, RuntimeError) as exc:
             self.last_error = str(exc)

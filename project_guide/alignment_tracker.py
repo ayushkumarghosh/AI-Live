@@ -1,6 +1,7 @@
 """Follow the selected VS Code editor while a guidance step is displayed."""
 import ctypes
 import os
+import queue
 import threading
 from ctypes import wintypes
 
@@ -69,6 +70,7 @@ class EditorAlignmentTracker(QtCore.QObject):
         self._generation = 0
         self._inflight = False
         self._last_fit = None
+        self._requests = None
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(350)
         self.timer.timeout.connect(self.request)
@@ -87,11 +89,16 @@ class EditorAlignmentTracker(QtCore.QObject):
         self.request()
 
     def status(self, message):
+        if self.panel.banner.text() == message:
+            return
         self.panel.banner.setText(message)
         self.panel.banner.setToolTip(message)
         self.panel.banner.show()
 
     def stop(self):
+        if self._requests is not None:
+            self._requests.put(None)
+            self._requests = None
         self.timer.stop()
         self._generation += 1
         self._last_fit = None
@@ -112,30 +119,42 @@ class EditorAlignmentTracker(QtCore.QObject):
         self._inflight = True
         generation = self._generation
 
-        def measure():
-            locator = None
-            result = None
-            try:
-                locator = WindowsEditorLocator()
-                result = locator.locate(root, active, workspace_name)
-            except ImportError as exc:
-                result = {'error': 'Editor alignment dependency missing: ' + str(exc)
-                          + '. Install requirements.txt with the Python running AI-Live.',
-                          'fatal': True}
-            except Exception as exc:
-                result = {'error': 'Cannot read VS Code editor: ' + str(exc)}
-            finally:
-                if locator:
-                    try:
-                        locator.close()
-                    except Exception:
-                        pass
-            try:
-                self.measured.emit(generation, result)
-            except RuntimeError:
-                pass  # The application has closed while the native call was pending.
+        if self._requests is None:
+            self._requests = queue.Queue()
+            requests = self._requests
+            self.destroyed.connect(lambda: requests.put(None))
+            threading.Thread(target=self.measure_loop, args=(requests, self.measured.emit), daemon=True).start()
+        self._requests.put((generation, root, active, workspace_name))
 
-        threading.Thread(target=measure, daemon=True).start()
+    @staticmethod
+    def measure_loop(requests, emit):
+        # Keep COM creation and disposal on the same persistent worker thread.
+        locator = None
+        try:
+            while True:
+                request = requests.get()
+                if request is None:
+                    return
+                generation, root, active, workspace_name = request
+                try:
+                    if locator is None:
+                        locator = WindowsEditorLocator()
+                    result = locator.locate(root, active, workspace_name)
+                except ImportError as exc:
+                    result = {'error': 'Editor alignment dependency missing: ' + str(exc)
+                              + '. Install requirements.txt with the Python running AI-Live.', 'fatal': True}
+                except Exception as exc:
+                    result = {'error': 'Cannot read VS Code editor: ' + str(exc)}
+                try:
+                    emit(generation, result)
+                except RuntimeError:
+                    return
+        finally:
+            if locator:
+                try:
+                    locator.close()
+                except Exception:
+                    pass
 
     def receive(self, generation, bounds):
         self._inflight = False

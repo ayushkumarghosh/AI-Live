@@ -17,6 +17,7 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         self._using_grid = False
         self._snapping_scroll = False
         self._normal_text_style = self.answer_text.styleSheet()
+        self._fitted_input = None
         self.answer_text.textChanged.connect(self._apply_line_spacing)
         self.answer_text.verticalScrollBar().valueChanged.connect(self._snap_scroll)
         self.title_label.setText('Project Guide · read only')
@@ -38,6 +39,42 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         self.options.setWidget(self.option_body)
         self.panel.layout().insertWidget(2, self.options)
         self.options.hide()
+
+    def accepts_fitted_input(self, point):
+        if self._editor_fit is None:
+            return True
+        return any(button.isVisible() and button.isEnabled() and
+                   QtCore.QRect(button.mapTo(self, QtCore.QPoint()), button.size()).contains(point)
+                   for button in self.findChildren(QtWidgets.QAbstractButton))
+
+    def fitted_native_hit_test(self, point, rect):
+        # Native hook coordinates are physical pixels, Qt geometry is logical.
+        return self.accepts_fitted_input(QtCore.QPoint(
+            round((point.x - rect.left) * self.width() / max(1, rect.right - rect.left)),
+            round((point.y - rect.top) * self.height() / max(1, rect.bottom - rect.top))))
+
+    def _set_fitted_input(self, enabled):
+        app = QtWidgets.QApplication.instance()
+        if app.platformName() != 'windows':
+            return
+        from overlay_cursor import OverlayCursorMode, install_cursor_mirroring
+        self.setProperty('fitted_input_routing', enabled)
+        shared = install_cursor_mirroring(app)
+        if enabled:
+            shared.refresh()  # Relinquish this HWND before the dedicated router owns it.
+            if self._fitted_input is None:
+                self._fitted_input = OverlayCursorMode(app, windows_provider=lambda: [self])
+                self._fitted_input.setParent(self)
+            self._fitted_input.set_enabled(True)
+            if not self._fitted_input.enabled:
+                self.setProperty('fitted_input_routing', False)
+        elif self._fitted_input:
+            self._fitted_input.set_enabled(False)
+            shared.refresh()
+
+    def hideEvent(self, event):
+        self._set_fitted_input(False)
+        super().hideEvent(event)
 
     def _fit_controls(self, fitted, width=780):
         columns = 3 if fitted and width < 640 else 4
@@ -152,11 +189,13 @@ class ProjectGuidePanel(CodeAnswerOverlay):
             finally:
                 self._adjusting_line_spacing = False
         self._snap_scroll(self.answer_text.verticalScrollBar().value())
+        self._set_fitted_input(True)
 
     def release_editor(self):
         if self._editor_fit is None:
             return
         self._editor_fit = None
+        self._set_fitted_input(False)
         self._using_grid = False
         self.panel.setStyleSheet('')
         self.title_bar.show()

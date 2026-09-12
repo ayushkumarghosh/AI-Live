@@ -5,6 +5,22 @@ from project_guide.editor_alignment import editor_geometry, text_row_center
 
 
 class EditorGeometryTests(unittest.TestCase):
+    def test_measurements_reuse_one_accessibility_connection(self):
+        import queue
+        from unittest.mock import patch
+        from project_guide.alignment_tracker import EditorAlignmentTracker
+        requests = queue.Queue()
+        requests.put((1, 'root', 'a.py', None))
+        requests.put((1, 'root', 'b.py', None))
+        requests.put(None)
+        results = []
+        with patch('project_guide.alignment_tracker.WindowsEditorLocator') as factory:
+            EditorAlignmentTracker.measure_loop(requests, lambda *args: results.append(args))
+        factory.assert_called_once()
+        self.assertEqual(factory.return_value.locate.call_count, 2)
+        factory.return_value.close.assert_called_once()
+        self.assertEqual(len(results), 2)
+
     def test_uses_editor_content_not_sidebar_tabs_or_minimap(self):
         geometry = editor_geometry((580, 88, 1494, 850), (650, 424, 1420, 448))
         self.assertEqual(geometry, (650, 88, 770, 762, 424, 24))

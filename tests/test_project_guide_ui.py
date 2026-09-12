@@ -121,6 +121,17 @@ class GuideUITests(unittest.TestCase):
         self.assertFalse(tracker.timer.isActive())
         self.assertIsNone(self.panel._editor_fit)
 
+    def test_fitted_input_only_accepts_buttons(self):
+        self.panel.present('Guidance', [('Next', 'next', None)], guidance=True)
+        self.panel.show()
+        self.panel.fit_editor(QtCore.QRect(100, 100, 700, 500), 112)
+        self.app.processEvents()
+        button = self.panel.buttons.itemAt(0).widget()
+        self.assertTrue(self.panel.accepts_fitted_input(button.mapTo(self.panel, button.rect().center())))
+        self.assertFalse(self.panel.accepts_fitted_input(self.panel.answer_text.mapTo(self.panel, QtCore.QPoint(20, 20))))
+        self.panel.release_editor()
+        self.assertTrue(self.panel.accepts_fitted_input(QtCore.QPoint(20, 20)))
+
     def test_missing_alignment_dependency_is_visible(self):
         from project_guide.alignment_tracker import EditorAlignmentTracker
         self.panel.show()

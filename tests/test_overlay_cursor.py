@@ -61,6 +61,10 @@ class NativeInputTests(unittest.TestCase):
             return True
         self.api.GetWindowRect.side_effect = rectangle
         self.assertEqual(self.backend.target_at(wintypes.POINT(-50, 60)), 0x100000001)
+        self.backend.hit_tests[0x100000001] = lambda point, rect: point.y >= 80
+        self.api.GetWindow.return_value = 99
+        self.assertIsNone(self.backend.target_at(wintypes.POINT(-50, 60)))
+        self.assertEqual(self.backend.target_at(wintypes.POINT(-50, 90)), 0x100000001)
 
     def test_failed_wheel_consumes_event_and_restores_ordinary_input(self):
         self.backend.target_at = lambda point: 0x100000001

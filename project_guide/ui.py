@@ -1,24 +1,7 @@
 """Guide presentation: selectable actions only, no editable prompt surface."""
 from PyQt6 import QtCore, QtWidgets
 from overlay import CodeAnswerOverlay, render_basic_answer_html
-from pygments import highlight
-from pygments.formatters import HtmlFormatter
-from pygments.lexers import get_lexer_for_filename, TextLexer
-from pygments.util import ClassNotFound
-
-
-def render_guide_code(code, path):
-    """Match the main overlay's Monokai code cards without parsing code as Markdown."""
-    try:
-        lexer = get_lexer_for_filename(path, stripnl=False, ensurenl=False)
-    except ClassNotFound:
-        lexer = TextLexer(stripnl=False, ensurenl=False)
-    content = highlight(code, lexer, HtmlFormatter(noclasses=True, style='monokai', nowrap=True))
-    return (
-        '<table width="100%" cellspacing="0" cellpadding="0"><tr><td '
-        'style="background-color:#111922;border:1px solid #2F3B48;padding:6px 10px;">'
-        '<pre style="margin:0;font-family:Consolas, Cascadia Mono, monospace;'
-        'font-size:14px;color:#E8EEF5;">' + content + '</pre></td></tr></table>')
+from .diff import render_guide_diff
 
 
 class ProjectGuidePanel(CodeAnswerOverlay):
@@ -85,7 +68,7 @@ class ProjectGuidePanel(CodeAnswerOverlay):
                      )
         content = render_basic_answer_html(text)
         if step:
-            content += render_guide_code(step['code'], step['path'])
+            content += render_guide_diff(step['diff'], step['path'])
             content += render_basic_answer_html('\n' + step['explanation'] + '\n\n')
         text = ''
         if data['verdict'] != 'not_reviewed':
@@ -100,6 +83,7 @@ class ProjectGuidePanel(CodeAnswerOverlay):
             if session.index < len(data['steps']) - 1:
                 actions.append(('Next', 'next', None))
             actions += [('Explain', 'explain', None), ('Copy code', 'copy', None),
+                        ('Copy diff', 'copy_diff', None),
                         ('Open location', 'open', None)]
         actions += [('Check my changes', 'review', None), ('Final review', 'final', None),
                     ('Change problem', 'files', None), ('Change project', 'projects', None)]

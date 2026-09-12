@@ -729,6 +729,8 @@ def register_overlay_opacity(widget):
     value = app.property("overlay_opacity_percent")
     widget.setProperty("uses_overlay_opacity", True)
     widget.setWindowOpacity((90 if value is None else value) / 100.0)
+    from overlay_cursor import install_cursor_mirroring
+    install_cursor_mirroring(app)
 
 
 class PrivateTextContextPopup(QtWidgets.QFrame):
@@ -1707,6 +1709,17 @@ class DraggableOverlay(QtWidgets.QWidget):
         header_opacity_layout.addWidget(self.header_opacity_slider)
         title_layout.addWidget(self.header_opacity_container)
 
+        from overlay_cursor import install_cursor_mirroring
+        self.cursor_mode = install_cursor_mirroring(QtWidgets.QApplication.instance())
+        self.cursor_mode_button = self._create_toolbar_button(
+            "cursor", "Underlying cursor (experimental): off", "accent", checkable=True)
+        self.cursor_mode_button.setAccessibleName("Underlying cursor (experimental)")
+        self.cursor_mode_button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.cursor_mode_button.toggled.connect(self._toggle_cursor_mode)
+        self.cursor_mode.changed.connect(self._sync_cursor_mode)
+        self._sync_cursor_mode(self.cursor_mode.enabled)
+        title_layout.addWidget(self.cursor_mode_button)
+
         self.screenshot_toggle_button = self._create_toolbar_button(
             "camera", "Screenshots included", "success", checkable=True, checked=True
         )
@@ -1722,6 +1735,22 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.close_button = self._create_toolbar_button("close", "Close", "danger")
         self.close_button.clicked.connect(self.quit_application)
         title_layout.addWidget(self.close_button)
+
+    def _toggle_cursor_mode(self, enabled):
+        self.cursor_mode.set_enabled(enabled)
+        self._sync_cursor_mode(self.cursor_mode.enabled)
+        if self.cursor_mode.last_error:
+            self.update_status(self.cursor_mode.last_error or "Cursor mode unavailable", "#FFA500")
+
+    def _sync_cursor_mode(self, enabled):
+        blocker = QtCore.QSignalBlocker(self.cursor_mode_button)
+        self.cursor_mode_button.setChecked(enabled)
+        self.cursor_mode_button.setToolTip(
+            "Underlying cursor (experimental): " + ("on" if enabled else "off")
+            + ". Hover reaches the app underneath; clicks, drags and scrolling use the overlay.")
+        self.cursor_mode_button.setIcon(_icon("cursor", UI["accent"] if enabled else UI["muted_dim"]))
+        self._apply_button_style(self.cursor_mode_button)
+        del blocker
 
     def _build_content_area(self):
         self.content_area = QtWidgets.QFrame(self)

@@ -100,7 +100,7 @@ class ProjectGuideController(QtCore.QObject):
                     ('More detail', 'detail', None)])
             elif action == 'detail':
                 self.run('explain')
-            elif action in ('open', 'copy') and self.session and self.session.step:
+            elif action in ('open', 'copy', 'copy_diff') and self.session and self.session.step:
                 self.perform_step_action(action)
             else:
                 return
@@ -176,6 +176,9 @@ class ProjectGuideController(QtCore.QObject):
         if action == 'copy':
             QtWidgets.QApplication.clipboard().setText(step['code'])
             self.panel.banner.setText('Code copied. Paste it yourself in VS Code.')
+        elif action == 'copy_diff':
+            QtWidgets.QApplication.clipboard().setText(step['diff'])
+            self.panel.banner.setText('Diff copied.')
         else:
             self.bridge.open_location(self.window, self.root, step['path'], step['line'])
         self.panel.show_step(self.session)

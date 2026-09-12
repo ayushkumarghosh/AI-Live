@@ -24,7 +24,7 @@ def publish(session):
             'accepted_choices': clipped(json.dumps(session.choices, ensure_ascii=False), 2000),
             'task_summary': clipped(result.get('summary'), 2000),
             'pending_question': clipped(result.get('question') or result.get('blocked'), 1000),
-            'current_step': ({key: clipped(value, 5000 if key == 'code' else 1000)
+            'current_step': ({key: clipped(value, 5000 if key in ('code', 'diff') else 1000)
                               for key, value in step.items()} if step else None),
             'step_number': session.index + 1 if step else None,
             'total_steps': len(result.get('steps', [])),

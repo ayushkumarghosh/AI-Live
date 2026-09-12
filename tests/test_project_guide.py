@@ -10,7 +10,9 @@ from project_guide.session import GuideSession, parse_guidance
 def result():
     return dict(summary='Implement greeting', question='', choices=[], blocked='',
                 steps=[dict(id='greeting', path='main.py', anchor='def hello():', line=1,
-                            operation='replace', code='def hello(): return "Hi"', explanation='Return a greeting.')],
+                            operation='replace', code='def hello(): return "Hi"',
+                            diff='--- a/main.py\n+++ b/main.py\n@@ -1 +1 @@\n-def hello(): pass\n+def hello(): return "Hi"\n',
+                            explanation='Return a greeting.')],
                 verdict='not_reviewed', findings='', test_commands=['python -m unittest'])
 
 

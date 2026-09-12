@@ -29,12 +29,16 @@ class GuideUITests(unittest.TestCase):
             Path(directory, 'README.md').write_text('task')
             session = GuideSession(directory, 'README.md', 'one')
             session.result = result()
-            code = 'def hello():\n    return "<tag> & ```"'
+            code = 'def hello(): return "<tag> & ```"'
             session.step['code'] = code
+            session.step['diff'] = ('--- a/main.py\n+++ b/main.py\n@@ -1 +1 @@\n'
+                                    '-def hello(): pass\n+' + code + '\n')
             self.panel.show_step(session)
             self.assertIn(code, self.panel.answer_text.toPlainText())
+            self.assertIn('def hello(): pass', self.panel.answer_text.toPlainText())
             rendered = self.panel.answer_text.toHtml().lower()
-            self.assertIn('#111922', rendered)
+            self.assertIn('#183b2b', rendered)
+            self.assertIn('#48262b', rendered)
             self.assertIn('consolas', rendered)
             self.assertIn('#66d9ef', rendered)
             self.assertEqual(session.step['code'], code)
@@ -86,6 +90,7 @@ class GuideUITests(unittest.TestCase):
             labels = [b.text() for b in self.panel.findChildren(QtWidgets.QPushButton) if not b.isHidden()]
             self.assertIn('Check my changes', labels)
             self.assertIn('Copy code', labels)
+            self.assertIn('Copy diff', labels)
             self.assertNotIn('Apply', labels)
             self.assertIn('main.py', self.panel.answer_text.toPlainText())
             self.assertEqual(session.result['verdict'], 'not_reviewed')
@@ -125,6 +130,18 @@ class GuideUITests(unittest.TestCase):
             with patch.object(controller, 'editor_state', side_effect=AssertionError('No editor validation')):
                 controller.handle('copy')
             self.assertEqual(self.app.clipboard().text(), result()['steps'][0]['code'])
+
+    def test_copy_diff_preserves_patch_and_does_not_open_editor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'README.md').write_text('task')
+            controller = ProjectGuideController(None)
+            self.addCleanup(controller.close)
+            controller.session = GuideSession(directory, 'README.md', 'one')
+            controller.session.result = result()
+            self.app.clipboard().clear()
+            with patch.object(controller.bridge, 'open_location', side_effect=AssertionError('No editor action')):
+                controller.handle('copy_diff')
+            self.assertEqual(self.app.clipboard().text(), result()['steps'][0]['diff'])
 
     def test_open_uses_codex_line_without_reading_anchor(self):
         with tempfile.TemporaryDirectory() as directory:

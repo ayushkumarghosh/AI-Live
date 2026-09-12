@@ -17,7 +17,7 @@ SCHEMA = obj({
     'steps': {'type': 'array', 'items': obj({
         'id': STRING, 'path': STRING, 'anchor': STRING, 'line': {'type': 'integer'},
         'operation': {'type': 'string', 'enum': ['insert', 'replace', 'delete', 'create']},
-        'code': STRING, 'explanation': STRING})},
+        'code': STRING, 'diff': STRING, 'explanation': STRING})},
     'verdict': {'type': 'string', 'enum': ['not_reviewed', 'looks_complete', 'needs_changes', 'cannot_verify']},
     'findings': STRING, 'test_commands': {'type': 'array', 'items': STRING},
 })

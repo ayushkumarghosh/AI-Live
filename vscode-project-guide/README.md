@@ -1,6 +1,6 @@
 # AI-Live Project Guide companion
 
-This extension connects trusted **local Windows** VS Code workspaces to the AI-Live overlay. It reports workspace folders, the active file, unsaved-file status, and editor diagnostics. The overlay can request opening an existing file at a location. The extension does not edit or save files and cannot execute terminal commands.
+This extension connects trusted **local Windows** VS Code workspaces to the AI-Live overlay. It reports workspace folders and the workspace display name, the active file, unsaved-file status, and editor diagnostics. The overlay uses the display name to match the selected editor window when fitting guidance over its text area. The overlay can request opening an existing file at a location. The extension does not edit or save files and cannot execute terminal commands.
 
 ## Install
 

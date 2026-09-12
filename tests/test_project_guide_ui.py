@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
-from PyQt6 import QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 from project_guide.ui import ProjectGuidePanel
 from project_guide.session import GuideSession
 from project_guide.controller import ProjectGuideController
@@ -23,6 +23,118 @@ class GuideUITests(unittest.TestCase):
     def test_no_editable_input_widgets(self):
         self.assertEqual(self.panel.findChildren(QtWidgets.QLineEdit), [])
         self.assertTrue(all(edit.isReadOnly() for edit in self.panel.findChildren(QtWidgets.QTextEdit)))
+
+    def test_fitted_guidance_stays_on_interleaved_grid_through_wrapping_and_scroll(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'README.md').write_text('task')
+            session = GuideSession(directory, 'README.md', 'one')
+            session.result = result()
+            session.result['summary'] = 'Long summary with wrapping. ' * 40
+            self.panel.show_step(session)
+            self.panel.show()
+            self.panel.fit_editor(QtCore.QRect(650, 88, 770, 700), 424, 24)
+            self.app.processEvents()
+            self.assertEqual(self.panel.geometry(), QtCore.QRect(650, 88, 770, 700))
+            edit = self.panel.answer_text
+            self.assertEqual(edit.viewport().mapToGlobal(QtCore.QPoint()).x(), 650)
+            doc = edit.document()
+            block = doc.begin()
+            baseline_phases = []
+            while block.isValid():
+                layout = block.layout()
+                for i in range(layout.lineCount()):
+                    line = layout.lineAt(i)
+                    baseline = (edit.viewport().mapToGlobal(QtCore.QPoint()).y()
+                                + layout.position().y() + line.y() + line.ascent())
+                    baseline_phases.append(round(baseline % 24, 2))
+                block = block.next()
+            self.assertGreater(len(baseline_phases), 20)
+            self.assertLess(max(baseline_phases) - min(baseline_phases), 1)
+            edit.verticalScrollBar().setValue(37)
+            self.assertEqual(edit.verticalScrollBar().value() % 24, 0)
+
+    def test_leaving_guidance_restores_normal_panel(self):
+        self.panel.show()
+        self.app.processEvents()
+        original = self.panel.geometry()
+        self.panel.fit_editor(QtCore.QRect(650, 88, 770, 700), 424, 24)
+        self.panel.present('Choose a workspace', [], [('A', 'projects', None)], selection=True)
+        self.app.processEvents()
+        self.assertEqual(self.panel.geometry(), original)
+        self.assertFalse(self.panel.title_bar.isHidden())
+
+    def test_small_editor_fit_does_not_inherit_footer_minimum_size(self):
+        self.panel.banner.setText('C:/Users/ayush/Downloads/' + 'long-project-folder/' * 8)
+        self.panel.present('Guidance\n' * 40,
+                           [('Check my changes', 'review', None)] * 12, guidance=True)
+        self.panel.show()
+        self.app.processEvents()
+        target = QtCore.QRect(260, 344, 455, 302)
+        self.panel.fit_editor(target, 350, 24)
+        self.app.processEvents()
+        self.assertEqual(self.panel.geometry(), target)
+        self.assertLessEqual(self.panel.minimumSizeHint().width(), target.width())
+        self.assertLessEqual(self.panel.minimumSizeHint().height(), target.height())
+        self.assertGreaterEqual(self.panel.answer_text.viewport().height(), 144)
+        self.assertGreaterEqual(self.panel.banner.contentsRect().height(), self.panel.banner.fontMetrics().height())
+
+    def test_fitted_scroll_reaches_the_last_line(self):
+        self.panel.present('\n'.join(f'Guidance line {i}' for i in range(70)), [], guidance=True)
+        self.panel.show()
+        self.panel.fit_editor(QtCore.QRect(100, 100, 700, 401), 112, 24)
+        self.app.processEvents()
+        edit = self.panel.answer_text
+        bar = edit.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        cursor = QtGui.QTextCursor(edit.document())
+        cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+        self.assertLessEqual(edit.cursorRect(cursor).bottom(), edit.viewport().height())
+        self.assertEqual(bar.value() % 24, 0)
+
+    def test_fitted_baseline_is_halfway_between_editor_ink_centers(self):
+        self.panel.present('Sample guidance', [], guidance=True)
+        self.panel.show()
+        self.panel.fit_editor(QtCore.QRect(100, 88, 700, 400), 94.5, 24)
+        self.app.processEvents()
+        font = QtGui.QFont('Consolas')
+        font.setPixelSize(12)
+        ink = QtGui.QFontMetricsF(font).tightBoundingRect('0123456789').center().y()
+        layout = self.panel.answer_text.document().begin().layout()
+        line = layout.lineAt(0)
+        center = (self.panel.answer_text.viewport().mapToGlobal(QtCore.QPoint()).y()
+                  + layout.position().y() + line.y() + line.ascent() + ink)
+        self.assertAlmostEqual((center - 94.5) % 24, 12, delta=0.75)
+
+    def test_alignment_recovers_from_a_disconnected_workspace(self):
+        from project_guide.alignment_tracker import EditorAlignmentTracker
+        from project_guide.files import GuideError
+
+        def disconnected():
+            raise GuideError('Disconnected')
+
+        self.panel.show()
+        self.panel._guidance_html = 'Guidance'
+        self.panel.fit_editor(QtCore.QRect(100, 88, 700, 400), 94.5, 24)
+        tracker = EditorAlignmentTracker(self.panel, disconnected)
+        tracker.timer.start()
+        tracker.request()
+        self.assertFalse(tracker.timer.isActive())
+        self.assertIsNone(self.panel._editor_fit)
+
+    def test_missing_alignment_dependency_is_visible(self):
+        from project_guide.alignment_tracker import EditorAlignmentTracker
+        self.panel.show()
+        self.panel._guidance_html = 'Guidance'
+        tracker = EditorAlignmentTracker(self.panel, lambda: ('root', 'file', None))
+        loop = QtCore.QEventLoop()
+        tracker.measured.connect(lambda *_: loop.quit())
+        with patch('project_guide.alignment_tracker.WindowsEditorLocator',
+                   side_effect=ModuleNotFoundError("No module named 'comtypes'")):
+            tracker.start()
+            QtCore.QTimer.singleShot(2000, loop.quit)
+            loop.exec()
+        self.assertIn('comtypes', self.panel.banner.text())
+        self.assertFalse(tracker.timer.isActive())
 
     def test_code_is_highlighted_and_literal_markup_is_preserved(self):
         with tempfile.TemporaryDirectory() as directory:

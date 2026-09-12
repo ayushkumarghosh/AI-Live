@@ -102,6 +102,9 @@ class ProjectBridge:
         active = body.get('active')
         if active is not None and not isinstance(active, str):
             raise ValueError('Invalid document')
+        workspace_name = body.get('workspaceName')
+        if workspace_name is not None and (not isinstance(workspace_name, str) or len(workspace_name) > 1000):
+            raise ValueError('Invalid workspace name')
         dirty = body.get('dirty', [])
         diagnostics = body.get('diagnostics', [])
         if (not isinstance(dirty, list) or not all(isinstance(p, str) for p in dirty) or
@@ -117,6 +120,7 @@ class ProjectBridge:
             else:
                 focus_time = previous.get('focus_time', 0)
             self.clients[window] = dict(window=window, roots=roots, active=active,
+                workspace_name=workspace_name,
                 dirty=dirty, diagnostics=diagnostics, focused=focused, focus_time=focus_time, seen=now,
                 ack=body.get('ack', ''))
             self.condition.notify_all()

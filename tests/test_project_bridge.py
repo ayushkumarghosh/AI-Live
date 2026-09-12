@@ -65,6 +65,11 @@ class BridgeTests(unittest.TestCase):
         self.post('/poll', dict(window='one', remote=False, trusted=False))
         self.assertEqual(self.bridge.windows(), [])
 
+    def test_named_workspace_metadata_is_available_for_editor_alignment(self):
+        self.post('/poll', dict(window='one', roots=[str(self.root)], active=str(self.root / 'main.py'),
+                  workspaceName='My multi-root workspace', trusted=True, remote=False))
+        self.assertEqual(self.bridge.state('one', self.root)['workspace_name'], 'My multi-root workspace')
+
     def test_close_removes_only_own_discovery_file(self):
         self.assertTrue(self.bridge.discovery.exists())
         self.bridge.close()

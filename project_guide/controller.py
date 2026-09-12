@@ -9,6 +9,7 @@ from .runner import CodexRunner
 from .session import GuideSession
 from .ui import ProjectGuidePanel
 from .context import publish
+from .alignment_tracker import EditorAlignmentTracker
 
 
 class ProjectGuideController(QtCore.QObject):
@@ -31,6 +32,11 @@ class ProjectGuideController(QtCore.QObject):
         self.last_action = 'analyze'
         self.page = 0
         self.summary_pending = False
+        self.alignment = EditorAlignmentTracker(self.panel, self.alignment_state)
+
+    def alignment_state(self):
+        state = self.bridge.state(self.window, self.root)
+        return self.root, state['active'], state.get('workspace_name')
 
     def show(self):
         self.panel.show()
@@ -95,6 +101,11 @@ class ProjectGuideController(QtCore.QObject):
                     self.session.move({'start': 0, 'next': 1, 'previous': -1}[action])
                     self.publish_context()
                     self.panel.show_step(self.session)
+                    self.alignment.start()
+            elif action == 'fit_editor':
+                self.alignment.start()
+            elif action == 'close_guide':
+                self.panel.close()
             elif action == 'explain' and self.session and self.session.step:
                 self.panel.present(self.session.step['explanation'], [('Back to step', 'start', None),
                     ('More detail', 'detail', None)])
@@ -182,6 +193,7 @@ class ProjectGuideController(QtCore.QObject):
         else:
             self.bridge.open_location(self.window, self.root, step['path'], step['line'])
         self.panel.show_step(self.session)
+        self.alignment.start()
 
     def run(self, action):
         if not self.session or self.busy:
@@ -243,6 +255,7 @@ class ProjectGuideController(QtCore.QObject):
             self.panel.present(data['summary'], [('Start guidance', 'start', None), ('Change problem', 'files', None)])
         else:
             self.panel.show_step(self.session)
+            self.alignment.start()
 
     def error(self, message):
         actions = [('Retry', 'retry', None), ('Change project', 'projects', None)]
@@ -253,6 +266,7 @@ class ProjectGuideController(QtCore.QObject):
         self.panel.present(message, actions)
 
     def cancel(self):
+        self.alignment.stop()
         self.generation = uuid.uuid4().hex
         self.busy = False
         if self.session:

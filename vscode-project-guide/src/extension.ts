@@ -64,6 +64,7 @@ export function activate(context: vscode.ExtensionContext): void {
             severity: d.severity, message: d.message.slice(0, 2000)})) : []).slice(0, 500);
       const response = await post(connection, {
         window, roots, remote, ack, trusted: vscode.workspace.isTrusted, focused: vscode.window.state.focused,
+        workspaceName: vscode.workspace.name,
         active: active?.scheme === 'file' ? active.fsPath : null,
         dirty: vscode.workspace.textDocuments.filter(d => d.isDirty && d.uri.scheme === 'file' &&
           vscode.workspace.getWorkspaceFolder(d.uri)).map(d => d.uri.fsPath), diagnostics,

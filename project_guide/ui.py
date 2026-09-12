@@ -10,12 +10,21 @@ class ProjectGuidePanel(CodeAnswerOverlay):
     def __init__(self, owner=None):
         super().__init__(owner)
         self._adjusting_line_spacing = False
+        self._editor_fit = None
+        self._normal_geometry = None
+        self._guidance_html = None
+        self._normal_guidance_html = None
+        self._using_grid = False
+        self._snapping_scroll = False
+        self._normal_text_style = self.answer_text.styleSheet()
         self.answer_text.textChanged.connect(self._apply_line_spacing)
+        self.answer_text.verticalScrollBar().valueChanged.connect(self._snap_scroll)
         self.title_label.setText('Project Guide · read only')
         self.close_button.setToolTip('Close Project Guide')
         self.resize(780, 620)
         self.banner = QtWidgets.QLabel()
         self.banner.setWordWrap(True)
+        self.banner.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
         self.banner.setStyleSheet('color: #edbd70; padding: 8px;')
         self.panel.layout().insertWidget(1, self.banner)
         self.actions = QtWidgets.QWidget()
@@ -30,6 +39,25 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         self.panel.layout().insertWidget(2, self.options)
         self.options.hide()
 
+    def _fit_controls(self, fitted, width=780):
+        columns = 3 if fitted and width < 640 else 4
+        controls = []
+        while self.buttons.count():
+            controls.append(self.buttons.takeAt(0).widget())
+        self.buttons.setSpacing(4 if fitted else 6)
+        for i, button in enumerate(controls):
+            style = button.property('normal_style')
+            button.setStyleSheet(style.replace('padding:8px;', 'padding:4px;font-family:Segoe UI;font-size:11px;') if fitted else style)
+            button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored if fitted else
+                                 QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Fixed)
+            self.buttons.addWidget(button, i // columns, i % columns)
+        self.banner.setWordWrap(not fitted)
+        self.banner.setStyleSheet('color:#edbd70;padding:4px;font-family:Segoe UI;font-size:11px;' if fitted
+                                 else 'color:#edbd70;padding:8px;')
+        self.banner.setMinimumHeight(24 if fitted else 0)
+        self.banner.setMaximumHeight(24 if fitted else 16777215)
+        self.banner.setToolTip(self.banner.text() if fitted else '')
+
     def _apply_line_spacing(self):
         """Match the workspace editor's 24px rows without clipping headings."""
         if self._adjusting_line_spacing:
@@ -39,10 +67,116 @@ class ProjectGuidePanel(CodeAnswerOverlay):
             cursor = QtGui.QTextCursor(self.answer_text.document())
             cursor.select(QtGui.QTextCursor.SelectionType.Document)
             block = QtGui.QTextBlockFormat()
-            block.setLineHeight(24, QtGui.QTextBlockFormat.LineHeightTypes.MinimumHeight.value)
+            pitch = self._editor_fit[2] if self._editor_fit else 24
+            kind = (QtGui.QTextBlockFormat.LineHeightTypes.FixedHeight if self._editor_fit else
+                    QtGui.QTextBlockFormat.LineHeightTypes.MinimumHeight)
+            block.setLineHeight(pitch, kind.value)
+            if self._editor_fit:
+                block.setTopMargin(0)
+                block.setBottomMargin(0)
+                font = QtGui.QFont('Consolas')
+                font.setPixelSize(12)
+                fmt = QtGui.QTextCharFormat()
+                fmt.setFont(font)
+                cursor.mergeCharFormat(fmt)
             cursor.mergeBlockFormat(block)
+            if self._editor_fit:
+                frame = self.answer_text.document().rootFrame()
+                fmt = frame.frameFormat()
+                fmt.setMargin(0)
+                fmt.setPadding(0)
+                fmt.setBorder(0)
+                frame.setFrameFormat(fmt)
         finally:
             self._adjusting_line_spacing = False
+
+    def _snap_scroll(self, value):
+        if not self._editor_fit or self._snapping_scroll:
+            return
+        self._snapping_scroll = True
+        try:
+            pitch = self._editor_fit[2]
+            bar = self.answer_text.verticalScrollBar()
+            maximum = (bar.maximum() // pitch) * pitch
+            bar.setValue(min(maximum, round(value / pitch) * pitch))
+            bar.setSingleStep(pitch)
+        finally:
+            self._snapping_scroll = False
+
+    def fit_editor(self, rect, row_center, pitch=24):
+        """Place the text's ink midway between measured editor text rows."""
+        if rect.width() < 420 or rect.height() < 280:
+            return
+        if self._normal_geometry is None:
+            self._normal_geometry = self.geometry()
+        self._editor_fit = (QtCore.QRect(rect), row_center, pitch)
+        if self._guidance_html and not self._using_grid:
+            self._using_grid = True
+            self.answer_text.setHtml(self._guidance_html)
+        self.panel.setStyleSheet('QFrame#CodeAnswerPanel { background:transparent; border:0; border-radius:0; }')
+        self.title_bar.hide()
+        self.panel.layout().removeWidget(self.banner)
+        self.panel.layout().insertWidget(self.panel.layout().indexOf(self.actions), self.banner)
+        self.banner.setVisible(bool(self.banner.text()))
+        for handle in self.handles:
+            handle.hide()
+        self.answer_text.setStyleSheet(self._normal_text_style + '\nQTextEdit { padding:0px; }')
+        self._fit_controls(True, rect.width())
+        # Refresh native minimum-size constraints before asking Windows to resize.
+        self.panel.layout().activate()
+        self.layout().activate()
+        self.setGeometry(rect)
+        self.panel.layout().activate()
+        self._apply_line_spacing()
+        doc = self.answer_text.document()
+        # QTextDocument's top margin affects its first baseline, independently of
+        # the widget frame. Measure that baseline instead of guessing a padding.
+        doc.documentLayout().documentSize()
+        first = doc.begin().layout()
+        if first.lineCount():
+            line = first.lineAt(0)
+            font = QtGui.QFont('Consolas')
+            font.setPixelSize(12)
+            ink_center = QtGui.QFontMetricsF(font).tightBoundingRect('0123456789').center().y()
+            desired = row_center + pitch / 2 - ink_center
+            baseline = (self.answer_text.viewport().mapToGlobal(QtCore.QPoint()).y()
+                        + first.position().y() + line.y() + line.ascent())
+            margin = (desired - baseline) % pitch
+            fmt = doc.rootFrame().frameFormat()
+            fmt.setTopMargin(margin)
+            # Leave enough trailing space for a full-row final scroll position.
+            fmt.setBottomMargin(pitch)
+            self._adjusting_line_spacing = True
+            try:
+                doc.rootFrame().setFrameFormat(fmt)
+            finally:
+                self._adjusting_line_spacing = False
+        self._snap_scroll(self.answer_text.verticalScrollBar().value())
+
+    def release_editor(self):
+        if self._editor_fit is None:
+            return
+        self._editor_fit = None
+        self._using_grid = False
+        self.panel.setStyleSheet('')
+        self.title_bar.show()
+        self.panel.layout().removeWidget(self.banner)
+        self.panel.layout().insertWidget(1, self.banner)
+        self.banner.show()
+        self._fit_controls(False)
+        for handle in self.handles:
+            handle.setVisible(self.show_resize_handles)
+        self.answer_text.setStyleSheet(self._normal_text_style)
+        self.answer_text.document().setDocumentMargin(4)
+        if self._normal_geometry is not None:
+            self.panel.layout().activate()
+            self.layout().activate()
+            restored = QtCore.QRect(self._normal_geometry)
+            restored.setSize(restored.size().expandedTo(self.minimumSizeHint()).expandedTo(self.minimumSize()))
+            self.setGeometry(restored)
+        self._normal_geometry = None
+        if self._normal_guidance_html:
+            self.answer_text.setHtml(self._normal_guidance_html)
 
     @staticmethod
     def clear_layout(layout):
@@ -56,10 +190,15 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         button = QtWidgets.QPushButton(text)
         button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         button.setStyleSheet('QPushButton {background:#253341;color:#e7edf3;padding:8px;border:1px solid #53606d;border-radius:4px;} QPushButton:hover {background:#354b60;}')
+        button.setProperty('normal_style', button.styleSheet())
         button.clicked.connect(lambda _checked=False: self.action.emit(action, value))
         return button
 
-    def present(self, text, actions, options=(), *, selection=False):
+    def present(self, text, actions, options=(), *, selection=False, guidance=False):
+        if not guidance:
+            self.release_editor()
+            self._guidance_html = None
+            self._normal_guidance_html = None
         self.answer_text.setPlainText(text)
         self.answer_text.setMaximumHeight(80 if selection and options else 16777215)
         self.options.setMaximumHeight(16777215 if selection else 200)
@@ -83,9 +222,12 @@ class ProjectGuidePanel(CodeAnswerOverlay):
                      f'Location: {step["anchor"] or "New file — create it manually"}\n\n'
                      )
         content = render_basic_answer_html(text)
+        grid_content = content
         if step:
             content += render_guide_diff(step['diff'], step['path'])
             content += render_basic_answer_html('\n' + step['explanation'] + '\n\n')
+            grid_content += render_guide_diff(step['diff'], step['path'], grid=True)
+            grid_content += render_basic_answer_html('\n' + step['explanation'] + '\n\n')
         text = ''
         if data['verdict'] != 'not_reviewed':
             text += data['verdict'].replace('_', ' ').capitalize() + '\n' + data['findings'] + '\n\n'
@@ -103,8 +245,14 @@ class ProjectGuidePanel(CodeAnswerOverlay):
                         ('Open location', 'open', None)]
         actions += [('Check my changes', 'review', None), ('Final review', 'final', None),
                     ('Change problem', 'files', None), ('Change project', 'projects', None)]
-        self.present(text, actions)
-        self.answer_text.setHtml(content + render_basic_answer_html(text))
+        actions += [('Fit editor', 'fit_editor', None), ('Close guide', 'close_guide', None)]
+        self.present(text, actions, guidance=True)
+        self._guidance_html = grid_content + render_basic_answer_html(text)
+        self._normal_guidance_html = content + render_basic_answer_html(text)
+        self._using_grid = bool(self._editor_fit)
+        self.answer_text.setHtml(self._guidance_html if self._using_grid else content + render_basic_answer_html(text))
+        if self._editor_fit:
+            self.fit_editor(*self._editor_fit)
 
     def closeEvent(self, event):
         self.action.emit('cancel', None)

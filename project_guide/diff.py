@@ -33,19 +33,25 @@ def diff_rows(patch):
         yield '', '', '', line
 
 
-def render_guide_diff(patch, path):
+def render_guide_diff(patch, path, *, grid=False):
     try:
         lexer = get_lexer_for_filename(path, stripnl=False, ensurenl=False)
     except ClassNotFound:
         lexer = TextLexer(stripnl=False, ensurenl=False)
     formatter = HtmlFormatter(noclasses=True, style='monokai', nowrap=True)
     rows = []
+    grid_rows = ['  Old   New   Changes']
     for old, new, marker, text in diff_rows(patch):
         marker_color = {'+': '#8bd49c', '-': '#f08080'}.get(marker, '#c4cdd7')
         if marker:
             content = highlight(text, lexer, formatter)
         else:
             content = html.escape(text)
+        if grid:
+            prefix = html.escape(f'{old:>5} {new:>5} {marker or " ":>2} ')
+            grid_rows.append(f'<span style="color:{marker_color};">{prefix}</span>'
+                             + (content.rstrip('\n') or ' '))
+            continue
         cells = ''.join(f'<td width="55" align="right" style="color:#8d9baa;padding:0 8px;">'
                         f'<pre style="margin:0;">{number}</pre></td>'
                         for number in (old, new))
@@ -54,6 +60,8 @@ def render_guide_diff(patch, path):
                     '<td><pre style="margin:0;color:#e8eef5;'
                     'font-family:Consolas, Cascadia Mono, monospace;font-size:14px;">'
                     + (content or ' ') + '</pre></td></tr>')
+    if grid:
+        return '<pre style="margin:0;">' + '\n'.join(grid_rows) + '</pre>'
     return ('<table width="100%" cellspacing="0" cellpadding="0" '
             'style="font-family:Consolas, monospace;font-size:14px;">'
             '<tr style="color:#8d9baa;">'

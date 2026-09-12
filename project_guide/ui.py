@@ -156,6 +156,9 @@ class ProjectGuidePanel(CodeAnswerOverlay):
                 font.setPixelSize(12)
                 fmt = QtGui.QTextCharFormat()
                 fmt.setFont(font)
+                # Tint only the text runs, leaving the interleaved editor rows
+                # visible and preserving syntax/diff foreground colors.
+                fmt.setBackground(QtGui.QColor(24, 52, 72, 190))
                 cursor.mergeCharFormat(fmt)
             cursor.mergeBlockFormat(block)
             if self._editor_fit:
@@ -262,6 +265,12 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         self._normal_geometry = None
         if self._normal_guidance_html:
             self.answer_text.setHtml(self._normal_guidance_html)
+        else:
+            cursor = QtGui.QTextCursor(self.answer_text.document())
+            cursor.select(QtGui.QTextCursor.SelectionType.Document)
+            fmt = QtGui.QTextCharFormat()
+            fmt.setBackground(QtGui.QBrush(QtCore.Qt.BrushStyle.NoBrush))
+            cursor.mergeCharFormat(fmt)
 
     @staticmethod
     def clear_layout(layout):

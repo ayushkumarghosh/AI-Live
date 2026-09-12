@@ -24,6 +24,17 @@ class GuideUITests(unittest.TestCase):
         self.assertEqual(self.panel.findChildren(QtWidgets.QLineEdit), [])
         self.assertTrue(all(edit.isReadOnly() for edit in self.panel.findChildren(QtWidgets.QTextEdit)))
 
+    def test_fitted_text_has_tinted_background_and_normal_view_restores_it(self):
+        self.panel.present('Guidance text', [], guidance=True)
+        self.panel.show()
+        self.panel.fit_editor(QtCore.QRect(100, 100, 700, 500), 112)
+        fragment = self.panel.answer_text.document().begin().begin().fragment()
+        color = fragment.charFormat().background().color()
+        self.assertEqual(color, QtGui.QColor(24, 52, 72, 190))
+        self.panel.release_editor()
+        fragment = self.panel.answer_text.document().begin().begin().fragment()
+        self.assertEqual(fragment.charFormat().background().style(), QtCore.Qt.BrushStyle.NoBrush)
+
     def test_scroll_buttons_move_fitted_guide_without_refitting(self):
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, 'README.md').write_text('task')

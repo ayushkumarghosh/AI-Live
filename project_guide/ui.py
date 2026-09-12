@@ -1,5 +1,5 @@
 """Guide presentation: selectable actions only, no editable prompt surface."""
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 from overlay import CodeAnswerOverlay, render_basic_answer_html
 from .diff import render_guide_diff
 
@@ -9,6 +9,8 @@ class ProjectGuidePanel(CodeAnswerOverlay):
 
     def __init__(self, owner=None):
         super().__init__(owner)
+        self._adjusting_line_spacing = False
+        self.answer_text.textChanged.connect(self._apply_line_spacing)
         self.title_label.setText('Project Guide · read only')
         self.close_button.setToolTip('Close Project Guide')
         self.resize(780, 620)
@@ -27,6 +29,20 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         self.options.setWidget(self.option_body)
         self.panel.layout().insertWidget(2, self.options)
         self.options.hide()
+
+    def _apply_line_spacing(self):
+        """Match the workspace editor's 24px rows without clipping headings."""
+        if self._adjusting_line_spacing:
+            return
+        self._adjusting_line_spacing = True
+        try:
+            cursor = QtGui.QTextCursor(self.answer_text.document())
+            cursor.select(QtGui.QTextCursor.SelectionType.Document)
+            block = QtGui.QTextBlockFormat()
+            block.setLineHeight(24, QtGui.QTextBlockFormat.LineHeightTypes.MinimumHeight.value)
+            cursor.mergeBlockFormat(block)
+        finally:
+            self._adjusting_line_spacing = False
 
     @staticmethod
     def clear_layout(layout):

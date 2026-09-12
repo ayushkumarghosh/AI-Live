@@ -41,7 +41,7 @@ def render_guide_diff(patch, path):
     formatter = HtmlFormatter(noclasses=True, style='monokai', nowrap=True)
     rows = []
     for old, new, marker, text in diff_rows(patch):
-        bg = {'+': '#183b2b', '-': '#48262b'}.get(marker, '#111922')
+        marker_color = {'+': '#8bd49c', '-': '#f08080'}.get(marker, '#c4cdd7')
         if marker:
             content = highlight(text, lexer, formatter)
         else:
@@ -49,14 +49,14 @@ def render_guide_diff(patch, path):
         cells = ''.join(f'<td width="55" align="right" style="color:#8d9baa;padding:0 8px;">'
                         f'<pre style="margin:0;">{number}</pre></td>'
                         for number in (old, new))
-        rows.append(f'<tr style="background-color:{bg};">{cells}'
-                    f'<td width="20" style="color:#c4cdd7;padding:0 6px;">{marker}</td>'
+        rows.append(f'<tr>{cells}'
+                    f'<td width="20" style="color:{marker_color};padding:0 6px;">{marker}</td>'
                     '<td><pre style="margin:0;color:#e8eef5;'
                     'font-family:Consolas, Cascadia Mono, monospace;font-size:14px;">'
                     + (content or ' ') + '</pre></td></tr>')
     return ('<table width="100%" cellspacing="0" cellpadding="0" '
             'style="font-family:Consolas, monospace;font-size:14px;">'
-            '<tr style="color:#8d9baa;background-color:#111922;">'
+            '<tr style="color:#8d9baa;">'
             '<td width="55" align="right">Old</td><td width="55" align="right">New</td>'
             '<td width="20"></td><td>Changes</td></tr>'
             + ''.join(rows) + '</table>')

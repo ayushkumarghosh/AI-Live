@@ -106,6 +106,18 @@ class ProjectBridge:
         if workspace_name is not None and (not isinstance(workspace_name, str) or len(workspace_name) > 1000):
             raise ValueError('Invalid workspace name')
         dirty = body.get('dirty', [])
+        terminal = body.get('terminal')
+        if terminal is not None:
+            if not isinstance(terminal, dict):
+                raise ValueError('Invalid terminal')
+            for field, limit in [('name', 200), ('cwd', 4000), ('command', 2000), ('output', 32000)]:
+                if not isinstance(terminal.get(field), str) or len(terminal[field]) > limit:
+                    raise ValueError('Invalid terminal ' + field)
+            if (type(terminal.get('running')) is not bool or type(terminal.get('truncated')) is not bool or
+                    (terminal.get('exit_code') is not None and type(terminal['exit_code']) is not int)):
+                raise ValueError('Invalid terminal status')
+            terminal = {key: terminal[key] for key in
+                        ('name', 'cwd', 'command', 'output', 'running', 'truncated', 'exit_code')}
         diagnostics = body.get('diagnostics', [])
         if (not isinstance(dirty, list) or not all(isinstance(p, str) for p in dirty) or
                 not isinstance(diagnostics, list) or len(diagnostics) > 500):
@@ -121,6 +133,7 @@ class ProjectBridge:
                 focus_time = previous.get('focus_time', 0)
             self.clients[window] = dict(window=window, roots=roots, active=active,
                 workspace_name=workspace_name,
+                terminal=terminal,
                 dirty=dirty, diagnostics=diagnostics, focused=focused, focus_time=focus_time, seen=now,
                 ack=body.get('ack', ''))
             self.condition.notify_all()
@@ -145,6 +158,20 @@ class ProjectBridge:
         with self.lock:
             self.commands.setdefault(window, []).append(dict(type='open', root=str(Path(root).resolve()),
                                                              path=str(path), line=max(1, int(line))))
+
+    def terminal_output(self, window, root):
+        terminal = self.fresh_state(window, root).get('terminal')
+        if not terminal:
+            raise GuideError('No terminal command output captured. Reload VS Code with the updated AI-Live '
+                             'extension, then run your command in a terminal with shell integration enabled '
+                             'and click Check terminal output again.')
+        if not terminal['cwd'] or not Path(terminal['cwd']).is_absolute():
+            raise GuideError('The terminal did not report its working folder. Use a shell with VS Code shell integration.')
+        if not Path(terminal['cwd']).resolve().is_relative_to(Path(root).resolve()):
+            raise GuideError('Select a terminal whose last command ran inside this project, then check again.')
+        if not terminal['output'].strip() and terminal['exit_code'] is None:
+            raise GuideError('The terminal command has not produced output yet. Wait for output and check again.')
+        return terminal
 
     def fresh_state(self, window, root):
         self.state(window, root)

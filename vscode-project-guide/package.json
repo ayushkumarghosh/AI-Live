@@ -2,10 +2,10 @@
   "name": "ai-live-project-guide",
   "displayName": "AI-Live Project Guide",
   "description": "Read-only workspace connection for the AI-Live overlay.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "ai-live",
   "license": "MIT",
-  "engines": {"vscode": "^1.85.0"},
+  "engines": {"vscode": "^1.93.0"},
   "categories": ["Other"],
   "extensionKind": ["ui"],
   "activationEvents": ["onStartupFinished"],
@@ -13,7 +13,7 @@
   "capabilities": {"untrustedWorkspaces": {"supported": false}, "virtualWorkspaces": false},
   "scripts": {
     "compile": "tsc -p .",
-    "test": "npm run compile && node --test out/protocol.test.js",
+    "test": "npm run compile && node --test out/protocol.test.js out/terminal.test.js",
     "vscode:prepublish": "npm run compile",
     "package": "vsce package --allow-missing-repository"
   },

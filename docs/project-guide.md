@@ -14,7 +14,7 @@ Codex authentication is reused, while user configuration, rules, plugins, hooks,
 
 Select a connected workspace folder; the most recently focused window is recommended. Choose a problem file using the paged file buttons and preview. The active text file is recommended, with README files near the top. The chosen folder and file remain pinned even when you change editor tabs or windows.
 
-After analysis, review the task summary and click **Start guidance**. Each step shows an operation, file, exact location anchor, unified diff, and explanation. Diffs show old/new line numbers, red removed lines, green added lines, and surrounding context with syntax highlighting. **Previous** and **Next** only navigate. **Copy code** copies replacement/insertion text without diff markers or unchanged context (empty for deletion); **Copy diff** copies the complete unified patch. **Open location** opens an existing file without applying changes. Create new files manually. **Explain** shows the explanation; **More detail** asks Codex for expanded guidance.
+After analysis, review the task summary and click **Start guidance**. Each step shows an operation, file, exact location anchor, unified diff, and explanation. Diffs show old/new line numbers, red removed lines, green added lines, and surrounding context with syntax highlighting. **Previous** and **Next** only navigate. Create new files manually. **Explain** shows the explanation; **More detail** asks Codex for expanded guidance.
 
 ### Fit guidance over the editor
 
@@ -26,13 +26,13 @@ Named multi-root workspaces need the rebuilt companion VSIX, which reports the w
 
 **Check my changes** reviews saved code and the current editor diagnostics and revises remaining guidance. **Final review** checks the whole problem. Results distinguish “Looks complete”, “Needs changes”, and “Cannot verify”. No project code or tests are executed; listed test commands are for you to run.
 
-Codex guidance is displayed as supplied. Codex is instructed to base each diff on the current saved file, group overlapping edits, and include accurate hunk ranges and context. The app does not validate patches against saved files, adjust suggested line numbers, fingerprint files, or request automatic corrections. Copy works immediately; Open location uses the supplied line. Only the JSON structure needed to display the response is checked. Request **Check my changes** to refresh guidance after saving edits.
+Codex guidance is displayed as supplied. Codex is instructed to base each diff on the current saved file, group overlapping edits, and include accurate hunk ranges and context. The app does not validate patches against saved files, adjust suggested line numbers, fingerprint files, or request automatic corrections. Only the JSON structure needed to display the response is checked. Request **Check my changes** to refresh guidance after saving edits.
 
 On Windows, click the pointer icon beside the opacity control to enable **Underlying cursor (experimental)** for the overlays. It defaults to off. While idle, mouse hover reaches the application underneath so that application chooses its own cursor, without app-specific cursor detection. Button presses temporarily restore normal overlay input for clicks, text selection, dragging, and resizing; scrolling is routed to the overlay. The cursor can return to the overlay's normal shape during a gesture. Click the pointer icon again to disable the mode.
 
 This experiment also permits underlying hover effects and tooltips. It relies on a Windows low-level mouse hook: if the application stalls, Windows can remove the hook and clicks may reach the application underneath. A timer detects a stall after the application recovers and turns the mode off, but cannot guarantee input isolation during the stall. Use normal mode when that guarantee matters.
 
-Clarifications use two to four answer buttons. When a question cannot be resolved that way, update the problem statement in VS Code and click **Retry**, or choose another file. Codex reads saved files; save your edits when you want them included in a requested review. Unsaved or changed files do not block guidance, Copy, or Open. Cancelled or superseded results never replace current guidance. Clear Context cancels the guide and discards its in-memory session.
+Clarifications use two to four answer buttons. When a question cannot be resolved that way, update the problem statement in VS Code and click **Retry**, or choose another file. Codex reads saved files; save your edits when you want them included in a requested review. Unsaved or changed files do not block guidance. Cancelled or superseded results never replace current guidance. Clear Context cancels the guide and discards its in-memory session.
 
 ## Boundaries and recovery
 
@@ -53,10 +53,20 @@ venv/Scripts/python.exe -m unittest tests.test_project_guide_live -v
 Remove-Item Env:AI_LIVE_CODEX_SMOKE
 ```
 
-For interactive acceptance, install the VSIX, open two local windows, choose the recommended root, select a problem, answer a clarification, and close/reopen the guide. Edit without saving and confirm guidance and Copy remain available; use Check my changes explicitly to request another review. Verify Copy/Open, manual new-file creation, cancellation, Clear Context, disconnection, and final review. These checks require an actual VS Code session; automated offscreen UI tests do not substitute for them.
+For interactive acceptance, install the VSIX, open two local windows, choose the recommended root, select a problem, answer a clarification, and close/reopen the guide. Edit without saving and confirm guidance remains available; use Check my changes explicitly to request another review. Verify fitted button clicks and editor passthrough, terminal output checks, manual new-file creation, cancellation, Clear Context, disconnection, and final review. These checks require an actual VS Code session; automated offscreen UI tests do not substitute for them.
 
 ## File picker and Auto-Answer context
 
 Workspace and problem-file lists use the available panel height; file previews return to the full reading area. The workflow remains button-only.
 
 Auto-Answer receives the selected problem statement, workspace, task summary, accepted clarification choices, current step and code, and latest review findings. Context updates as guidance changes, without restarting audio. Long sections are truncated to keep the audio prompt bounded. Switching to another workspace or Clear Context removes the previous guide context. Closing the guide preserves the selected session. Guidance is reference material; suggested edits do not imply that files were changed or tests were run. No file-content validation is added.
+
+## Terminal output checks
+
+Install companion version 0.1.1 and reload VS Code. Run your command in a terminal with shell integration enabled, then click **Check terminal output**. The guide asks Codex to review the active terminal's latest captured command, output, working folder, running state, and exit code alongside saved project files. The command must have run inside the selected project. This button does not execute commands.
+
+Output is retained in memory from commands started after the extension loads, capped to the latest 32,000 characters per terminal. Truncation and commands still running are reported explicitly. Older scrollback and terminals without shell integration are unavailable. Captured output is sent to Codex only when you request a terminal check.
+
+While fitted, mouse input passes through to VS Code except for guide buttons. Button clicks are delivered through the Qt event queue; pressing a button and releasing outside it cancels the click.
+
+Use **Scroll up** and **Scroll down** to move the guide three text rows per click while fitted. Scrolling preserves the interleaved alignment and stops at the beginning or end. The mouse wheel continues scrolling VS Code. Guide buttons use compact padding and spacing, with up to five columns in wider fitted editors.

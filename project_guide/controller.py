@@ -88,7 +88,7 @@ class ProjectGuideController(QtCore.QObject):
                 self.session.choices.append({'question': self.session.result['question'], 'answer': value})
                 self.publish_context()
                 self.run('analyze')
-            elif action in ('analyze', 'review', 'final'):
+            elif action in ('analyze', 'review', 'final', 'terminal'):
                 self.run(action)
             elif action == 'retry':
                 if self.session:
@@ -104,6 +104,8 @@ class ProjectGuideController(QtCore.QObject):
                     self.alignment.start()
             elif action == 'fit_editor':
                 self.alignment.start()
+            elif action in ('scroll_up', 'scroll_down'):
+                self.panel.scroll_guidance(-1 if action == 'scroll_up' else 1)
             elif action == 'close_guide':
                 self.panel.close()
             elif action == 'explain' and self.session and self.session.step:
@@ -216,6 +218,8 @@ class ProjectGuideController(QtCore.QObject):
                 context = {'action': action, 'problem_file': session.problem, 'choices': list(session.choices),
                            'previous_guidance': session.result, 'current_step': session.step,
                            'editor_diagnostics': diagnostics}
+                if action == 'terminal':
+                    context['terminal_output'] = self.bridge.terminal_output(session.window, session.files.root)
                 data = runner.run(session.files.root, context, lambda status: self.progress.emit(generation, status))
                 self.finished.emit(generation, request, data, None)
             except Exception as exc:
@@ -263,6 +267,7 @@ class ProjectGuideController(QtCore.QObject):
             actions.insert(1, ('Change problem', 'files', None))
         if self.session and self.session.result:
             actions.insert(1, ('Check my changes', 'review', None))
+            actions.insert(1, ('Back to guide', 'start', None))
         self.panel.present(message, actions)
 
     def cancel(self):

@@ -24,6 +24,34 @@ class GuideUITests(unittest.TestCase):
         self.assertEqual(self.panel.findChildren(QtWidgets.QLineEdit), [])
         self.assertTrue(all(edit.isReadOnly() for edit in self.panel.findChildren(QtWidgets.QTextEdit)))
 
+    def test_scroll_buttons_move_fitted_guide_without_refitting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'README.md').write_text('task')
+            controller = ProjectGuideController(None)
+            self.addCleanup(controller.close)
+            session = GuideSession(directory, 'README.md', 'one')
+            session.result = result()
+            session.result['summary'] = '\n'.join(f'Guidance row {i}' for i in range(90))
+            controller.session = session
+            panel = controller.panel
+            panel.show_step(session)
+            panel.show()
+            panel.fit_editor(QtCore.QRect(100, 100, 700, 500), 112)
+            self.app.processEvents()
+            buttons = {panel.buttons.itemAt(i).widget().text(): panel.buttons.itemAt(i).widget()
+                       for i in range(panel.buttons.count())}
+            bar = panel.answer_text.verticalScrollBar()
+            with patch.object(controller.alignment, 'start', side_effect=AssertionError('No refit')):
+                buttons['Scroll down'].click()
+                self.assertEqual(bar.value(), 72)
+                buttons['Scroll up'].click()
+                self.assertEqual(bar.value(), 0)
+                buttons['Scroll up'].click()
+                self.assertEqual(bar.value(), 0)
+                for _ in range(100):
+                    buttons['Scroll down'].click()
+                self.assertEqual(bar.value(), bar.maximum() // 24 * 24)
+
     def test_fitted_guidance_stays_on_interleaved_grid_through_wrapping_and_scroll(self):
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, 'README.md').write_text('task')
@@ -121,6 +149,35 @@ class GuideUITests(unittest.TestCase):
         self.assertFalse(tracker.timer.isActive())
         self.assertIsNone(self.panel._editor_fit)
 
+    def test_fitted_button_click_is_delivered_once_and_drag_out_cancels(self):
+        self.panel.present('Guidance', [('Next', 'next', None)], guidance=True)
+        self.panel.show()
+        self.panel.fit_editor(QtCore.QRect(100, 100, 700, 500), 112)
+        self.app.processEvents()
+        button = self.panel.buttons.itemAt(0).widget()
+        point = button.mapTo(self.panel, button.rect().center())
+        actions = []
+        self.panel.action.connect(lambda action, _: actions.append(action))
+        self.panel.fitted_button.emit('down', point)
+        self.panel.fitted_button.emit('up', point)
+        self.app.processEvents()
+        self.assertEqual(actions, ['next'])
+        self.panel.fitted_button.emit('down', point)
+        self.panel.fitted_button.emit('up', QtCore.QPoint(5, 5))
+        self.app.processEvents()
+        self.assertEqual(actions, ['next'])
+        self.assertFalse(button.isDown())
+
+    def test_guidance_actions_include_terminal_without_copy_or_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'README.md').write_text('task')
+            session = GuideSession(directory, 'README.md', 'one')
+            session.result = result()
+            self.panel.show_step(session)
+            labels = [self.panel.buttons.itemAt(i).widget().text() for i in range(self.panel.buttons.count())]
+            self.assertIn('Check terminal output', labels)
+            self.assertFalse({'Copy code', 'Copy diff', 'Open location'} & set(labels))
+
     def test_fitted_input_only_accepts_buttons(self):
         self.panel.present('Guidance', [('Next', 'next', None)], guidance=True)
         self.panel.show()
@@ -131,6 +188,31 @@ class GuideUITests(unittest.TestCase):
         self.assertFalse(self.panel.accepts_fitted_input(self.panel.answer_text.mapTo(self.panel, QtCore.QPoint(20, 20))))
         self.panel.release_editor()
         self.assertTrue(self.panel.accepts_fitted_input(QtCore.QPoint(20, 20)))
+
+    def test_stationary_editor_does_not_repeat_screen_capture(self):
+        from project_guide.alignment_tracker import EditorAlignmentTracker
+        from unittest.mock import Mock
+        self.panel.present('Guidance', [], guidance=True)
+        self.panel._guidance_html = 'Guidance'
+        self.panel.show()
+        tracker = EditorAlignmentTracker(self.panel, lambda: ('root', 'a.py', None))
+        tracker.timer.start()
+        screen = Mock()
+        screen.availableGeometry.return_value = QtCore.QRect(0, 0, 1400, 1000)
+        screen.devicePixelRatio.return_value = 1
+        bounds = dict(hwnd=1, foreground=True, viewport=(100, 100, 800, 600), row=None,
+                      editor_key=('root', 'a.py', None))
+        with patch('project_guide.alignment_tracker.logical_viewport',
+                   return_value=(screen, QtCore.QRect(100, 100, 700, 500))), \
+             patch('project_guide.alignment_tracker.measure_gutter', return_value=112) as capture:
+            tracker.receive(0, bounds)
+            tracker.receive(0, bounds)
+            tracker.receive(0, dict(bounds, foreground=False))
+            tracker.receive(0, bounds)
+            self.assertEqual(capture.call_count, 1)
+            tracker.receive(0, dict(bounds, editor_key=('root', 'b.py', None)))
+            self.assertEqual(capture.call_count, 2)
+        tracker.stop()
 
     def test_missing_alignment_dependency_is_visible(self):
         from project_guide.alignment_tracker import EditorAlignmentTracker
@@ -214,8 +296,8 @@ class GuideUITests(unittest.TestCase):
             self.panel.show_step(session)
             labels = [b.text() for b in self.panel.findChildren(QtWidgets.QPushButton) if not b.isHidden()]
             self.assertIn('Check my changes', labels)
-            self.assertIn('Copy code', labels)
-            self.assertIn('Copy diff', labels)
+            self.assertIn('Check terminal output', labels)
+            self.assertNotIn('Copy diff', labels)
             self.assertNotIn('Apply', labels)
             self.assertIn('main.py', self.panel.answer_text.toPlainText())
             self.assertEqual(session.result['verdict'], 'not_reviewed')
@@ -244,6 +326,29 @@ class GuideUITests(unittest.TestCase):
         controller.cancel()
         controller.complete('old', None, result(), None)
         self.assertEqual(controller.panel.answer_text.toPlainText(), 'Current view')
+
+    def test_terminal_button_requests_review_with_captured_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, 'README.md').write_text('task')
+            controller = ProjectGuideController(None)
+            self.addCleanup(controller.close)
+            controller.root, controller.window = directory, 'one'
+            controller.session = GuideSession(directory, 'README.md', 'one')
+            controller.session.result = result()
+            evidence = dict(command='pytest', output='1 failed', running=False, exit_code=1)
+            loop = QtCore.QEventLoop()
+            controller.finished.connect(lambda *_: loop.quit())
+            with patch('project_guide.controller.CodexRunner') as factory, \
+                 patch.object(controller, 'editor_state', return_value=([], [])), \
+                 patch.object(controller.bridge, 'terminal_output', return_value=evidence) as terminal:
+                factory.return_value.run.return_value = result()
+                controller.handle('terminal')
+                QtCore.QTimer.singleShot(2000, loop.quit)
+                loop.exec()
+                terminal.assert_called_once_with('one', controller.session.files.root)
+                context = factory.return_value.run.call_args.args[1]
+                self.assertEqual(context['action'], 'terminal')
+                self.assertEqual(context['terminal_output'], evidence)
 
     def test_copy_does_not_require_editor_or_file_validation(self):
         with tempfile.TemporaryDirectory() as directory:

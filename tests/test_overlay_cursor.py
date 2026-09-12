@@ -30,6 +30,30 @@ class NativeInputTests(unittest.TestCase):
         self.styles[hwnd] = style
         return old
 
+    def test_fitted_click_is_consumed_and_delivered_without_native_retargeting(self):
+        route = Mock()
+        hwnd = 0x100000001
+        self.backend.target_at = Mock(return_value=hwnd)
+        self.backend.button_routes[hwnd] = route
+        event = MSLLHOOKSTRUCT()
+        event.pt.x, event.pt.y = 40, 50
+        self.api.SetWindowLongW.reset_mock()
+        self.assertEqual(self.backend._hook(0, 0x0201, ctypes.addressof(event)), 1)
+        self.backend.target_at.return_value = None
+        event.pt.x = 400
+        self.assertEqual(self.backend._hook(0, 0x0202, ctypes.addressof(event)), 1)
+        self.assertEqual(route.call_args_list[0].args, ('down', 40, 50))
+        self.assertEqual(route.call_args_list[1].args, ('up', 400, 50))
+        self.api.SetWindowLongW.assert_not_called()
+
+    def test_failed_button_receiver_cannot_prevent_native_cleanup(self):
+        self.backend.target_at = Mock(return_value=0x100000001)
+        self.backend.button_routes[0x100000001] = Mock(side_effect=RuntimeError('Deleted Qt receiver'))
+        event = MSLLHOOKSTRUCT()
+        self.assertEqual(self.backend._hook(0, 0x0201, ctypes.addressof(event)), 1)
+        self.assertIsNone(self.backend.handle)
+        self.assertTrue(all(not style & TRANSPARENT for style in self.styles.values()))
+
     def test_stop_restores_interception_before_removing_hook(self):
         def unhook(handle):
             self.assertTrue(all(not s & TRANSPARENT for s in self.styles.values()))

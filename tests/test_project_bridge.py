@@ -70,6 +70,30 @@ class BridgeTests(unittest.TestCase):
                   workspaceName='My multi-root workspace', trusted=True, remote=False))
         self.assertEqual(self.bridge.state('one', self.root)['workspace_name'], 'My multi-root workspace')
 
+    def test_terminal_report_is_bounded_and_scoped_to_selected_project(self):
+        from unittest.mock import patch
+        terminal = dict(name='pwsh', cwd=str(self.root), command='pytest', output='1 failed',
+                        running=False, exit_code=1, truncated=False)
+        body = dict(window='one', roots=[str(self.root)], trusted=True, remote=False, terminal=terminal)
+        self.post('/poll', body)
+        with patch.object(self.bridge, 'fresh_state', return_value=self.bridge.state('one', self.root)):
+            self.assertEqual(self.bridge.terminal_output('one', self.root)['output'], '1 failed')
+        terminal['cwd'] = str(self.root.parent)
+        self.post('/poll', body)
+        with patch.object(self.bridge, 'fresh_state', return_value=self.bridge.state('one', self.root)):
+            with self.assertRaisesRegex(GuideError, 'inside this project'):
+                self.bridge.terminal_output('one', self.root)
+        terminal['output'] = 'x' * 32001
+        with self.assertRaises(urllib.error.HTTPError):
+            self.post('/poll', body)
+
+    def test_missing_terminal_capture_explains_how_to_enable_it(self):
+        from unittest.mock import patch
+        self.register()
+        with patch.object(self.bridge, 'fresh_state', return_value=self.bridge.state('one', self.root)):
+            with self.assertRaisesRegex(GuideError, 'shell integration'):
+                self.bridge.terminal_output('one', self.root)
+
     def test_close_removes_only_own_discovery_file(self):
         self.assertTrue(self.bridge.discovery.exists())
         self.bridge.close()

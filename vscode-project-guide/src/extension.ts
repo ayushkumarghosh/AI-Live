@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as http from 'node:http';
 import {randomUUID} from 'node:crypto';
 import {Connection, validConnection, resolveOpen} from './protocol';
+import {TerminalOutput, appendOutput, cleanOutput} from './terminal';
 
 let timer: ReturnType<typeof setInterval> | undefined;
 let stopped = false;
@@ -40,6 +41,28 @@ export function activate(context: vscode.ExtensionContext): void {
   let busy = false;
   let again = false;
   let ack = '';
+  const terminalOutput = new Map<vscode.Terminal, TerminalOutput>();
+  const executions = new WeakMap<vscode.TerminalShellExecution, TerminalOutput>();
+  context.subscriptions.push(vscode.window.onDidStartTerminalShellExecution(event => {
+    if (!vscode.workspace.isTrusted || vscode.env.remoteName) return;
+    const record: TerminalOutput = {name: event.terminal.name.slice(0, 200),
+      cwd: event.execution.cwd?.scheme === 'file' ? event.execution.cwd.fsPath : '',
+      command: event.execution.commandLine.value.slice(0, 2000), output: '',
+      running: true, exit_code: null, truncated: false};
+    terminalOutput.set(event.terminal, record);
+    executions.set(event.execution, record);
+    const stream = event.execution.read();
+    void (async () => {
+      try { for await (const chunk of stream) appendOutput(record, chunk); }
+      catch { record.truncated = true; }
+    })();
+  }));
+  context.subscriptions.push(vscode.window.onDidEndTerminalShellExecution(event => {
+    const record = executions.get(event.execution);
+    if (record) { record.running = false; record.exit_code = event.exitCode ?? null; }
+  }));
+  context.subscriptions.push(vscode.window.onDidCloseTerminal(terminal => terminalOutput.delete(terminal)));
+  context.subscriptions.push({dispose: () => terminalOutput.clear()});
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 50);
   status.text = '$(link) AI-Live: waiting';
   status.tooltip = 'Project Guide reads workspace metadata. All guidance controls are in the AI-Live overlay.';
@@ -58,6 +81,9 @@ export function activate(context: vscode.ExtensionContext): void {
       const remote = !!vscode.env.remoteName || folders.some(f => f.uri.scheme !== 'file');
       const roots = await Promise.all(folders.filter(f => f.uri.scheme === 'file').map(f => fs.realpath(f.uri.fsPath)));
       const active = vscode.window.activeTextEditor?.document.uri;
+      const terminal = vscode.window.activeTerminal;
+      const captured = terminal && terminalOutput.get(terminal);
+      const terminalState = captured ? {...captured, output: cleanOutput(captured.output)} : null;
       const diagnostics = vscode.languages.getDiagnostics().flatMap(([uri, entries]) =>
         uri.scheme === 'file' && vscode.workspace.getWorkspaceFolder(uri) ?
           entries.map(d => ({path: uri.fsPath, line: d.range.start.line + 1,
@@ -65,6 +91,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const response = await post(connection, {
         window, roots, remote, ack, trusted: vscode.workspace.isTrusted, focused: vscode.window.state.focused,
         workspaceName: vscode.workspace.name,
+        terminal: terminalState,
         active: active?.scheme === 'file' ? active.fsPath : null,
         dirty: vscode.workspace.textDocuments.filter(d => d.isDirty && d.uri.scheme === 'file' &&
           vscode.workspace.getWorkspaceFolder(d.uri)).map(d => d.uri.fsPath), diagnostics,

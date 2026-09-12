@@ -3,6 +3,7 @@ import ctypes
 import os
 import queue
 import threading
+import weakref
 from ctypes import wintypes
 
 import numpy as np
@@ -70,6 +71,7 @@ class EditorAlignmentTracker(QtCore.QObject):
         self._generation = 0
         self._inflight = False
         self._last_fit = None
+        self._calibration = None
         self._requests = None
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(350)
@@ -79,6 +81,7 @@ class EditorAlignmentTracker(QtCore.QObject):
     def start(self):
         self.status('Finding VS Code editor...')
         self._last_fit = None
+        self._calibration = None
         if os.name != 'nt':
             self.status('Editor alignment is available on Windows.')
             return
@@ -102,6 +105,7 @@ class EditorAlignmentTracker(QtCore.QObject):
         self.timer.stop()
         self._generation += 1
         self._last_fit = None
+        self._calibration = None
 
     def request(self):
         if self._inflight or not self.panel.isVisible():
@@ -122,7 +126,9 @@ class EditorAlignmentTracker(QtCore.QObject):
         if self._requests is None:
             self._requests = queue.Queue()
             requests = self._requests
-            self.destroyed.connect(lambda: requests.put(None))
+            # Avoid Python callbacks on QObject.destroyed: deferred widget
+            # deletion can expose an already-invalid native wrapper on Windows.
+            weakref.finalize(self, requests.put, None)
             threading.Thread(target=self.measure_loop, args=(requests, self.measured.emit), daemon=True).start()
         self._requests.put((generation, root, active, workspace_name))
 
@@ -140,6 +146,8 @@ class EditorAlignmentTracker(QtCore.QObject):
                     if locator is None:
                         locator = WindowsEditorLocator()
                     result = locator.locate(root, active, workspace_name)
+                    if result is not None:
+                        result['editor_key'] = (root, active, workspace_name)
                 except ImportError as exc:
                     result = {'error': 'Editor alignment dependency missing: ' + str(exc)
                               + '. Install requirements.txt with the Python running AI-Live.', 'fatal': True}
@@ -179,13 +187,26 @@ class EditorAlignmentTracker(QtCore.QObject):
                 self.status('Cannot locate the editor display.')
                 return
             screen, viewport = converted
-            center = measure_gutter(screen, viewport)
+            calibration_key = (bounds['hwnd'], bounds.get('editor_key'),
+                               tuple(viewport.getRect()), screen.devicePixelRatio())
+            center = None
             native_row = bounds.get('row')
-            if center is None and native_row:
+            if native_row:
                 scale = screen.devicePixelRatio()
                 if abs(native_row[5] / scale - 24) < 0.5:
                     center = viewport.top() + (native_row[4] + native_row[5] / 2
                                                - bounds['viewport'][1]) / scale
+                    center = viewport.top() + (center - viewport.top()) % 24
+            if center is None:
+                if self._calibration and self._calibration[0] == calibration_key:
+                    center = self._calibration[1]
+                else:
+                    # Repeated desktop grabs can disturb the hardware cursor on
+                    # Windows. A stationary 24px editor grid needs calibration
+                    # only once; normal whole-row scrolling preserves its phase.
+                    center = measure_gutter(screen, viewport)
+            if center is not None:
+                self._calibration = (calibration_key, center)
         except (OSError, ValueError, RuntimeError) as exc:
             self.status('Cannot measure editor: ' + str(exc))
             return  # Monitor/window disappeared between measurement and delivery.

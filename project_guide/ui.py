@@ -6,6 +6,7 @@ from .diff import render_guide_diff
 
 class ProjectGuidePanel(CodeAnswerOverlay):
     action = QtCore.pyqtSignal(str, object)
+    fitted_button = QtCore.pyqtSignal(str, object)
 
     def __init__(self, owner=None):
         super().__init__(owner)
@@ -18,6 +19,8 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         self._snapping_scroll = False
         self._normal_text_style = self.answer_text.styleSheet()
         self._fitted_input = None
+        self._pressed_button = None
+        self.fitted_button.connect(self._deliver_fitted_button, QtCore.Qt.ConnectionType.QueuedConnection)
         self.answer_text.textChanged.connect(self._apply_line_spacing)
         self.answer_text.verticalScrollBar().valueChanged.connect(self._snap_scroll)
         self.title_label.setText('Project Guide · read only')
@@ -30,6 +33,8 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         self.panel.layout().insertWidget(1, self.banner)
         self.actions = QtWidgets.QWidget()
         self.buttons = QtWidgets.QGridLayout(self.actions)
+        self.buttons.setContentsMargins(4, 4, 4, 4)
+        self.buttons.setSpacing(4)
         self.panel.layout().addWidget(self.actions)
         self.options = QtWidgets.QScrollArea()
         self.options.setWidgetResizable(True)
@@ -46,6 +51,40 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         return any(button.isVisible() and button.isEnabled() and
                    QtCore.QRect(button.mapTo(self, QtCore.QPoint()), button.size()).contains(point)
                    for button in self.findChildren(QtWidgets.QAbstractButton))
+
+    def queue_fitted_button(self, phase, x, y):
+        # Queue Qt work outside the low-level Windows hook. Use the same native
+        # window bounds as the hit test so mixed-DPI coordinates stay consistent.
+        import ctypes
+        from ctypes import wintypes
+        rect = wintypes.RECT()
+        api = ctypes.WinDLL('user32', use_last_error=True)
+        api.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        if phase == 'cancel' or not api.GetWindowRect(int(self.winId()), ctypes.byref(rect)):
+            self.fitted_button.emit('cancel', QtCore.QPoint())
+            return
+        point = QtCore.QPoint(round((x - rect.left) * self.width() / max(1, rect.right - rect.left)),
+                             round((y - rect.top) * self.height() / max(1, rect.bottom - rect.top)))
+        self.fitted_button.emit(phase, point)
+
+    def _deliver_fitted_button(self, phase, point):
+        if phase == 'down':
+            self._pressed_button = next((b for b in self.findChildren(QtWidgets.QAbstractButton)
+                if self._editor_fit and b.isVisible() and b.isEnabled() and
+                QtCore.QRect(b.mapTo(self, QtCore.QPoint()), b.size()).contains(point)), None)
+            if self._pressed_button:
+                self._pressed_button.setDown(True)
+        else:
+            button, self._pressed_button = self._pressed_button, None
+            if button is None:
+                return
+            from PyQt6 import sip
+            if sip.isdeleted(button):
+                return
+            button.setDown(False)
+            if (phase == 'up' and self._editor_fit and button.isVisible() and button.isEnabled() and
+                    QtCore.QRect(button.mapTo(self, QtCore.QPoint()), button.size()).contains(point)):
+                button.click()
 
     def fitted_native_hit_test(self, point, rect):
         # Native hook coordinates are physical pixels, Qt geometry is logical.
@@ -77,14 +116,16 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         super().hideEvent(event)
 
     def _fit_controls(self, fitted, width=780):
-        columns = 3 if fitted and width < 640 else 4
+        columns = max(3, min(5, width // 145)) if fitted else 4
         controls = []
         while self.buttons.count():
             controls.append(self.buttons.takeAt(0).widget())
-        self.buttons.setSpacing(4 if fitted else 6)
+        self.buttons.setSpacing(3 if fitted else 4)
+        margin = 3 if fitted else 4
+        self.buttons.setContentsMargins(margin, margin, margin, margin)
         for i, button in enumerate(controls):
             style = button.property('normal_style')
-            button.setStyleSheet(style.replace('padding:8px;', 'padding:4px;font-family:Segoe UI;font-size:11px;') if fitted else style)
+            button.setStyleSheet(style.replace('padding:4px;', 'padding:2px 4px;').replace('font-size:12px;', 'font-size:11px;') if fitted else style)
             button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored if fitted else
                                  QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Fixed)
             self.buttons.addWidget(button, i // columns, i % columns)
@@ -139,6 +180,11 @@ class ProjectGuidePanel(CodeAnswerOverlay):
             bar.setSingleStep(pitch)
         finally:
             self._snapping_scroll = False
+
+    def scroll_guidance(self, direction):
+        pitch = self._editor_fit[2] if self._editor_fit else 24
+        bar = self.answer_text.verticalScrollBar()
+        bar.setValue(bar.value() + direction * 3 * pitch)
 
     def fit_editor(self, rect, row_center, pitch=24):
         """Place the text's ink midway between measured editor text rows."""
@@ -228,7 +274,7 @@ class ProjectGuidePanel(CodeAnswerOverlay):
     def button(self, text, action, value=None):
         button = QtWidgets.QPushButton(text)
         button.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
-        button.setStyleSheet('QPushButton {background:#253341;color:#e7edf3;padding:8px;border:1px solid #53606d;border-radius:4px;} QPushButton:hover {background:#354b60;}')
+        button.setStyleSheet('QPushButton {background:#253341;color:#e7edf3;padding:4px;font-family:Segoe UI;font-size:12px;border:1px solid #53606d;border-radius:4px;} QPushButton:hover {background:#354b60;}')
         button.setProperty('normal_style', button.styleSheet())
         button.clicked.connect(lambda _checked=False: self.action.emit(action, value))
         return button
@@ -270,7 +316,7 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         text = ''
         if data['verdict'] != 'not_reviewed':
             text += data['verdict'].replace('_', ' ').capitalize() + '\n' + data['findings'] + '\n\n'
-        text += 'Code review only. Tests have not been run.\n'
+        text += 'The guide does not run commands. Terminal checks review your captured output.\n'
         if data['test_commands']:
             text += 'Suggested commands to run yourself:\n' + '\n'.join(data['test_commands'])
         actions = []
@@ -279,12 +325,12 @@ class ProjectGuidePanel(CodeAnswerOverlay):
                 actions.append(('Previous', 'previous', None))
             if session.index < len(data['steps']) - 1:
                 actions.append(('Next', 'next', None))
-            actions += [('Explain', 'explain', None), ('Copy code', 'copy', None),
-                        ('Copy diff', 'copy_diff', None),
-                        ('Open location', 'open', None)]
+            actions += [('Explain', 'explain', None)]
+        actions += [('Check terminal output', 'terminal', None)]
         actions += [('Check my changes', 'review', None), ('Final review', 'final', None),
                     ('Change problem', 'files', None), ('Change project', 'projects', None)]
-        actions += [('Fit editor', 'fit_editor', None), ('Close guide', 'close_guide', None)]
+        actions += [('Scroll up', 'scroll_up', None), ('Scroll down', 'scroll_down', None),
+                    ('Fit editor', 'fit_editor', None), ('Close guide', 'close_guide', None)]
         self.present(text, actions, guidance=True)
         self._guidance_html = grid_content + render_basic_answer_html(text)
         self._normal_guidance_html = content + render_basic_answer_html(text)

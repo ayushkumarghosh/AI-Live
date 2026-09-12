@@ -91,6 +91,8 @@ class WindowsInput:
         self.callback = self.callback_type(self._hook)
         self.windows = set()
         self.hit_tests = {}
+        self.button_routes = {}
+        self.button_gesture = None
         self.error = ''
         self.routing = MouseRouting(self)
 
@@ -171,6 +173,15 @@ class WindowsInput:
                 if message in DOWN or message in UP or message in WHEELS:
                     event = MSLLHOOKSTRUCT.from_address(pointer)
                     target = self.target_at(event.pt)
+                    if message == 0x0201 and target in self.button_routes and not self.routing.buttons:
+                        route = self.button_routes[target]
+                        self.button_gesture = route
+                        route('down', event.pt.x, event.pt.y)
+                        return 1
+                    if message == 0x0202 and self.button_gesture:
+                        route, self.button_gesture = self.button_gesture, None
+                        route('up', event.pt.x, event.pt.y)
+                        return 1
                     if self.routing.route(message, event.mouseData, target, event.pt.x, event.pt.y, time.monotonic()):
                         return 1
             except Exception as exc:
@@ -182,6 +193,12 @@ class WindowsInput:
         return self.api.CallNextHookEx(self.handle, code, message, pointer)
 
     def stop(self):
+        if self.button_gesture:
+            route, self.button_gesture = self.button_gesture, None
+            try:
+                route('cancel', 0, 0)
+            except Exception:
+                pass  # A destroyed Qt receiver must not prevent native cleanup.
         failed = set()
         for hwnd in tuple(self.windows):
             try:
@@ -257,6 +274,8 @@ class OverlayCursorMode(QtCore.QObject):
             windows = {int(w.winId()) for w in visible}
             self.backend.hit_tests = {int(w.winId()): w.fitted_native_hit_test for w in visible
                                       if w.property('fitted_input_routing')}
+            self.backend.button_routes = {int(w.winId()): w.queue_fitted_button for w in visible
+                                          if w.property('fitted_input_routing')}
             self.backend.update(windows)
         except (OSError, RuntimeError) as exc:
             self.last_error = str(exc)

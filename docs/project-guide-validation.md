@@ -1,5 +1,73 @@
 # Project Guide validation
 
+## Chosen session and program-terminal review - 2026-09-13
+
+- The first Check output opens a cancellable asynchronous CLI session picker, scoped to the project and excluding own exec sessions. Selection persists; Change session reopens the picker. Exact prompt matching is removed: the latest completed turn is reviewed against current guide context.
+- Check terminal output independently selects a captured program terminal and immediately reviews its existing output. It does not replace the Codex session selection. Duplicate-evidence and cancellation protections remain.
+- Python suite: 218 tests, 213 passed and 5 opt-in tests skipped. Tests cover first selection and reuse, stale picker responses, selected-session identity validation, program error review, and edited prompt acceptance.
+- Independent review found a cancelled-picker Retry route that incorrectly invoked generation. Fixed it to reopen session selection; all 16 UI tests passed including the new regression.
+- Actual Codex session listing returned two choices for the project. Reading a chosen session yielded 5,251 characters with deliberately different prompt context, without generating a new Codex response. Program-terminal routing is covered with captured-output fixtures; no program was executed or GUI automated in this change.
+
+- Built `dist/AI-Live-Prompt-Guide-Review.exe`; all five embedded guide modules match final source, and the executable read-only helper passed its smoke test.
+
+## Automatic Codex CLI session selection - 2026-09-13
+
+- Prompt Guide now reads saved conversations using app-server thread/list and thread/read. Selection uses descending updated_at order, exact canonical project folder, cli source, and non-ephemeral sessions; app-owned exec requests are excluded. Selection is automatic on every check. Editor context still uses the companion; Code Guide terminal checks remain unchanged.
+- No session is resumed and no turn is submitted. The latest saved turn must be completed and the displayed prompt must occur in its conversation. Relevant follow-up user and assistant messages are included, while reasoning and terminal redraws are omitted. Consumed session/turn identities remain protected across session switches. Cancelled requests cannot commit session selection or review state.
+- Python suite: 211 tests, 206 passed and 5 opt-in tests skipped. Focused coverage includes pagination, own-session exclusion, wrong-project exclusion, latest-session selection, unfinished/missing/mismatched response handling, follow-up messages, duplicate checks across switches, cancellation, and removal of manual selection UI.
+- A subsequent 37-test targeted run passed, including recovery from an oversized answer through a concise follow-up while preserving complete recent turns and disclosing omitted history.
+- Independent review identified Windows npm-launcher child-process cleanup; corrected shutdown to terminate only the owned reader process tree. All 9 reader tests passed, including the new lifecycle regression.
+- Actual local Codex app-server read succeeded for the user's project CLI session: a completed turn yielded 2,377 characters of user/assistant messages. The same terminal's previous capture had been dominated by spinner animation. No UI automation or user-session generation was performed.
+
+- Built `dist/AI-Live-Prompt-Guide-Sessions.exe`. Verified its embedded session-reader code matches final source, executed that embedded reader against the actual saved CLI session, and smoke-tested the executable read-only helper. No app GUI was launched for these package checks.
+
+## Live capture inspection — 2026-09-12
+
+- Added authenticated read-only GET /captures; all 13 bridge tests pass, including unauthorized/Origin rejection and stale report omission. Launched the source app with Project Guide open and read an actual VS Code extension report successfully (HTTP 200).
+- The selected pwsh terminal running codex reported running=true and truncated=true. The sampled 32,000-character capture contained 29,123 Braille spinner glyphs and otherwise whitespace, with no readable response. Saved the exact sample to ignored build/vscode-codex-capture-0.txt. This demonstrates that animation redraws can evict useful response text; allowing truncated reviews alone does not repair capture fidelity.
+- The running source app includes this endpoint; previously built executables do not. No terminal commands were submitted and no VS Code UI was automated.
+
+## Long interactive capture correction — 2026-09-12
+
+- Removed the unconditional rejection of truncated terminal captures. The extension's rolling 32,000-character buffer can discard older turns while retaining a complete latest response. The reviewer receives the original truncation flag, reviews retained output against the current prompt and saved files, and discloses the limitation. Missing essential evidence still retains guidance and requests a concise restatement in the existing conversation.
+- Regression tests first reproduced the old rejection. Session and controller coverage now verifies reviewable truncated tails, unchanged-evidence rejection after advancement, and retry without losing the prompt when evidence is inconclusive.
+- Python suite: 201 tests, 196 passed and 5 opt-in tests skipped. Extension compilation and all 15 tests passed; the extension protocol and package are unchanged.
+- Real Codex regression passed for both sufficient retained requirements output and a cut-off test result. The initial assertion was corrected to allow a valid design-approval clarification as well as a next investigation prompt. Fixture source remained unchanged. These tests use simulated terminal evidence; actual VS Code UI capture was not exercised.
+
+- Built `dist/AI-Live-Prompt-Guide-Capture.exe`; verified the updated review instructions in its embedded archive and successfully exercised its packaged read-only helper without launching the GUI.
+
+## Solution-focused approach correction — 2026-09-12
+
+- Removed instructions to explain assistant/operator responsibilities and the adaptive workflow inside the approach. The approach now covers the actual solution's behavior, logic, components, data flow, dependencies, tradeoffs and edge cases, grounded in relevant saved source when available. Workflow instructions remain confined to prompt generation and handoffs.
+- The strengthened live regression failed against the previous policy because the approach mentioned Codex and operator roles. It passed after the correction, with substantive project content and no Codex/CLI/prompt/operator/state-capsule terms in the fixture's approach.
+- All 15 targeted runner/UI tests passed, along with the real Codex regression. No GUI interaction was used.
+- Built `dist/AI-Live-Prompt-Guide-Solution.exe`; verified the corrected instructions in its embedded archive and smoke-tested the packaged read-only helper successfully.
+
+## Detailed approach before the first prompt — 2026-09-12
+
+- Expanded the generated approach into a project-specific end-to-end explanation: success criteria, technical direction, investigation/design decisions, implementation phases and dependencies, risks, operator verification, delivery, and how evidence changes the next step. Uninspected details remain provisional; future prompts are not pre-generated.
+- Fixed first-prompt sequencing after clarification: the full approach is shown before the first accepted prompt regardless of which request produced it. Later checks remain adaptive; Approach reopens the explanation.
+- All 39 targeted UI/runner tests passed. The live Codex requirements-first check passed with a substantive approach kept separate from the prompt. No actual GUI interaction was used.
+- Built `dist/AI-Live-Prompt-Guide-Approach.exe`; verified its embedded approach instructions and successfully smoke-tested its read-only helper without launching the GUI.
+
+## Adaptive prompt policy — 2026-09-12
+
+- Embedded the user's full **Adaptive prompting for software work** document in `project_guide/prompt_policy.py`, with app-specific mapping to the existing prompt response contract. Code Guide's instructions and the extension protocol are unchanged.
+- A new live requirements-first test failed against the prior policy because the prompt skipped `STATE_1` and included source/design work. It passed after the policy change.
+- Three opt-in real Codex tests passed: requirements-only first prompt, manual verification handoff after a scoped diff, and incorporation of a new spoken requirement into the next prompt. Guide requests left all fixture files unchanged. These evaluate generated instructions with simulated terminal evidence, not actual UI/terminal or audio operation.
+- Python suite: 196 tests, 192 passed and 4 opt-in tests skipped in the default run. Independent review reported no important findings in the policy integration.
+- Built `dist/AI-Live-Prompt-Guide-Adaptive.exe`; inspected its embedded Python archive to confirm the complete supplied policy is present. Its packaged read-only helper initialized and read a disposable fixture successfully without launching the GUI.
+
+## Prompt Guide — 2026-09-12
+
+- Added a separate one-prompt-at-a-time Codex workflow, manual pinned-terminal checks, and relevant spoken requirement updates from Auto-Answer.
+- Python suite: 194 tests, 192 passed and 2 opt-in integration tests skipped. Coverage includes prompt history, initial uncertainty, clarification/retry, duplicate evidence, cancellation races, terminal selection, mid-speech project switching, bounded conversation updates, and code-mode regressions.
+- Companion: TypeScript compilation and all 15 tests passed, including ANSI streams split across chunks, formatting-only volume, surrogate-safe truncation, capture identities, and multilingual reports under the bridge byte limit.
+- Opt-in real Codex prompt smoke test passed separately: initial prompt generation and a second review incorporating a simulated spoken requirement. Both guide calls left all fixture files unchanged. Terminal output was a fixture, not actual VS Code capture; no live audio was used.
+- Prompt panel rendered offscreen with Windows fonts and visually inspected. The first render needed explicit Windows font loading in the offscreen test process; production font configuration was unchanged.
+- Independent review found and prompted fixes for request-token cancellation races, initial uncertainty recovery, clarification repinning, speech-start context isolation, and raw ANSI capture inflation.
+- Built `dist/AI-Live-Prompt-Guide.exe` and companion 0.1.2. Verified the new guide modules are embedded, and the executable's stdio helper initialized and read an unchanged disposable fixture without launching the GUI. Actual VS Code interactive terminal capture and live audio extraction have not been manually validated; those require a separate interactive acceptance check.
+
 ## Experimental custom input routing — 2026-09-11
 
 - Replaced native cursor lookup with an opt-in pointer button. Idle hover reaches the underlying window; native button gestures and intercepted wheel events target the overlay.

@@ -9,6 +9,7 @@ from project_guide.session import GuideSession, parse_guidance
 
 def result():
     return dict(summary='Implement greeting', question='', choices=[], blocked='',
+                accepted_requirements='Return a greeting.', conversation_change='',
                 steps=[dict(id='greeting', path='main.py', anchor='def hello():', line=1,
                             operation='replace', code='def hello(): return "Hi"',
                             diff='--- a/main.py\n+++ b/main.py\n@@ -1 +1 @@\n-def hello(): pass\n+def hello(): return "Hi"\n',
@@ -17,6 +18,29 @@ def result():
 
 
 class ProjectGuideTests(unittest.TestCase):
+    def test_unchanged_audio_preserves_existing_guidance(self):
+        session = GuideSession(self.root, 'README.md', 'window')
+        original = result()
+        session.accept(session.begin(), original)
+        candidate = result()
+        candidate['steps'][0]['code'] = 'unnecessary rewrite'
+        candidate['summary'] = 'Unnecessary new summary'
+        session.pending_conversation_revision = 3
+        session.accept(session.begin('adapt'), candidate)
+        self.assertEqual(session.result, original)
+        self.assertEqual(session.conversation_revision, 3)
+
+    def test_changed_audio_replaces_guidance_and_requirements(self):
+        session = GuideSession(self.root, 'README.md', 'window')
+        session.accept(session.begin(), result())
+        changed = result()
+        changed.update(conversation_change='Greeting must be formal.',
+                       accepted_requirements='Return a formal greeting.')
+        changed['steps'][0]['code'] = 'def hello(): return "Good morning"'
+        session.accept(session.begin('adapt'), changed)
+        self.assertEqual(session.result, changed)
+        self.assertEqual(session.accepted_requirements, 'Return a formal greeting.')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

@@ -11,6 +11,7 @@ from urllib.parse import quote, urlparse
 import websockets
 
 from env_loader import load_env_file
+from project_guide.conversation import project_update_store as default_project_update_store
 
 
 load_env_file()
@@ -33,8 +34,12 @@ ANSWER_UPDATE_TOOL = {
                 "enum": ["append", "reset", "no_update"],
             },
             "text": {"type": "string"},
+            "project_update": {
+                "type": "string",
+                "description": "At most 2000 characters: explicit relevant spoken project requirements, corrections, or decisions only; empty otherwise. Never infer from the AI proposed answer.",
+            },
         },
-        "required": ["action", "text"],
+        "required": ["action", "text", "project_update"],
         "additionalProperties": False,
     },
 }
@@ -185,6 +190,17 @@ Action rules:
 - Use no_update with an empty text value for acknowledgements, filler, incomplete speech,
   or turns that do not require the candidate to say anything new.
 
+Project update rules:
+- Set project_update to only explicit relevant spoken requirements, corrections, or
+  decisions for the active Project Guide project (Code Guide or Prompt Guide) supplied in context.
+- Use an empty project_update for unrelated audio, acknowledgements, filler, incomplete
+  speech, or when no guide project is active. Do not invent or infer requirements.
+- Never derive project requirements from the AI proposed answer, suggestions, or prior
+  assistant tool text. Extract only what the speaker explicitly said about this project.
+- project_update is independent of the visible answer action: no_update can still carry
+  an explicit project decision. Limit project_update to at most 2000 characters;
+  keep it concise and preserve corrections.
+
 The successful update_visible_answer calls earlier in this conversation represent the answer
 already visible to the candidate. Continue from those calls instead of replying to or restating
 them. Keep answers concise, accurate, practical, and ready to say aloud. Write like an Indian
@@ -216,12 +232,14 @@ def validate_answer_update(arguments):
 
     if not isinstance(payload, dict):
         raise ValueError("arguments must be a JSON object")
-    if set(payload) != {"action", "text"}:
-        raise ValueError("arguments must contain only action and text")
+    if not {"action", "text"} <= set(payload) or set(payload) - {"action", "text", "project_update"}:
+        raise ValueError("arguments must contain action, text, and optional project_update only")
+    if not isinstance(payload.get("project_update", ""), str):
+        raise ValueError("project_update must be a string")
 
     action = payload.get("action")
     text = payload.get("text")
-    if action not in {"append", "reset", "no_update"}:
+    if not isinstance(action, str) or action not in {"append", "reset", "no_update"}:
         raise ValueError(f"unknown action {action!r}")
     if not isinstance(text, str):
         raise ValueError("text must be a string")
@@ -243,6 +261,7 @@ class AzureRealtimeAnswerSession:
         instructions_provider=None,
         sample_rate=SAMPLE_RATE,
         chunk_size=CHUNK_SIZE,
+        project_update_store=None,
     ):
         self.answer_update_callback = answer_update_callback
         self.session_reset_callback = session_reset_callback
@@ -250,6 +269,14 @@ class AzureRealtimeAnswerSession:
         self.instructions_provider = instructions_provider
         self.sample_rate = sample_rate
         self.chunk_size = chunk_size
+        self.project_update_store = (
+            project_update_store if project_update_store is not None else default_project_update_store
+        )
+        self._project_turns = {}
+        # None means no speech-start event; "" explicitly means no active project.
+        self._speech_project_session_id = None
+        self._project_context_invalid = set()
+        self._pending_project_updates = {}
 
         self.running = False
         self.auto_answer_enabled = False
@@ -273,6 +300,9 @@ class AzureRealtimeAnswerSession:
         self._protocol_errors = {}
         self._committed_responses = set()
         self._retry_counts = {}
+        self.model_log_enabled = os.getenv("AZURE_OPENAI_REALTIME_MODEL_LOG", "true").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
 
         try:
             self.api_key = _required_env("AZURE_OPENAI_REALTIME_API_KEY")
@@ -292,6 +322,39 @@ class AzureRealtimeAnswerSession:
                 print(f"{timestamp()} Could not load realtime answer instructions: {exc}", flush=True)
         return build_realtime_answer_instructions()
 
+    def _log_model_event(self, direction, event):
+        if not self.model_log_enabled:
+            return
+        event_type = event.get("type", "")
+        if event_type not in {
+            "session.update", "session.created", "session.updated",
+            "response.create", "response.created", "response.cancel", "response.done",
+            "response.function_call_arguments.done", "response.output_text.done",
+            "input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped",
+            "input_audio_buffer.committed", "error",
+        }:
+            return
+
+        def sanitized(value):
+            if isinstance(value, dict):
+                return {key: sanitized(item) for key, item in value.items()
+                        if key not in {"instructions", "audio", "api_key", "api-key", "authorization"}}
+            if isinstance(value, list):
+                return [sanitized(item) for item in value]
+            return value
+
+        details = sanitized(event)
+        # Keep accepted configuration visible without repeating the tool schema.
+        session = details.get("session")
+        if isinstance(session, dict) and "tools" in session:
+            session["tools"] = [tool.get("name") for tool in session["tools"] if isinstance(tool, dict)]
+        print(
+            f"{timestamp()} realtime_model {direction} "
+            f"turn={self._current_turn_token or '-'} "
+            f"{json.dumps(details, ensure_ascii=False)}",
+            flush=True,
+        )
+
     async def _send_event(self, event):
         websocket = self.websocket
         if websocket is None:
@@ -302,6 +365,7 @@ class AzureRealtimeAnswerSession:
         else:
             async with self._send_lock:
                 await websocket.send(payload)
+        self._log_model_event("sent", event)
         return True
 
     def _session_update_event(self):
@@ -356,9 +420,21 @@ class AzureRealtimeAnswerSession:
     async def _create_response(self, turn_token):
         if not self.auto_answer_enabled or turn_token in self._ignored_turns:
             return
+        # Bind before the first await; retries must not adopt a newer selection.
+        self._project_turns.setdefault(turn_token, self.project_update_store.active_session_id)
+        if self._project_turns[turn_token] != self.project_update_store.active_session_id:
+            self._project_context_invalid.add(turn_token)
         await self.configure_session()
         attempt = self._retry_counts.get(turn_token, 0)
-        await self._send_event(self._response_create_event(turn_token, attempt))
+        # Instructions are supplied for the current selection. If that differs
+        # from the speech binding, permanently drop extraction for this turn,
+        # including retries, even if the original project is selected again.
+        if self._project_turns[turn_token] != self.project_update_store.active_session_id:
+            self._project_context_invalid.add(turn_token)
+        response_event = self._response_create_event(turn_token, attempt)
+        if self._project_turns[turn_token] != self.project_update_store.active_session_id:
+            self._project_context_invalid.add(turn_token)
+        await self._send_event(response_event)
         latency_log("response_requested", self._last_audio_enqueue_at, turn=turn_token, attempt=attempt)
         if self.status_callback:
             self.status_callback("Answering...", "#FFA500")
@@ -420,6 +496,9 @@ class AzureRealtimeAnswerSession:
         if not turn_token or turn_token in self._ignored_turns or turn_token != self._current_turn_token:
             return
         if response_id in self._committed_responses:
+            pending = self._pending_project_updates.get(response_id)
+            if pending and pending[2] != call_id:
+                self._protocol_errors[response_id] = "response contained multiple answer tool calls"
             return
 
         arguments = event.get("arguments")
@@ -446,6 +525,10 @@ class AzureRealtimeAnswerSession:
 
         if self.answer_update_callback:
             self.answer_update_callback(action, text)
+        payload = json.loads(arguments) if isinstance(arguments, str) else arguments
+        self._pending_project_updates[response_id] = (
+            self._project_turns.get(turn_token, ""), payload.get("project_update", "").strip(), call_id
+        )
         await self._send_function_output(call_id, {"status": "applied", "action": action})
         self._committed_responses.add(response_id)
         latency_log("answer_committed", response_id=response_id, action=action, chars=len(text))
@@ -460,6 +543,12 @@ class AzureRealtimeAnswerSession:
         ignored = not turn_token or turn_token in self._ignored_turns
         committed = response_id in self._committed_responses
         protocol_error = self._protocol_errors.pop(response_id, "")
+        pending = self._pending_project_updates.pop(response_id, None)
+        if (pending and committed and not protocol_error and not ignored
+                and status == "completed" and self.auto_answer_enabled
+                and turn_token == self._current_turn_token
+                and turn_token not in self._project_context_invalid):
+            self.project_update_store.record(*pending[:2])
 
         if not ignored and status == "completed" and not committed and not protocol_error:
             protocol_error = "response completed without update_visible_answer"
@@ -490,23 +579,31 @@ class AzureRealtimeAnswerSession:
         self._response_turns.pop(response_id, None)
         self._committed_responses.discard(response_id)
         if turn_token:
+            self._project_turns.pop(turn_token, None)
+            self._project_context_invalid.discard(turn_token)
             self._retry_counts.pop(turn_token, None)
             self._ignored_turns.discard(turn_token)
 
     async def handle_server_event(self, event):
+        self._log_model_event("received", event)
         event_type = event.get("type", "")
 
         if event_type == "input_audio_buffer.speech_started":
+            self._speech_project_session_id = self.project_update_store.active_session_id
             await self._cancel_current_response()
             if self.status_callback:
                 self.status_callback("Listening...", "#4CAF50")
             return
 
         if event_type == "input_audio_buffer.speech_stopped":
+            speech_project_session_id = self._speech_project_session_id
+            self._speech_project_session_id = None
             if self.auto_answer_enabled:
                 self._turn_counter += 1
                 self._current_turn_token = f"turn-{self._turn_counter}"
                 self._retry_counts[self._current_turn_token] = 0
+                if speech_project_session_id is not None:
+                    self._project_turns[self._current_turn_token] = speech_project_session_id
                 await self._create_response(self._current_turn_token)
             return
 
@@ -558,6 +655,10 @@ class AzureRealtimeAnswerSession:
             await self.handle_server_event(json.loads(raw_message))
 
     def _clear_response_state(self):
+        self._speech_project_session_id = None
+        self._project_context_invalid.clear()
+        self._project_turns.clear()
+        self._pending_project_updates.clear()
         self._current_turn_token = None
         self._active_response_id = None
         self._response_turns.clear()

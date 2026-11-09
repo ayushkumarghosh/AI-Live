@@ -18,6 +18,8 @@ def publish(session):
         result = session.result or {}
         step = session.step
         payload = {
+            'mode': session.mode, 'session_id': session.id,
+            'accepted_requirements': clipped(session.accepted_requirements, 12000),
             'workspace': str(session.files.root),
             'problem_file': session.problem,
             'problem_statement_at_selection': clipped(session.problem_text, 6000),
@@ -31,6 +33,12 @@ def publish(session):
             'review_verdict': result.get('verdict', 'not_reviewed'),
             'review_findings': clipped(result.get('findings'), 2000),
         }
+        if session.mode == 'prompt':
+            payload.update(mode='prompt', session_id=session.id,
+                           approach=clipped(result.get('approach'), 2000),
+                           current_prompt=clipped(session.history[-1]['prompt'] if session.history else '', 6000),
+                           accepted_requirements=clipped(session.accepted_requirements, 12000),
+                           review_status=result.get('status', 'not_reviewed'))
         section = (
             'PROJECT GUIDE CONTEXT\n'
             'Use this selected project, problem, accepted choices, and current guidance when '

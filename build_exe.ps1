@@ -103,7 +103,9 @@ if (-not $SkipCompanion) {
         if ($LASTEXITCODE -ne 0) { throw "Companion tests failed" }
         & npm run package
         if ($LASTEXITCODE -ne 0) { throw "Companion packaging failed" }
-        Copy-Item -LiteralPath "ai-live-project-guide-0.1.0.vsix" -Destination (Join-Path $Root "dist") -Force
+        $CompanionPackage = Get-Content -LiteralPath "package.json" -Raw | ConvertFrom-Json
+        $CompanionVsix = "$($CompanionPackage.name)-$($CompanionPackage.version).vsix"
+        Copy-Item -LiteralPath $CompanionVsix -Destination (Join-Path $Root "dist") -Force
     } finally { Pop-Location }
 }
 

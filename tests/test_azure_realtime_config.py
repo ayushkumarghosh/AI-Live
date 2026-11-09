@@ -362,6 +362,196 @@ class AzureRealtimeProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(response_creates), 1)
         self.assertEqual(response_creates[0]["response"]["metadata"]["attempt"], "1")
 
+class ProjectExtractionTests(unittest.IsolatedAsyncioTestCase):
+    setUp = AzureRealtimeProtocolTests.setUp
+    tearDown = AzureRealtimeProtocolTests.tearDown
+    make_session = AzureRealtimeProtocolTests.make_session
+
+    async def start_project_response(self):
+        from project_guide.conversation import ProjectUpdateStore
+        session = self.make_session()
+        session.project_update_store = ProjectUpdateStore()
+        session.project_update_store.activate('project-a')
+        session.auto_answer_enabled = True
+        await session.handle_server_event({'type': 'input_audio_buffer.speech_stopped'})
+        metadata = session.websocket.messages[-1]['response']['metadata']
+        await session.handle_server_event({'type': 'response.created', 'response': {
+            'id': 'r', 'metadata': metadata}})
+        return session
+
+    async def send_update(self, session, **overrides):
+        payload = {'action': 'no_update', 'text': '', 'project_update': 'Use SQLite.'}
+        payload.update(overrides)
+        await session.handle_server_event({'type': 'response.function_call_arguments.done',
+            'response_id': 'r', 'call_id': 'c', 'name': 'update_visible_answer',
+            'arguments': json.dumps(payload)})
+
+    async def finish(self, session, status='completed'):
+        await session.handle_server_event({'type': 'response.done',
+            'response': {'id': 'r', 'status': status}})
+
+    async def test_project_field_validation_preserves_pair_api(self):
+        self.assertEqual(azure_realtime.validate_answer_update({
+            'action': 'no_update', 'text': '', 'project_update': 'Use SQLite.'}), ('no_update', ''))
+        for value in [None, 42, [], {}]:
+            with self.assertRaises(ValueError):
+                azure_realtime.validate_answer_update({'action': 'no_update', 'text': '', 'project_update': value})
+
+    async def test_no_update_records_only_after_success(self):
+        session = await self.start_project_response()
+        await self.send_update(session)
+        self.assertEqual(session.project_update_store.snapshot('project-a')['updates'], [])
+        await self.finish(session)
+        self.assertEqual(session.project_update_store.snapshot('project-a')['updates'],
+                         [{'revision': 1, 'text': 'Use SQLite.'}])
+        await self.finish(session)
+        self.assertEqual(session.project_update_store.snapshot('project-a')['revision'], 1)
+
+    async def test_failed_cancelled_invalid_disabled_and_stale_responses_do_not_record(self):
+        for case in ['failed', 'cancelled', 'invalid', 'disabled', 'stale', 'freeform']:
+            with self.subTest(case=case):
+                session = await self.start_project_response()
+                if case == 'invalid':
+                    await self.send_update(session, action='append')
+                else:
+                    await self.send_update(session)
+                if case == 'disabled':
+                    session.auto_answer_enabled = False
+                if case == 'stale':
+                    session.project_update_store.activate('project-b')
+                if case == 'freeform':
+                    await session.handle_server_event({'type': 'response.output_text.delta',
+                                                       'response_id': 'r', 'delta': 'bad'})
+                await self.finish(session, case if case in ['failed', 'cancelled'] else 'completed')
+                self.assertEqual(session.project_update_store.snapshot('project-a')['updates'], [])
+                self.assertEqual(session.project_update_store.snapshot('project-b')['updates'], [])
+
+    async def test_selection_changes_before_created_event_do_not_rebind(self):
+        session = await self.start_project_response()
+        session.project_update_store.activate('project-b')
+        await session.handle_server_event({'type': 'response.created', 'response': {'id': 'r'}})
+        await self.send_update(session)
+        await self.finish(session)
+        self.assertEqual(session.project_update_store.snapshot('project-b')['updates'], [])
+
+    async def test_retry_keeps_original_project_binding(self):
+        session = await self.start_project_response()
+        await self.send_update(session, action='append')
+        session.project_update_store.activate('project-b')
+        await self.finish(session)
+        metadata = session.websocket.messages[-1]['response']['metadata']
+        await session.handle_server_event({'type': 'response.created', 'response': {
+            'id': 'r2', 'metadata': metadata}})
+        await session.handle_server_event({'type': 'response.function_call_arguments.done',
+            'response_id': 'r2', 'call_id': 'c2', 'name': 'update_visible_answer',
+            'arguments': json.dumps({'action': 'no_update', 'text': '', 'project_update': 'Use SQLite.'})})
+        await session.handle_server_event({'type': 'response.done', 'response': {'id': 'r2', 'status': 'completed'}})
+        self.assertEqual(session.project_update_store.snapshot('project-b')['updates'], [])
+
+    async def test_legacy_and_empty_updates_never_infer_from_answer(self):
+        for extra in [{}, {'project_update': ''}]:
+            session = await self.start_project_response()
+            updates = []
+            session.answer_update_callback = lambda action, text: updates.append((action, text))
+            await session.handle_server_event({'type': 'response.function_call_arguments.done',
+                'response_id': 'r', 'call_id': 'c', 'name': 'update_visible_answer',
+                'arguments': json.dumps({'action': 'reset', 'text': 'I propose Redis.', **extra})})
+            await self.finish(session)
+            self.assertEqual(updates, [('reset', 'I propose Redis.')])
+            self.assertEqual(session.project_update_store.snapshot('project-a')['updates'], [])
+
+    async def test_new_speech_before_success_discards_pending_update(self):
+        session = await self.start_project_response()
+        await self.send_update(session)
+        await session.handle_server_event({'type': 'input_audio_buffer.speech_started'})
+        await self.finish(session)
+        self.assertEqual(session.project_update_store.snapshot('project-a')['updates'], [])
+
+    async def test_selection_switch_during_request_await_does_not_rebind(self):
+        session = await self.start_project_response()
+        await self.finish(session, 'cancelled')
+        async def switch_selection():
+            session.project_update_store.activate('project-b')
+        with patch.object(session, 'configure_session', side_effect=switch_selection):
+            await session.handle_server_event({'type': 'input_audio_buffer.speech_stopped'})
+        metadata = session.websocket.messages[-1]['response']['metadata']
+        await session.handle_server_event({'type': 'response.created', 'response': {'id': 'r', 'metadata': metadata}})
+        await self.send_update(session)
+        await self.finish(session)
+        self.assertEqual(session.project_update_store.snapshot('project-b')['updates'], [])
+
+    async def test_second_distinct_tool_call_invalidates_project_update(self):
+        session = await self.start_project_response()
+        await self.send_update(session)
+        await session.handle_server_event({'type': 'response.function_call_arguments.done',
+            'response_id': 'r', 'call_id': 'other', 'name': 'update_visible_answer',
+            'arguments': json.dumps({'action': 'no_update', 'text': '', 'project_update': 'Use Redis.'})})
+        await self.finish(session)
+        self.assertEqual(session.project_update_store.snapshot('project-a')['updates'], [])
+
+    async def test_malformed_action_is_validation_error(self):
+        for action in [[], {}]:
+            with self.assertRaises(ValueError):
+                azure_realtime.validate_answer_update({'action': action, 'text': '', 'project_update': 'x'})
+
+    async def test_speech_start_binds_project_before_selection_changes(self):
+        for initial in ['project-a', '']:
+            for switch_during_cancel in [False, True]:
+                with self.subTest(initial=initial, during_cancel=switch_during_cancel):
+                    session = await self.start_project_response()
+                    if not initial:
+                        session.project_update_store.clear()
+                    original_cancel = session._cancel_current_response
+
+                    async def cancel_and_switch():
+                        session.project_update_store.activate('project-b')
+                        await original_cancel()
+
+                    if switch_during_cancel:
+                        with patch.object(session, '_cancel_current_response', side_effect=cancel_and_switch):
+                            await session.handle_server_event({'type': 'input_audio_buffer.speech_started'})
+                    else:
+                        await session.handle_server_event({'type': 'input_audio_buffer.speech_started'})
+                        session.project_update_store.activate('project-b')
+                    await session.handle_server_event({'type': 'input_audio_buffer.speech_stopped'})
+                    metadata = session.websocket.messages[-1]['response']['metadata']
+                    await session.handle_server_event({'type': 'response.created', 'response': {
+                        'id': 'new', 'metadata': metadata}})
+                    await session.handle_server_event({'type': 'response.function_call_arguments.done',
+                        'response_id': 'new', 'call_id': 'new-call', 'name': 'update_visible_answer',
+                        'arguments': json.dumps({'action': 'no_update', 'text': '', 'project_update': 'Use SQLite.'})})
+                    await session.handle_server_event({'type': 'response.done',
+                        'response': {'id': 'new', 'status': 'completed'}})
+                    self.assertEqual(session.project_update_store.snapshot('project-b')['updates'], [])
+
+    async def test_mismatched_request_context_drops_update_even_if_selection_returns(self):
+        session = await self.start_project_response()
+        await self.finish(session, 'cancelled')
+        await session.handle_server_event({'type': 'input_audio_buffer.speech_started'})
+
+        async def configure_other_project():
+            session.project_update_store.activate('project-b')
+
+        with patch.object(session, 'configure_session', side_effect=configure_other_project):
+            await session.handle_server_event({'type': 'input_audio_buffer.speech_stopped'})
+        metadata = session.websocket.messages[-1]['response']['metadata']
+        session.project_update_store.activate('project-a')
+        await session.handle_server_event({'type': 'response.created', 'response': {'id': 'r', 'metadata': metadata}})
+        await self.send_update(session)
+        await self.finish(session)
+        self.assertEqual(session.project_update_store.snapshot('project-a')['updates'], [])
+
+    async def test_unchanged_project_from_speech_start_records_update(self):
+        session = await self.start_project_response()
+        await self.finish(session, 'cancelled')
+        await session.handle_server_event({'type': 'input_audio_buffer.speech_started'})
+        await session.handle_server_event({'type': 'input_audio_buffer.speech_stopped'})
+        metadata = session.websocket.messages[-1]['response']['metadata']
+        await session.handle_server_event({'type': 'response.created', 'response': {'id': 'r', 'metadata': metadata}})
+        await self.send_update(session)
+        await self.finish(session)
+        self.assertEqual(session.project_update_store.snapshot('project-a')['revision'], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

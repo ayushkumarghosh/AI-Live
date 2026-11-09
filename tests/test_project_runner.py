@@ -13,6 +13,30 @@ from project_guide.files import ProjectFiles, GuideError
 
 
 class RunnerTests(unittest.TestCase):
+    def test_prompt_request_uses_prompt_contract_and_one_prompt_instructions(self):
+        from tests.test_prompt_guide import response
+        captured = {}
+
+        class Process:
+            returncode = 0
+
+            def __init__(self, args, **kwargs):
+                captured['schema'] = json.loads(Path(args[args.index('--output-schema') + 1]).read_text())
+
+            def communicate(self, instructions, timeout):
+                captured['instructions'] = instructions
+                return '\n'.join(json.dumps(e) for e in [
+                    {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': json.dumps(response())}},
+                    {'type': 'turn.completed'}]), ''
+
+        with tempfile.TemporaryDirectory() as directory, patch('project_guide.runner.codex_command', return_value=['codex']), patch('project_guide.runner.subprocess.Popen', Process):
+            output = CodexRunner().run(directory, {'mode': 'prompt', 'action': 'analyze'})
+        self.assertEqual(output['prompt'], 'Implement the greeting')
+        self.assertIn('prompt', captured['schema']['properties'])
+        self.assertNotIn('steps', captured['schema']['properties'])
+        self.assertIn('exactly one', captured['instructions'])
+        self.assertNotIn('Every step must include diff', captured['instructions'])
+
     def test_answer_is_returned_without_file_checks_or_repair(self):
         data = result()
         data['steps'][0].update(path='missing.py', anchor='not saved', line=999)

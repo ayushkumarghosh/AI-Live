@@ -84,7 +84,7 @@ Desktop audio streams continuously, but the model creates answers only while Aut
 - **Code Analysis** and **General Analysis**: run explicit manual-analysis requests.
 - **Shorter**: rewrite the latest Code Analysis or General Analysis answer to be about 15% shorter. It can be used repeatedly; Text Input and Auto-Answer results are not eligible.
 - **Clear Context**: clear the visible answers, manual history, and restart the Realtime conversation.
-- **Project Guide**: connect a local VS Code workspace and use Codex CLI for button-driven, read-only coding guidance. Requires the companion extension and a signed-in Codex CLI. See [Project Guide setup and workflow](docs/project-guide.md).
+- **Project Guide**: choose manual code guidance or **Prompt Guide**, which supplies one Codex prompt at a time, remembers your chosen Codex CLI session for **Check output** and separately reviews program terminals through **Check terminal output**, and incorporates relevant Auto-Answer conversation updates. Requires companion 0.1.2 or newer and a signed-in Codex CLI. See [Project Guide setup and workflow](docs/project-guide.md).
 
 ## Verification
 

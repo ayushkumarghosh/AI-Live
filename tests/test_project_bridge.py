@@ -29,6 +29,28 @@ class BridgeTests(unittest.TestCase):
         return self.post('/poll', dict(window='one', roots=[str(self.root)], active=str(self.root / 'main.py'),
                          focused=True, dirty=[], diagnostics=[], trusted=True, remote=False))
 
+    def test_capture_endpoint_requires_auth_and_returns_recent_terminal_reports(self):
+        terminal = dict(name='Codex', cwd=str(self.root), command='codex', output='Latest response',
+                        running=True, exit_code=None, truncated=True,
+                        id='t1', execution_id='e1', revision=3)
+        self.post('/poll', dict(window='one', roots=[str(self.root)], trusted=True,
+                               remote=False, terminal=terminal, terminals=[terminal]))
+        def read(headers):
+            request = urllib.request.Request(self.bridge.url + '/captures', headers=headers)
+            return json.load(urllib.request.urlopen(request, timeout=3))
+        for headers in ({}, {'Authorization': 'Bearer wrong'},
+                        {'Authorization': 'Bearer ' + self.bridge.token, 'Origin': 'https://example.com'}):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                read(headers)
+            self.assertEqual(error.exception.code, 401)
+        result = read({'Authorization': 'Bearer ' + self.bridge.token})
+        self.assertEqual(result['windows'][0]['terminals'], [terminal])
+        self.assertEqual(result['windows'][0]['terminal'], terminal)
+        self.assertNotIn(self.bridge.token, json.dumps(result))
+        with self.bridge.lock:
+            self.bridge.clients['one']['seen'] -= 7
+        self.assertEqual(read({'Authorization': 'Bearer ' + self.bridge.token}), {'windows': []})
+
     def test_auth_and_no_arbitrary_commands(self):
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.post('/poll', {}, 'wrong')
@@ -114,3 +136,70 @@ class BridgeTests(unittest.TestCase):
                   ack=response['refresh']))
         worker.join(3)
         self.assertEqual(answers[0]['dirty'], [str(self.root / 'main.py')])
+
+
+    def capture(self, **changes):
+        return dict(dict(id='pin', execution_id='run-1', revision=2, name='pwsh',
+                         cwd=str(self.root), command='pytest', output='failed',
+                         running=False, exit_code=1, truncated=False), **changes)
+
+    def report(self, terminals, terminal=None, **changes):
+        return self.bridge.poll(dict(dict(window='one', roots=[str(self.root)],
+            trusted=True, remote=False, terminals=terminals, terminal=terminal), **changes))
+
+    def test_terminal_list_preserves_identity_and_filters_scope(self):
+        self.report([self.capture(), self.capture(id='outside', cwd=str(self.root.parent)),
+                     self.capture(id='unknown', cwd='')])
+        records = self.bridge.terminals('one', self.root)
+        self.assertEqual([r['id'] for r in records], ['pin'])
+        self.assertEqual(records[0]['execution_id'], 'run-1')
+        self.assertEqual(records[0]['revision'], 2)
+        records[0]['output'] = 'mutated'
+        self.assertEqual(self.bridge.terminals('one', self.root)[0]['output'], 'failed')
+
+    def test_pinned_terminal_uses_fresh_report_and_never_active_fallback(self):
+        self.report([self.capture()], self.capture(id='active'))
+        def fresh_call(records):
+            answers = []
+            def call():
+                try:
+                    answers.append(self.bridge.terminal_output('one', self.root, 'pin'))
+                except Exception as error:
+                    answers.append(error)
+            worker = threading.Thread(target=call)
+            with self.bridge.condition:
+                self.bridge.refresh_requests.clear()
+            worker.start()
+            with self.bridge.condition:
+                self.assertTrue(self.bridge.condition.wait_for(
+                    lambda: 'one' in self.bridge.refresh_requests, timeout=1))
+                ack = self.bridge.refresh_requests['one']
+            self.report(records, self.capture(id='active'), ack=ack)
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+            return answers[0]
+        result = fresh_call([self.capture(execution_id='run-2', revision=0, output='new')])
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result['output'], 'new')
+        self.assertEqual(result['execution_id'], 'run-2')
+        self.assertEqual(result['revision'], 0)
+        self.assertIsInstance(fresh_call([]), GuideError)
+        self.assertIsInstance(fresh_call([self.capture(cwd=str(self.root.parent))]), GuideError)
+
+    def test_invalid_terminal_reports_are_rejected_atomically(self):
+        self.report([self.capture()])
+        invalid = [None, {}, [self.capture()] * 21, [self.capture(), self.capture()]]
+        for field, value in [('id', ''), ('id', 2), ('execution_id', ''),
+                             ('execution_id', 'x' * 101), ('revision', -1),
+                             ('revision', True), ('revision', 1.5), ('output', 'x' * 32001)]:
+            invalid.append([self.capture(**{field: value})])
+        missing = self.capture()
+        del missing['id']
+        invalid.append([missing])
+        for records in invalid:
+            with self.subTest(records=str(records)[:100]):
+                with self.assertRaises(ValueError):
+                    self.report(records)
+                self.assertEqual(self.bridge.state('one', self.root)['terminals'][0]['id'], 'pin')
+        with self.assertRaises(ValueError):
+            self.report([], self.capture(revision=True))

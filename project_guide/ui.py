@@ -309,7 +309,7 @@ class ProjectGuidePanel(CodeAnswerOverlay):
 
     def show_step(self, session):
         data, step = session.result, session.step
-        text = data['summary'] + '\n\n'
+        text = ''
         if step:
             text += (f'Step {session.index + 1} of {len(data["steps"])} — {step["operation"].upper()}\n'
                      f'{step["path"]} · line {step["line"]}\n'
@@ -336,6 +336,7 @@ class ProjectGuidePanel(CodeAnswerOverlay):
                 actions.append(('Next', 'next', None))
             actions += [('Explain', 'explain', None)]
         actions += [('Check terminal output', 'terminal', None)]
+        actions += [('Update requirements', 'adapt', None)]
         actions += [('Check my changes', 'review', None), ('Final review', 'final', None),
                     ('Change problem', 'files', None), ('Change project', 'projects', None)]
         actions += [('Scroll up', 'scroll_up', None), ('Scroll down', 'scroll_down', None),
@@ -347,6 +348,40 @@ class ProjectGuidePanel(CodeAnswerOverlay):
         self.answer_text.setHtml(self._guidance_html if self._using_grid else content + render_basic_answer_html(text))
         if self._editor_fit:
             self.fit_editor(*self._editor_fit)
+
+    def show_prompt(self, session):
+        data, current = session.result, session.current
+        text = 'Prompt Guide · Codex CLI\n\n'
+        actions = []
+        latest = not session.history or session.index == len(session.history) - 1
+        if current:
+            text += (f'Prompt {session.index + 1} of {len(session.history)}\n\n'
+                     + current['explanation'] + '\n\n' + current['prompt'] + '\n\n')
+            actions.append(('Copy prompt', 'copy_prompt', None))
+            if session.index > 0:
+                actions.append(('Previous prompt', 'previous', None))
+            if not latest:
+                actions.append(('Next prompt', 'next', None))
+        if latest:
+            if data['conversation_change']:
+                text += 'Conversation update: ' + data['conversation_change'] + '\n\n'
+            if data['findings']:
+                text += 'Output review: ' + data['findings'] + '\n\n'
+            if data['status'] == 'complete':
+                text += 'Looks complete. Review the evidence and limitations above.\n'
+            elif current and data['status'] != 'clarification':
+                actions.append(('Check output', 'check_output', None))
+                actions.append(('Check terminal output', 'check_program', None))
+            elif not current and data['status'] != 'clarification':
+                actions.append(('Retry', 'retry', None))
+        else:
+            text += 'History only. Return to the latest prompt to check output.\n'
+        text += ('\nCodex session: ' + (session.codex_session_name or 'Choose on first Check output')
+                 + '\nPaste the prompt into Codex yourself. Click Check output when its response is ready.')
+        actions += [('Approach', 'approach', None), ('Change session', 'sessions', None),
+                    ('Change problem', 'files', None), ('Change project', 'projects', None),
+                    ('Close guide', 'close_guide', None)]
+        self.present(text, actions)
 
     def closeEvent(self, event):
         self.action.emit('cancel', None)

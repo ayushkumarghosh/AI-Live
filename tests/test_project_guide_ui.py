@@ -42,7 +42,7 @@ class GuideUITests(unittest.TestCase):
             self.addCleanup(controller.close)
             session = GuideSession(directory, 'README.md', 'one')
             session.result = result()
-            session.result['summary'] = '\n'.join(f'Guidance row {i}' for i in range(90))
+            session.result['steps'][0]['explanation'] = '\n'.join(f'Guidance row {i}' for i in range(90))
             controller.session = session
             panel = controller.panel
             panel.show_step(session)
@@ -68,7 +68,7 @@ class GuideUITests(unittest.TestCase):
             Path(directory, 'README.md').write_text('task')
             session = GuideSession(directory, 'README.md', 'one')
             session.result = result()
-            session.result['summary'] = 'Long summary with wrapping. ' * 40
+            session.result['steps'][0]['explanation'] = 'Long summary with wrapping. ' * 40
             self.panel.show_step(session)
             self.panel.show()
             self.panel.fit_editor(QtCore.QRect(650, 88, 770, 700), 424, 24)

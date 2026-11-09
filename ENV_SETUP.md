@@ -41,6 +41,16 @@ Desktop loopback PCM is streamed continuously to one Azure OpenAI Realtime conve
 
 The app does not configure `audio.input.transcription`, does not use a transcription deployment, and does not make a second auto-answer model request.
 
+Realtime model diagnostics are enabled by default. Console lines prefixed with
+`realtime_model` include request metadata, session acknowledgements, speech boundaries,
+completed tool arguments/text, response status and status details, token usage, and
+server errors. Match response IDs and `client_turn_id` to trace a request. In particular,
+`response.done` distinguishes a completed `no_update` from a failed, cancelled, or
+token-limited response. These logs contain generated answer/project-update content;
+audio payloads and instructions (including resume context) are omitted. They do not
+provide a transcript or the model's internal reasoning. Set
+`AZURE_OPENAI_REALTIME_MODEL_LOG=false` to disable them. Restart the app after changing it.
+
 If Azure returns `OperationNotSupported` during the WebSocket handshake, the configured key/endpoint points to a resource that does not host a compatible Realtime deployment. Create or select the `gpt-realtime-2.1-mini` deployment in Azure and use that resource's key and endpoint; changing only the local deployment string cannot add the model to a resource.
 
 For faster turn completion, try:

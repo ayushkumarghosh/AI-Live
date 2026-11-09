@@ -46,6 +46,23 @@ class ProjectBridge:
                 self.end_headers()
                 self.wfile.write(raw)
 
+            def do_GET(self):
+                if self.headers.get('Origin') or not hmac.compare_digest(
+                        self.headers.get('Authorization', ''), 'Bearer ' + bridge.token):
+                    self.reply(401, {'error': 'Unauthorized'})
+                    return
+                if self.path != '/captures':
+                    self.reply(404, {'error': 'Unknown endpoint'})
+                    return
+                # Read-only diagnostic snapshot; never expose tokens or queue
+                # commands. Expired/disconnected reports are omitted by windows().
+                self.reply(200, {'windows': [
+                    {'window': state['window'], 'roots': state['roots'],
+                     'terminal': state.get('terminal'),
+                     'terminals': state.get('terminals', []),
+                     'age_seconds': max(0, time.monotonic() - state['seen'])}
+                    for state in bridge.windows()]})
+
             def do_POST(self):
                 # Drain a bounded body before responding, including rejections.
                 # Leaving bytes unread can reset the TCP connection on Windows
@@ -107,17 +124,13 @@ class ProjectBridge:
             raise ValueError('Invalid workspace name')
         dirty = body.get('dirty', [])
         terminal = body.get('terminal')
-        if terminal is not None:
-            if not isinstance(terminal, dict):
-                raise ValueError('Invalid terminal')
-            for field, limit in [('name', 200), ('cwd', 4000), ('command', 2000), ('output', 32000)]:
-                if not isinstance(terminal.get(field), str) or len(terminal[field]) > limit:
-                    raise ValueError('Invalid terminal ' + field)
-            if (type(terminal.get('running')) is not bool or type(terminal.get('truncated')) is not bool or
-                    (terminal.get('exit_code') is not None and type(terminal['exit_code']) is not int)):
-                raise ValueError('Invalid terminal status')
-            terminal = {key: terminal[key] for key in
-                        ('name', 'cwd', 'command', 'output', 'running', 'truncated', 'exit_code')}
+        terminal = self._validate_terminal(terminal) if terminal is not None else None
+        terminals = body.get('terminals', [])
+        if not isinstance(terminals, list) or len(terminals) > 20:
+            raise ValueError('Invalid terminals')
+        terminals = [self._validate_terminal(item, identity_required=True) for item in terminals]
+        if len({item['id'] for item in terminals}) != len(terminals):
+            raise ValueError('Duplicate terminal id')
         diagnostics = body.get('diagnostics', [])
         if (not isinstance(dirty, list) or not all(isinstance(p, str) for p in dirty) or
                 not isinstance(diagnostics, list) or len(diagnostics) > 500):
@@ -133,11 +146,45 @@ class ProjectBridge:
                 focus_time = previous.get('focus_time', 0)
             self.clients[window] = dict(window=window, roots=roots, active=active,
                 workspace_name=workspace_name,
-                terminal=terminal,
+                terminal=terminal, terminals=terminals,
                 dirty=dirty, diagnostics=diagnostics, focused=focused, focus_time=focus_time, seen=now,
                 ack=body.get('ack', ''))
             self.condition.notify_all()
             return {'commands': self.commands.pop(window, []), 'refresh': self.refresh_requests.get(window, '')}
+
+    @staticmethod
+    def _validate_terminal(terminal, identity_required=False):
+        if not isinstance(terminal, dict):
+            raise ValueError('Invalid terminal')
+        fields = ('name', 'cwd', 'command', 'output', 'running', 'truncated', 'exit_code')
+        for field, limit in [('name', 200), ('cwd', 4000), ('command', 2000), ('output', 32000)]:
+            if not isinstance(terminal.get(field), str) or len(terminal[field]) > limit:
+                raise ValueError('Invalid terminal ' + field)
+        if (type(terminal.get('running')) is not bool or type(terminal.get('truncated')) is not bool or
+                (terminal.get('exit_code') is not None and type(terminal['exit_code']) is not int)):
+            raise ValueError('Invalid terminal status')
+        identity = ('id', 'execution_id', 'revision')
+        if identity_required or any(field in terminal for field in identity):
+            for field in identity[:2]:
+                if not isinstance(terminal.get(field), str) or not 1 <= len(terminal[field]) <= 100:
+                    raise ValueError('Invalid terminal ' + field)
+            if type(terminal.get('revision')) is not int or not 0 <= terminal['revision'] <= 9007199254740991:
+                raise ValueError('Invalid terminal revision')
+            fields += identity
+        return {key: terminal.get(key) for key in fields}
+
+    @staticmethod
+    def _terminal_in_root(terminal, root):
+        try:
+            cwd = terminal['cwd']
+            return bool(cwd) and Path(cwd).is_absolute() and Path(cwd).resolve().is_relative_to(Path(root).resolve())
+        except (OSError, ValueError):
+            return False
+
+    def terminals(self, window, root):
+        """Return captured terminals in this project from the current report."""
+        return [terminal for terminal in self.state(window, root).get('terminals', [])
+                if self._terminal_in_root(terminal, root)]
 
     def windows(self):
         with self.lock:
@@ -159,15 +206,21 @@ class ProjectBridge:
             self.commands.setdefault(window, []).append(dict(type='open', root=str(Path(root).resolve()),
                                                              path=str(path), line=max(1, int(line))))
 
-    def terminal_output(self, window, root):
-        terminal = self.fresh_state(window, root).get('terminal')
+    def terminal_output(self, window, root, terminal_id=None):
+        state = self.fresh_state(window, root)
+        if terminal_id is not None:
+            terminal = next((item for item in state.get('terminals', []) if item['id'] == terminal_id), None)
+            if terminal is None:
+                raise GuideError('The pinned terminal closed or is no longer captured. Select a terminal again.')
+        else:
+            terminal = state.get('terminal')
         if not terminal:
             raise GuideError('No terminal command output captured. Reload VS Code with the updated AI-Live '
                              'extension, then run your command in a terminal with shell integration enabled '
                              'and click Check terminal output again.')
         if not terminal['cwd'] or not Path(terminal['cwd']).is_absolute():
             raise GuideError('The terminal did not report its working folder. Use a shell with VS Code shell integration.')
-        if not Path(terminal['cwd']).resolve().is_relative_to(Path(root).resolve()):
+        if not self._terminal_in_root(terminal, root):
             raise GuideError('Select a terminal whose last command ran inside this project, then check again.')
         if not terminal['output'].strip() and terminal['exit_code'] is None:
             raise GuideError('The terminal command has not produced output yet. Wait for output and check again.')

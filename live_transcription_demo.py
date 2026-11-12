@@ -3,7 +3,7 @@ from datetime import datetime
 
 from PyQt6 import QtCore, QtWidgets
 
-from azure_realtime import build_realtime_answer_instructions
+from openai_realtime import build_realtime_answer_instructions
 from live_transcription import LiveAudioManager
 from overlay import DraggableOverlay
 from resume_context import get_resume_context_section

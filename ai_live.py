@@ -27,7 +27,7 @@ from chat import (
     shorten_analysis_answer,
 )
 from session_context import replace_latest_exchange_response
-from azure_realtime import build_realtime_answer_instructions
+from openai_realtime import build_realtime_answer_instructions
 from live_transcription import LiveAudioManager
 from overlay import DraggableOverlay, initialize_windows_ole, uninitialize_windows_ole
 

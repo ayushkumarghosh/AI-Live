@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from project_guide.context import publish, get_project_guide_context_section
 from project_guide.session import GuideSession
-from azure_realtime import build_realtime_answer_instructions, AzureRealtimeAnswerSession
+from openai_realtime import build_realtime_answer_instructions, OpenAIRealtimeAnswerSession
 
 
 class GuideContextTests(unittest.TestCase):
@@ -11,7 +11,7 @@ class GuideContextTests(unittest.TestCase):
         publish(None)
 
     def test_realtime_response_reads_latest_context_and_removes_cleared_context(self):
-        audio = AzureRealtimeAnswerSession(instructions_provider=lambda:
+        audio = OpenAIRealtimeAnswerSession(instructions_provider=lambda:
             build_realtime_answer_instructions('', get_project_guide_context_section()))
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, 'README.md').write_text('Implement a queue')

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from azure_realtime import build_realtime_answer_instructions
+from openai_realtime import build_realtime_answer_instructions
 import resume_context
 import session_context
 

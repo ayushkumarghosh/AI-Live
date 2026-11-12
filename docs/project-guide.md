@@ -8,7 +8,7 @@ Project Guide turns a saved problem statement into step-by-step suggestions. It 
 2. Install the companion VSIX using VS Code's **Install from VSIX** action. Build it using `npm ci`, `npm test`, and `npm run package` in `vscode-project-guide`, or use the VSIX produced by `build_exe.ps1`.
 3. Open a trusted local Windows workspace. Start AI-Live and click **Project Guide**. The companion connects automatically; click **Refresh** if it is still starting.
 
-Codex authentication is reused, while user configuration, rules, plugins, hooks, shell, editing, browser, and computer-use capabilities are excluded from guide runs. The CLI's built-in default model is used, rather than the existing Azure manual-analysis model. The guide sends selected project content to Codex through the signed-in account.
+Codex authentication is reused, while user configuration, rules, plugins, hooks, shell, editing, browser, and computer-use capabilities are excluded from guide runs. The guide uses the CLI's default model. The guide sends selected project content to Codex through the signed-in account.
 
 ## Workflow
 

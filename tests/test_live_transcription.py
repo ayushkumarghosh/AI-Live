@@ -64,7 +64,7 @@ class LiveAudioManagerTests(unittest.TestCase):
         )
 
         with (
-            patch("live_transcription.AzureRealtimeAnswerSession", FakeRealtimeSession),
+            patch("live_transcription.OpenAIRealtimeAnswerSession", FakeRealtimeSession),
             patch("live_transcription.threading.Thread", FakeThread),
         ):
             self.assertTrue(manager.start())

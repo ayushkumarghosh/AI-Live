@@ -5,13 +5,13 @@ import os
 import unittest
 from unittest.mock import patch
 
-import azure_realtime
+import openai_realtime
 
 
 class RealtimeLoggingTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_completion_logs_status_output_and_usage(self):
-        with patch.dict(os.environ, {"AZURE_OPENAI_REALTIME_MODEL_LOG": "true"}):
-            session = azure_realtime.AzureRealtimeAnswerSession()
+        with patch.dict(os.environ, {"OPENAI_REALTIME_MODEL_LOG": "true"}):
+            session = openai_realtime.OpenAIRealtimeAnswerSession()
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 await session.handle_server_event({"type": "response.done", "response": {
@@ -31,8 +31,8 @@ class RealtimeLoggingTests(unittest.IsolatedAsyncioTestCase):
             async def send(self, payload):
                 pass
 
-        with patch.dict(os.environ, {"AZURE_OPENAI_REALTIME_MODEL_LOG": "true"}):
-            session = azure_realtime.AzureRealtimeAnswerSession()
+        with patch.dict(os.environ, {"OPENAI_REALTIME_MODEL_LOG": "true"}):
+            session = openai_realtime.OpenAIRealtimeAnswerSession()
             session.websocket = Socket()
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
@@ -48,8 +48,8 @@ class RealtimeLoggingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("You are a realtime", log)
 
     async def test_logging_can_be_disabled(self):
-        with patch.dict(os.environ, {"AZURE_OPENAI_REALTIME_MODEL_LOG": "false"}):
-            session = azure_realtime.AzureRealtimeAnswerSession()
+        with patch.dict(os.environ, {"OPENAI_REALTIME_MODEL_LOG": "false"}):
+            session = openai_realtime.OpenAIRealtimeAnswerSession()
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 await session.handle_server_event({"type": "session.created", "session": {"id": "hidden"}})

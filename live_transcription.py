@@ -24,9 +24,9 @@ np.fromstring = _fromstring_compat
 import soundcard as sc
 import soundcard.mediafoundation as _sc_mediafoundation
 
-from azure_realtime import AzureRealtimeAnswerSession
-from azure_realtime import CHUNK_SIZE as AZURE_CHUNK_SIZE
-from azure_realtime import SAMPLE_RATE as AZURE_SAMPLE_RATE
+from openai_realtime import OpenAIRealtimeAnswerSession
+from openai_realtime import CHUNK_SIZE as REALTIME_CHUNK_SIZE
+from openai_realtime import SAMPLE_RATE as REALTIME_SAMPLE_RATE
 
 try:
     import pyaudio
@@ -144,8 +144,8 @@ def _patch_soundcard_waveformatex_recorder():
 _patch_soundcard_waveformatex_recorder()
 
 FORMAT = pyaudio.paInt16 if pyaudio else None
-RATE = AZURE_SAMPLE_RATE
-CHUNK = AZURE_CHUNK_SIZE
+RATE = REALTIME_SAMPLE_RATE
+CHUNK = REALTIME_CHUNK_SIZE
 
 
 def _float_audio_to_pcm16_bytes(audio_data):
@@ -177,7 +177,7 @@ class LiveAudioManager:
             return False
 
         print(f"{timestamp()} Starting desktop audio Realtime answering", flush=True)
-        self.realtime_session = AzureRealtimeAnswerSession(
+        self.realtime_session = OpenAIRealtimeAnswerSession(
             answer_update_callback=self.answer_update_callback,
             session_reset_callback=self.session_reset_callback,
             status_callback=self.status_callback,

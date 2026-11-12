@@ -20,7 +20,7 @@ from session_context import (
 load_env_file()
 
 
-ANALYSIS_MODEL = os.getenv("AZURE_OPENAI_ANALYSIS_DEPLOYMENT", "gpt-5.5")
+ANALYSIS_MODEL = os.getenv("OPENAI_ANALYSIS_MODEL", "gpt-5.5")
 SHORTENABLE_ANALYSIS_MODES = {"code", "general"}
 ANALYSIS_REASONING_EFFORTS = {"code": "medium", "general": "low"}
 
@@ -72,36 +72,10 @@ def timestamp():
     return f"[{datetime.now().strftime('%H:%M:%S')}]"
 
 
-def _required_env(name: str, fallback_name: Optional[str] = None) -> str:
-    value = os.getenv(name, "").strip()
-    if not value and fallback_name:
-        value = os.getenv(fallback_name, "").strip()
-    if not value:
-        if fallback_name:
-            raise RuntimeError(
-                f"{name} is not set, and fallback {fallback_name} is not set. "
-                "Add one of them to .env or your environment."
-            )
-        raise RuntimeError(f"{name} is not set. Add it to .env or your environment.")
-    return value
-
-
-def _azure_base_url(endpoint_name: str) -> str:
-    endpoint = _required_env(endpoint_name, "AZURE_OPENAI_ENDPOINT").rstrip("/")
-    if endpoint.endswith("/openai/v1"):
-        return endpoint + "/"
-    if endpoint.endswith("/openai"):
-        return endpoint + "/v1/"
-    return endpoint + "/openai/v1/"
-
-
 def get_analysis_client() -> OpenAI:
     global _analysis_client
     if _analysis_client is None:
-        _analysis_client = OpenAI(
-            api_key=_required_env("AZURE_OPENAI_ANALYSIS_API_KEY", "AZURE_OPENAI_API_KEY"),
-            base_url=_azure_base_url("AZURE_OPENAI_ANALYSIS_ENDPOINT"),
-        )
+        _analysis_client = OpenAI()
     return _analysis_client
 
 
@@ -282,7 +256,7 @@ def _responses_create_with_retries(client: OpenAI, **kwargs):
             last_exc = exc
             if retry == 2:
                 break
-            print(f"{timestamp()} Azure OpenAI request failed, retrying: {exc}", flush=True)
+            print(f"{timestamp()} OpenAI request failed, retrying: {exc}", flush=True)
             time.sleep(1.5)
     raise last_exc
 
@@ -325,7 +299,7 @@ def _send_analysis_message(
         )
     except Exception as exc:
         raise RuntimeError(
-            f"Azure OpenAI analysis request failed for deployment {ANALYSIS_MODEL!r} "
+            f"OpenAI analysis request failed for model {ANALYSIS_MODEL!r} "
             f"with reasoning effort {reasoning_effort!r}. "
             f"Original error: {exc}"
         ) from exc
@@ -404,7 +378,7 @@ def shorten_analysis_answer(previous_answer: str, mode: str) -> Dict[str, str]:
             )
         except Exception as exc:
             raise RuntimeError(
-                f"Azure OpenAI answer-shortening request failed for deployment {ANALYSIS_MODEL!r} "
+                f"OpenAI answer-shortening request failed for model {ANALYSIS_MODEL!r} "
                 "with reasoning effort disabled (reasoning.effort='none'). "
                 f"Original error: {exc}"
             ) from exc

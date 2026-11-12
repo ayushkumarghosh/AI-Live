@@ -6,7 +6,7 @@ import sys
 import threading
 import time
 from datetime import datetime
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import websockets
 
@@ -16,7 +16,7 @@ from project_guide.conversation import project_update_store as default_project_u
 
 load_env_file()
 
-REALTIME_DEPLOYMENT = os.getenv("AZURE_OPENAI_REALTIME_DEPLOYMENT", "").strip()
+DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini"
 ANSWER_TOOL_NAME = "update_visible_answer"
 ANSWER_UPDATE_TOOL = {
     "type": "function",
@@ -94,7 +94,7 @@ configure_console_encoding()
 SAMPLE_RATE = parse_int_env("SAMPLE_RATE", 24000)
 if SAMPLE_RATE != 24000:
     print(
-        f"[{datetime.now().strftime('%H:%M:%S')}] Azure Realtime expects 24000 Hz PCM input; "
+        f"[{datetime.now().strftime('%H:%M:%S')}] OpenAI Realtime expects 24000 Hz PCM input; "
         f"using 24000 instead of {SAMPLE_RATE}",
         flush=True,
     )
@@ -102,9 +102,9 @@ if SAMPLE_RATE != 24000:
 
 CHANNELS = parse_int_env("CHANNELS", 1)
 CHUNK_SIZE = parse_int_env("CHUNK_SIZE", 1024)
-VAD_SILENCE_MS = parse_int_env("AZURE_OPENAI_VAD_SILENCE_MS", 350)
-VAD_PREFIX_PADDING_MS = parse_int_env("AZURE_OPENAI_VAD_PREFIX_PADDING_MS", 300)
-VAD_THRESHOLD = parse_float_env("AZURE_OPENAI_VAD_THRESHOLD", 0.5)
+VAD_SILENCE_MS = parse_int_env("OPENAI_VAD_SILENCE_MS", 350)
+VAD_PREFIX_PADDING_MS = parse_int_env("OPENAI_VAD_PREFIX_PADDING_MS", 300)
+VAD_THRESHOLD = parse_float_env("OPENAI_VAD_THRESHOLD", 0.5)
 LATENCY_LOG_ENABLED = os.getenv("AUTO_ANSWER_LATENCY_LOG", "false").strip().lower() in {
     "1",
     "true",
@@ -136,13 +136,8 @@ def _required_env(name):
     return value
 
 
-def _realtime_url(deployment, endpoint=None):
-    endpoint = (endpoint or _required_env("AZURE_OPENAI_REALTIME_ENDPOINT")).rstrip("/")
-    parsed = urlparse(endpoint)
-    host = parsed.netloc or parsed.path
-    if not host:
-        raise RuntimeError("AZURE_OPENAI_REALTIME_ENDPOINT is not a valid Azure endpoint.")
-    return f"wss://{host}/openai/v1/realtime?model={quote(deployment)}"
+def _realtime_url(model):
+    return f"wss://api.openai.com/v1/realtime?model={quote(model, safe='')}"
 
 
 def _format_websocket_error(exc):
@@ -164,7 +159,7 @@ def _format_websocket_error(exc):
 
 
 async def _connect_websocket(url, api_key):
-    headers = [("api-key", api_key)]
+    headers = [("Authorization", f"Bearer {api_key}")]
     try:
         return await websockets.connect(url, additional_headers=headers, max_size=None)
     except TypeError:
@@ -252,7 +247,7 @@ def validate_answer_update(arguments):
     return action, text
 
 
-class AzureRealtimeAnswerSession:
+class OpenAIRealtimeAnswerSession:
     def __init__(
         self,
         answer_update_callback=None,
@@ -300,18 +295,17 @@ class AzureRealtimeAnswerSession:
         self._protocol_errors = {}
         self._committed_responses = set()
         self._retry_counts = {}
-        self.model_log_enabled = os.getenv("AZURE_OPENAI_REALTIME_MODEL_LOG", "true").strip().lower() in {
+        self.model_log_enabled = os.getenv("OPENAI_REALTIME_MODEL_LOG", "true").strip().lower() in {
             "1", "true", "yes", "on",
         }
 
+        self.realtime_model = os.getenv("OPENAI_REALTIME_MODEL", "").strip() or DEFAULT_REALTIME_MODEL
         try:
-            self.api_key = _required_env("AZURE_OPENAI_REALTIME_API_KEY")
-            self.realtime_deployment = _required_env("AZURE_OPENAI_REALTIME_DEPLOYMENT")
-            self.url = _realtime_url(self.realtime_deployment)
+            self.api_key = _required_env("OPENAI_API_KEY")
+            self.url = _realtime_url(self.realtime_model)
         except RuntimeError as exc:
             print(f"{timestamp()} {exc}", flush=True)
             self.api_key = None
-            self.realtime_deployment = REALTIME_DEPLOYMENT
             self.url = None
 
     def _instructions(self):
@@ -373,7 +367,7 @@ class AzureRealtimeAnswerSession:
             "type": "session.update",
             "session": {
                 "type": "realtime",
-                "model": self.realtime_deployment,
+                "model": self.realtime_model,
                 "output_modalities": ["text"],
                 "instructions": self._instructions(),
                 "max_output_tokens": 2048,
@@ -635,9 +629,9 @@ class AzureRealtimeAnswerSession:
             return
 
         if event_type == "error":
-            print(f"{timestamp()} Azure Realtime error: {event.get('error', {})}", flush=True)
+            print(f"{timestamp()} OpenAI Realtime error: {event.get('error', {})}", flush=True)
 
-    async def send_audio_to_azure(self):
+    async def send_audio_to_openai(self):
         while self.running:
             audio_chunk = await self.audio_queue.get()
             try:
@@ -679,7 +673,7 @@ class AzureRealtimeAnswerSession:
                 break
 
     async def _run_connection(self):
-        send_task = asyncio.create_task(self.send_audio_to_azure())
+        send_task = asyncio.create_task(self.send_audio_to_openai())
         process_task = asyncio.create_task(self.process_responses())
         self.tasks = [send_task, process_task]
         done, pending = await asyncio.wait(self.tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -695,7 +689,7 @@ class AzureRealtimeAnswerSession:
 
     async def run(self):
         if not self.api_key or not self.url:
-            print(f"{timestamp()} Cannot start Azure Realtime answering without credentials", flush=True)
+            print(f"{timestamp()} Cannot start OpenAI Realtime answering without credentials", flush=True)
             return
 
         self.audio_queue = asyncio.Queue(maxsize=100)
@@ -712,8 +706,8 @@ class AzureRealtimeAnswerSession:
                 self._connected_once = True
                 self._intentional_reset = False
                 print(
-                    f"{timestamp()} Azure desktop Realtime answer session started "
-                    f"with deployment {self.realtime_deployment!r}",
+                    f"{timestamp()} OpenAI desktop Realtime answer session started "
+                    f"with model {self.realtime_model!r}",
                     flush=True,
                 )
                 if was_reconnect and not intentional_reconnect and self.session_reset_callback:
@@ -724,8 +718,8 @@ class AzureRealtimeAnswerSession:
             except Exception as exc:
                 if self.running:
                     print(
-                        f"{timestamp()} Azure Realtime answer session error for deployment "
-                        f"{self.realtime_deployment!r}: {_format_websocket_error(exc)}",
+                        f"{timestamp()} OpenAI Realtime answer session error for model "
+                        f"{self.realtime_model!r}: {_format_websocket_error(exc)}",
                         flush=True,
                     )
                     if not self._intentional_reset:
@@ -740,12 +734,12 @@ class AzureRealtimeAnswerSession:
                     except Exception:
                         pass
                 self.websocket = None
-                print(f"{timestamp()} Azure desktop Realtime answer session closed", flush=True)
+                print(f"{timestamp()} OpenAI desktop Realtime answer session closed", flush=True)
 
             if not self.running:
                 break
             if not self._intentional_reset and self._error_retries > 3:
-                print(f"{timestamp()} Azure Realtime reconnect limit reached", flush=True)
+                print(f"{timestamp()} OpenAI Realtime reconnect limit reached", flush=True)
                 break
             await asyncio.sleep(1)
 
@@ -770,9 +764,8 @@ class AzureRealtimeAnswerSession:
     def start(self):
         if not self.api_key or not self.url:
             print(
-                f"{timestamp()} Cannot start Azure Realtime answering. Set "
-                "AZURE_OPENAI_REALTIME_API_KEY, AZURE_OPENAI_REALTIME_ENDPOINT, and "
-                "AZURE_OPENAI_REALTIME_DEPLOYMENT.",
+                f"{timestamp()} Cannot start OpenAI Realtime answering. Set "
+                "OPENAI_API_KEY.",
                 flush=True,
             )
             return False
@@ -780,7 +773,7 @@ class AzureRealtimeAnswerSession:
             return True
 
         print(
-            f"{timestamp()} Azure desktop Realtime config: chunk_size={self.chunk_size} "
+            f"{timestamp()} OpenAI desktop Realtime config: chunk_size={self.chunk_size} "
             f"vad_silence_ms={VAD_SILENCE_MS} vad_threshold={VAD_THRESHOLD} "
             f"vad_prefix_padding_ms={VAD_PREFIX_PADDING_MS}",
             flush=True,
@@ -837,8 +830,8 @@ class AzureRealtimeAnswerSession:
                 asyncio.run_coroutine_threadsafe(self.websocket.close(), self.loop)
             except RuntimeError:
                 pass
-        print(f"{timestamp()} Azure desktop Realtime answer session stopped", flush=True)
+        print(f"{timestamp()} OpenAI desktop Realtime answer session stopped", flush=True)
 
     def cleanup(self):
         self.stop()
-        print(f"{timestamp()} Azure desktop Realtime answer session cleaned up", flush=True)
+        print(f"{timestamp()} OpenAI desktop Realtime answer session cleaned up", flush=True)

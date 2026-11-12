@@ -152,5 +152,5 @@ Write-Host "Size: $sizeMb MB"
 if ($CopyEnv) {
     Write-Host "Environment file: $DistEnv"
 } else {
-    Write-Host "Use -CopyEnv to copy .env beside the executable, or set the Azure environment variables before running it."
+    Write-Host "Use -CopyEnv to copy .env beside the executable, or set the OPENAI_API_KEY environment variable before running it."
 }

@@ -4,7 +4,7 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
-import azure_realtime
+import openai_realtime
 
 
 class FakeWebSocket:
@@ -19,37 +19,28 @@ class FakeWebSocket:
         self.closed = True
 
 
-class AzureRealtimeConfigTests(unittest.TestCase):
+class OpenAIRealtimeConfigTests(unittest.TestCase):
     def test_vad_env_parsers_use_defaults_for_missing_or_invalid_values(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(azure_realtime.parse_int_env("AZURE_OPENAI_VAD_SILENCE_MS", 350), 350)
-            self.assertEqual(azure_realtime.parse_float_env("AZURE_OPENAI_VAD_THRESHOLD", 0.5), 0.5)
+            self.assertEqual(openai_realtime.parse_int_env("OPENAI_VAD_SILENCE_MS", 350), 350)
+            self.assertEqual(openai_realtime.parse_float_env("OPENAI_VAD_THRESHOLD", 0.5), 0.5)
 
         with patch.dict(
             os.environ,
             {
-                "AZURE_OPENAI_VAD_SILENCE_MS": "-1",
-                "AZURE_OPENAI_VAD_THRESHOLD": "bad",
+                "OPENAI_VAD_SILENCE_MS": "-1",
+                "OPENAI_VAD_THRESHOLD": "bad",
             },
             clear=True,
         ):
-            self.assertEqual(azure_realtime.parse_int_env("AZURE_OPENAI_VAD_SILENCE_MS", 350), 350)
-            self.assertEqual(azure_realtime.parse_float_env("AZURE_OPENAI_VAD_THRESHOLD", 0.5), 0.5)
+            self.assertEqual(openai_realtime.parse_int_env("OPENAI_VAD_SILENCE_MS", 350), 350)
+            self.assertEqual(openai_realtime.parse_float_env("OPENAI_VAD_THRESHOLD", 0.5), 0.5)
 
-    def test_realtime_url_uses_only_realtime_endpoint(self):
-        with patch.dict(
-            os.environ,
-            {
-                "AZURE_OPENAI_REALTIME_ENDPOINT": "https://realtime-resource.openai.azure.com",
-                "AZURE_OPENAI_TRANSCRIPTION_ENDPOINT": "https://wrong-resource.openai.azure.com",
-            },
-            clear=True,
-        ):
-            url = azure_realtime._realtime_url("gpt-realtime-2.1-mini")
-
+    def test_realtime_url_uses_openai_endpoint(self):
+        url = openai_realtime._realtime_url("gpt-realtime-2.1-mini")
         self.assertEqual(
             url,
-            "wss://realtime-resource.openai.azure.com/openai/v1/realtime?model=gpt-realtime-2.1-mini",
+            "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1-mini",
         )
 
     def test_realtime_session_does_not_fall_back_to_legacy_credentials(self):
@@ -58,22 +49,22 @@ class AzureRealtimeConfigTests(unittest.TestCase):
             {
                 "AZURE_OPENAI_TRANSCRIPTION_API_KEY": "legacy-key",
                 "AZURE_OPENAI_TRANSCRIPTION_ENDPOINT": "https://legacy.openai.azure.com",
-                "AZURE_OPENAI_REALTIME_DEPLOYMENT": "gpt-realtime-2.1-mini",
+                "OPENAI_REALTIME_MODEL": "gpt-realtime-2.1-mini",
             },
             clear=True,
         ):
-            session = azure_realtime.AzureRealtimeAnswerSession()
+            session = openai_realtime.OpenAIRealtimeAnswerSession()
 
         self.assertIsNone(session.api_key)
         self.assertIsNone(session.url)
 
     def test_answer_update_validation(self):
         self.assertEqual(
-            azure_realtime.validate_answer_update('{"action":"append","text":" More detail. "}'),
+            openai_realtime.validate_answer_update('{"action":"append","text":" More detail. "}'),
             ("append", "More detail."),
         )
         self.assertEqual(
-            azure_realtime.validate_answer_update({"action": "no_update", "text": ""}),
+            openai_realtime.validate_answer_update({"action": "no_update", "text": ""}),
             ("no_update", ""),
         )
         for payload in (
@@ -84,35 +75,27 @@ class AzureRealtimeConfigTests(unittest.TestCase):
             {"action": "reset", "text": "answer", "extra": True},
         ):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
-                azure_realtime.validate_answer_update(payload)
+                openai_realtime.validate_answer_update(payload)
 
 
-class AzureRealtimeProtocolTests(unittest.IsolatedAsyncioTestCase):
+class OpenAIRealtimeProtocolTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.env_patch = patch.dict(
             os.environ,
             {
-                "AZURE_OPENAI_REALTIME_API_KEY": "test-key",
-                "AZURE_OPENAI_REALTIME_ENDPOINT": "https://test-resource.openai.azure.com",
-                "AZURE_OPENAI_REALTIME_DEPLOYMENT": "gpt-realtime-2.1-mini",
+                "OPENAI_API_KEY": "test-key",
+                "OPENAI_REALTIME_MODEL": "gpt-realtime-2.1-mini",
             },
             clear=False,
         )
         self.env_patch.start()
-        self.deployment_patch = patch.object(
-            azure_realtime,
-            "REALTIME_DEPLOYMENT",
-            "gpt-realtime-2.1-mini",
-        )
-        self.deployment_patch.start()
 
     def tearDown(self):
-        self.deployment_patch.stop()
         self.env_patch.stop()
 
     def make_session(self, updates=None, statuses=None):
         update_target = updates if updates is not None else []
-        session = azure_realtime.AzureRealtimeAnswerSession(
+        session = openai_realtime.OpenAIRealtimeAnswerSession(
             answer_update_callback=lambda action, text: update_target.append((action, text)),
             status_callback=(lambda status, color: statuses.append((status, color))) if statuses is not None else None,
             instructions_provider=lambda: "test interview instructions",
@@ -131,7 +114,7 @@ class AzureRealtimeProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config["audio"]["input"]["format"], {"type": "audio/pcm", "rate": 24000})
         self.assertFalse(config["audio"]["input"]["turn_detection"]["create_response"])
         self.assertNotIn("transcription", config["audio"]["input"])
-        self.assertEqual(config["tools"], [azure_realtime.ANSWER_UPDATE_TOOL])
+        self.assertEqual(config["tools"], [openai_realtime.ANSWER_UPDATE_TOOL])
         self.assertEqual(
             config["tool_choice"],
             {"type": "function", "name": "update_visible_answer"},
@@ -163,7 +146,7 @@ class AzureRealtimeProtocolTests(unittest.IsolatedAsyncioTestCase):
         session.audio_queue = asyncio.Queue()
         await session.audio_queue.put(b"\x01\x02")
 
-        task = asyncio.create_task(session.send_audio_to_azure())
+        task = asyncio.create_task(session.send_audio_to_openai())
         for _ in range(10):
             if session.websocket.messages:
                 break
@@ -308,7 +291,7 @@ class AzureRealtimeProtocolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_successful_unexpected_reconnect_notifies_the_ui_to_clear_context(self):
         resets = []
-        session = azure_realtime.AzureRealtimeAnswerSession(
+        session = openai_realtime.OpenAIRealtimeAnswerSession(
             session_reset_callback=lambda: resets.append(True),
             instructions_provider=lambda: "instructions",
         )
@@ -329,9 +312,9 @@ class AzureRealtimeProtocolTests(unittest.IsolatedAsyncioTestCase):
 
         session.running = True
         with (
-            patch("azure_realtime._connect_websocket", side_effect=fake_connect),
+            patch("openai_realtime._connect_websocket", side_effect=fake_connect),
             patch.object(session, "_run_connection", side_effect=fake_run_connection),
-            patch("azure_realtime.asyncio.sleep", side_effect=no_delay),
+            patch("openai_realtime.asyncio.sleep", side_effect=no_delay),
         ):
             await session.run()
 
@@ -363,9 +346,9 @@ class AzureRealtimeProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response_creates[0]["response"]["metadata"]["attempt"], "1")
 
 class ProjectExtractionTests(unittest.IsolatedAsyncioTestCase):
-    setUp = AzureRealtimeProtocolTests.setUp
-    tearDown = AzureRealtimeProtocolTests.tearDown
-    make_session = AzureRealtimeProtocolTests.make_session
+    setUp = OpenAIRealtimeProtocolTests.setUp
+    tearDown = OpenAIRealtimeProtocolTests.tearDown
+    make_session = OpenAIRealtimeProtocolTests.make_session
 
     async def start_project_response(self):
         from project_guide.conversation import ProjectUpdateStore
@@ -391,11 +374,11 @@ class ProjectExtractionTests(unittest.IsolatedAsyncioTestCase):
             'response': {'id': 'r', 'status': status}})
 
     async def test_project_field_validation_preserves_pair_api(self):
-        self.assertEqual(azure_realtime.validate_answer_update({
+        self.assertEqual(openai_realtime.validate_answer_update({
             'action': 'no_update', 'text': '', 'project_update': 'Use SQLite.'}), ('no_update', ''))
         for value in [None, 42, [], {}]:
             with self.assertRaises(ValueError):
-                azure_realtime.validate_answer_update({'action': 'no_update', 'text': '', 'project_update': value})
+                openai_realtime.validate_answer_update({'action': 'no_update', 'text': '', 'project_update': value})
 
     async def test_no_update_records_only_after_success(self):
         session = await self.start_project_response()
@@ -492,7 +475,7 @@ class ProjectExtractionTests(unittest.IsolatedAsyncioTestCase):
     async def test_malformed_action_is_validation_error(self):
         for action in [[], {}]:
             with self.assertRaises(ValueError):
-                azure_realtime.validate_answer_update({'action': action, 'text': '', 'project_update': 'x'})
+                openai_realtime.validate_answer_update({'action': action, 'text': '', 'project_update': 'x'})
 
     async def test_speech_start_binds_project_before_selection_changes(self):
         for initial in ['project-a', '']:

@@ -34,7 +34,7 @@ class ChatContextTests(unittest.TestCase):
 
         request_text = create.call_args.kwargs["input"][0]["content"][0]["text"]
         self.assertEqual(result["response"], "latest answer")
-        self.assertEqual(create.call_args.kwargs["reasoning"], {"effort": "low"})
+        self.assertEqual(create.call_args.kwargs["reasoning"], {"effort": "medium"})
         self.assertIn("Current analysis mode: general.", request_text)
         self.assertIn("Interviewer: Tell me about indexes.", request_text)
         self.assertEqual(session_context.snapshot()["exchanges"][0]["mode"], "general")

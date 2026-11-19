@@ -14,6 +14,7 @@ MAX_TRANSCRIPT_TURNS = 12
 MAX_AI_EXCHANGES = 8
 MAX_SUMMARY_CHARS = 6000
 MAX_FIELD_CHARS = 1200
+SHORTENABLE_ANALYSIS_MODES = {"code": "Code Analysis", "general": "General Analysis", "hs": "HS answer"}
 
 
 @dataclass

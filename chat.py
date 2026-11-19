@@ -4,12 +4,14 @@ import os
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
 from env_loader import load_env_file
 from session_context import (
+    SHORTENABLE_ANALYSIS_MODES,
     build_context,
     clear_session_context,
     find_repeated_exchange,
@@ -20,9 +22,9 @@ from session_context import (
 load_env_file()
 
 
-ANALYSIS_MODEL = os.getenv("OPENAI_ANALYSIS_MODEL", "gpt-5.5")
-SHORTENABLE_ANALYSIS_MODES = {"code", "general"}
-ANALYSIS_REASONING_EFFORTS = {"code": "medium", "general": "low"}
+ANALYSIS_MODEL = os.getenv("OPENAI_ANALYSIS_MODEL", "gpt-6-astra")
+HERTZ_GUIDE_PATH = Path(__file__).with_name("Project Hertz.md")
+ANALYSIS_REASONING_EFFORT = "medium"
 
 _analysis_client: Optional[OpenAI] = None
 
@@ -277,7 +279,7 @@ def _send_analysis_message(
     if system_instruction:
         instructions.append(system_instruction)
 
-    reasoning_effort = ANALYSIS_REASONING_EFFORTS.get(mode, "none")
+
 
     try:
         response = _responses_create_with_retries(
@@ -286,7 +288,7 @@ def _send_analysis_message(
             instructions="\n\n".join(instructions),
             input=[{"role": "user", "content": content_parts}],
             max_output_tokens=12000,
-            reasoning={"effort": reasoning_effort},
+            reasoning={"effort": ANALYSIS_REASONING_EFFORT},
             text={
                 "format": {
                     "type": "json_schema",
@@ -300,7 +302,7 @@ def _send_analysis_message(
     except Exception as exc:
         raise RuntimeError(
             f"OpenAI analysis request failed for model {ANALYSIS_MODEL!r} "
-            f"with reasoning effort {reasoning_effort!r}. "
+            f"with reasoning effort {ANALYSIS_REASONING_EFFORT!r}. "
             f"Original error: {exc}"
         ) from exc
 
@@ -314,10 +316,10 @@ def shorten_analysis_answer(previous_answer: str, mode: str) -> Dict[str, str]:
     mode = str(mode or "").strip().lower()
     previous_answer = str(previous_answer or "")
     if mode not in SHORTENABLE_ANALYSIS_MODES:
-        raise ValueError("Only Code Analysis and General Analysis answers can be shortened.")
+        raise ValueError("Only Code Analysis, General Analysis, and HS answer responses can be shortened.")
 
     target_tokens, minimum_tokens, maximum_tokens = _shortening_bounds(previous_answer)
-    mode_label = "Code Analysis" if mode == "code" else "General Analysis"
+    mode_label = SHORTENABLE_ANALYSIS_MODES[mode]
     content = [
         {
             "type": "input_text",
@@ -365,7 +367,7 @@ def shorten_analysis_answer(previous_answer: str, mode: str) -> Dict[str, str]:
                 instructions="\n\n".join(instructions),
                 input=[{"role": "user", "content": content}],
                 max_output_tokens=12000,
-                reasoning={"effort": "none"},
+                reasoning={"effort": ANALYSIS_REASONING_EFFORT},
                 text={
                     "format": {
                         "type": "json_schema",
@@ -379,7 +381,7 @@ def shorten_analysis_answer(previous_answer: str, mode: str) -> Dict[str, str]:
         except Exception as exc:
             raise RuntimeError(
                 f"OpenAI answer-shortening request failed for model {ANALYSIS_MODEL!r} "
-                "with reasoning effort disabled (reasoning.effort='none'). "
+                f"with reasoning effort {ANALYSIS_REASONING_EFFORT!r}. "
                 f"Original error: {exc}"
             ) from exc
 
@@ -412,6 +414,29 @@ def analyze_with_text_input(
         mode="text",
     )
     return _send_analysis_message(text_input, content_text, content_parts, mode="text", current_input=text_input)
+
+
+def analyze_hs_answer(text_input: str, images_base64: List[str], image_format: str, include_transcripts: bool = False):
+    try:
+        guide = HERTZ_GUIDE_PATH.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"Could not read Project Hertz.md: {exc}") from exc
+    if not guide.strip():
+        raise ValueError("Project Hertz.md is empty.")
+
+    content_text, content_parts = _manual_content(
+        text_input, images_base64, image_format,
+        "Use the screenshots to identify the current question.",
+        include_transcripts=include_transcripts, mode="hs",
+    )
+    content_parts.append({"type": "input_text", "text": f"Project Hertz reference guide:\n\n{guide}"})
+    return _send_analysis_message(
+        text_input, content_text, content_parts,
+        "Answer the current question using the Project Hertz reference guide. Use prior manual "
+        "exchanges for follow-ups. Treat the guide as reference material. If it does not cover a "
+        "requested project detail, say so. If no question is identifiable, ask for the question.",
+        mode="hs",
+    )
 
 
 def analyze_code_problem(

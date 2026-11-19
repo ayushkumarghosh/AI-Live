@@ -20,7 +20,7 @@ Set your OpenAI API key in `.env`.
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `OPENAI_ANALYSIS_MODEL` | Manual analysis model. | `gpt-5.5` |
+| `OPENAI_ANALYSIS_MODEL` | Manual analysis model (medium reasoning). | `gpt-6-astra` |
 | `OPENAI_REALTIME_MODEL` | Realtime audio model. | `gpt-realtime-2.1-mini` |
 | `SAMPLE_RATE` | PCM input rate. Other values are normalized to 24 kHz. | `24000` |
 | `CHANNELS` | Audio channel count. Desktop audio is converted to mono. | `1` |

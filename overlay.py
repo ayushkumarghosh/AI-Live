@@ -12,6 +12,7 @@ import platform
 import os
 import threading
 from pathlib import Path
+from session_context import SHORTENABLE_ANALYSIS_MODES
 
 
 def configure_console_encoding():
@@ -673,6 +674,8 @@ def manual_answer_metadata(mode):
         return "Code Analysis", "code", UI["code"]
     if mode == "general":
         return "General Analysis", "document", UI["success"]
+    if mode == "hs":
+        return SHORTENABLE_ANALYSIS_MODES[mode], "document", UI["accent"]
     if mode == "text":
         return "Text Input", "text", UI["accent"]
     return "Manual Answer", "document", UI["accent"]
@@ -1561,7 +1564,7 @@ class CodeAnswerOverlay(QtWidgets.QWidget):
 # DraggableOverlay: the main overlay window.
 class DraggableOverlay(QtWidgets.QWidget):
     text_submitted = Signal(str)
-    project_guide_signal = Signal()
+    hs_answer_signal = Signal(str)
     
     # New signals for specialized analysis functions
     code_analysis_signal = Signal(str)  # For code problem analysis
@@ -1573,7 +1576,7 @@ class DraggableOverlay(QtWidgets.QWidget):
     resume_picker_result_signal = Signal(str, str)
     resume_upload_result_signal = Signal(bool, str, str)
 
-    # Signal for general analysis with low reasoning effort
+    # Signal for general analysis with medium reasoning effort
     general_analysis_no_thinking_signal = Signal(str)
     shorten_analysis_signal = Signal(str, str)
     
@@ -1787,7 +1790,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         self.resume_button = self._create_action_button("document", "Resume", "accent", self.upload_resume_pdf)
         self.clear_button = self._create_action_button("trash", "Clear Context", "danger", self.clear_history)
         self.code_analyze_button = self._create_action_button("code", "Code Analysis", "accent", self.execute_code_analyze)
-        self.project_guide_button = self._create_action_button("code", "Project Guide", "accent", self.project_guide_signal.emit)
+        self.hs_answer_button = self._create_action_button("document", "HS answer", "accent", self.execute_hs_answer)
         self.general_analyze_button_regular = self._create_action_button("document", "General Analysis", "success", self.execute_general_analyze_no_thinking)
         self.shorten_button = self._create_action_button("shorter", "Shorter", "neutral", self.execute_shorten_analysis)
         self.shorten_button.setEnabled(False)
@@ -1798,7 +1801,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             self.resume_button,
             self.clear_button,
             self.code_analyze_button,
-            self.project_guide_button,
+            self.hs_answer_button,
             self.general_analyze_button_regular,
             self.shorten_button,
         ]
@@ -2011,7 +2014,7 @@ class DraggableOverlay(QtWidgets.QWidget):
     def _has_shortenable_manual_answer(self):
         return bool(
             getattr(self, "current_manual_answer_shortenable", False)
-            and str(getattr(self, "current_manual_mode", "") or "") in {"code", "general"}
+            and str(getattr(self, "current_manual_mode", "") or "") in SHORTENABLE_ANALYSIS_MODES
             and str(getattr(self, "current_manual_answer", "") or "").strip()
         )
 
@@ -2024,7 +2027,7 @@ class DraggableOverlay(QtWidgets.QWidget):
         button.setToolTip(
             "Make the latest Analyze answer slightly shorter"
             if enabled
-            else "Generate a Code or General Analysis answer first"
+            else "Run Code Analysis, General Analysis, or HS answer first"
         )
 
     @Slot(str, str)
@@ -2055,7 +2058,7 @@ class DraggableOverlay(QtWidgets.QWidget):
             return
 
         shortenable = bool(
-            response_json.get("_shortenable", mode in {"code", "general"})
+            response_json.get("_shortenable", mode in SHORTENABLE_ANALYSIS_MODES)
             if response_json
             else False
         )
@@ -2069,7 +2072,7 @@ class DraggableOverlay(QtWidgets.QWidget):
     @Slot(dict, str)
     def update_shortened_analysis_response(self, response_json: dict, mode: str = ""):
         ai_response = response_json.get("response", "") if response_json else ""
-        if not ai_response or mode not in {"code", "general"}:
+        if not ai_response or mode not in SHORTENABLE_ANALYSIS_MODES:
             return
 
         if self.show_interviewer_suggestions:
@@ -2763,9 +2766,13 @@ class DraggableOverlay(QtWidgets.QWidget):
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Error clearing context: {e}", flush=True)
             self.update_status("Error clearing context", "#FF0000")
 
+    def execute_hs_answer(self):
+        self.hs_answer_signal.emit("")
+        self._flash_button(self.hs_answer_button)
+
     def execute_general_analyze_no_thinking(self):
         try:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Executing general analysis with reasoning_effort=low", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 📝 Executing general analysis with reasoning_effort=medium", flush=True)
             self.general_analysis_no_thinking_signal.emit("")
             self._flash_button(self.general_analyze_button_regular)
             

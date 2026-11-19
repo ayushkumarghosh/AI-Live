@@ -13,7 +13,7 @@ AI-Live is a Windows desktop interview overlay. It streams desktop loopback audi
   - acknowledgements and filler leave the answer unchanged
 - Automatic cancellation when new interviewer speech starts
 - Resume PDF context refreshed into the Realtime instructions
-- Manual Text Input, Screenshot, Code Analysis, and General Analysis using OpenAI `gpt-5.5`
+- Manual Text Input, Screenshot, Code Analysis, and General Analysis using OpenAI `gpt-6-astra` with medium reasoning
 - Transparent, draggable PyQt6 overlay excluded from screen capture on supported Windows versions
 
 ## Architecture
@@ -80,9 +80,9 @@ Desktop audio streams continuously, but the model creates answers only while Aut
 - **Screenshot**: queue a screenshot for the next manual request.
 - **Resume**: upload, replace, or remove resume context.
 - **Code Analysis** and **General Analysis**: run explicit manual-analysis requests.
-- **Shorter**: rewrite the latest Code Analysis or General Analysis answer to be about 15% shorter. It can be used repeatedly; Text Input and Auto-Answer results are not eligible.
+- **HS answer** answers the question on screen using the bundled [Project Hertz guide](Project%20Hertz.md). With screenshots off, it uses the latest manual conversation context.
+- **Shorter** can repeatedly shorten the latest Code Analysis, General Analysis, or HS answer response by about 15%.
 - **Clear Context**: clear the visible answers, manual history, and restart the Realtime conversation.
-- **Project Guide**: choose manual code guidance or **Prompt Guide**, which supplies one Codex prompt at a time, remembers your chosen Codex CLI session for **Check output** and separately reviews program terminals through **Check terminal output**, and incorporates relevant Auto-Answer conversation updates. Requires companion 0.1.2 or newer and a signed-in Codex CLI. See [Project Guide setup and workflow](docs/project-guide.md).
 
 ## Verification
 

@@ -89,6 +89,7 @@ Write-Step "Building one-file Windows executable"
     --windowed `
     --name AI-Live `
     --add-data "assets;assets" `
+    --add-data "Project Hertz.md;." `
     ai_live.py
 
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed" }

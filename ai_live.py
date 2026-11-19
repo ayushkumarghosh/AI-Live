@@ -22,11 +22,12 @@ from PyQt6 import QtCore, QtWidgets
 from chat import (
     analyze_code_problem,
     analyze_general_problem_no_thinking,
+    analyze_hs_answer,
     analyze_with_text_input,
     clear_chat_history,
     shorten_analysis_answer,
 )
-from session_context import replace_latest_exchange_response
+from session_context import SHORTENABLE_ANALYSIS_MODES, replace_latest_exchange_response
 from openai_realtime import build_realtime_answer_instructions
 from live_transcription import LiveAudioManager
 from overlay import DraggableOverlay, initialize_windows_ole, uninitialize_windows_ole
@@ -48,7 +49,6 @@ configure_console_encoding()
 
 overlay = None
 audio_manager = None
-project_guide = None
 
 RATE_LIMIT = 2.0
 last_request_time = 0.0
@@ -233,6 +233,17 @@ def process_code_analysis(user_input):
     )
 
 
+def process_hs_answer(user_input):
+    _start_manual_analysis(
+        session_prefix="hs",
+        user_input=user_input,
+        status="Answering with the Hertz guide...",
+        status_color="#FFA500",
+        analysis_fn=analyze_hs_answer,
+        error_label="HS answer",
+    )
+
+
 def process_general_analysis_no_thinking(user_input):
     _start_manual_analysis(
         session_prefix="general",
@@ -245,12 +256,12 @@ def process_general_analysis_no_thinking(user_input):
 
 
 def process_shorten_analysis(previous_answer: str, mode: str):
-    """Shorten a successful Code or General analysis without changing its source context."""
+    """Shorten a successful manual analysis without changing its source context."""
     global overlay
 
     previous_answer = str(previous_answer or "")
     mode = str(mode or "").strip().lower()
-    if mode not in {"code", "general"} or not previous_answer.strip():
+    if mode not in SHORTENABLE_ANALYSIS_MODES or not previous_answer.strip():
         print(f"{timestamp()} Ignoring shorten request without an eligible manual answer", flush=True)
         return
     if overlay and overlay.is_processing:
@@ -368,8 +379,6 @@ def stop_processing_and_clear_history():
         overlay.clear_conversation_display("Ready for new queries.")
 
     clear_chat_history()
-    if project_guide:
-        project_guide.clear()
     if audio_manager:
         audio_manager.reset_context()
 
@@ -384,8 +393,6 @@ def cleanup_audio():
 
 
 def cleanup_application():
-    if project_guide:
-        project_guide.close()
     cleanup_audio()
     uninitialize_windows_ole()
 
@@ -417,12 +424,7 @@ def main():
     overlay = DraggableOverlay()
     overlay.show()
 
-    from project_guide.controller import ProjectGuideController
-    global project_guide
-    project_guide = ProjectGuideController(overlay)
-    project_guide.context_changed.connect(refresh_realtime_instructions)
-    overlay.project_guide_signal.connect(project_guide.show)
-
+    overlay.hs_answer_signal.connect(process_hs_answer)
     overlay.text_submitted.connect(process_text_input)
     overlay.code_analysis_signal.connect(process_code_analysis)
     overlay.general_analysis_no_thinking_signal.connect(process_general_analysis_no_thinking)
